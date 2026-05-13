@@ -2,20 +2,13 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "trie.h"
-
+#include <unistd.h>
 
 Trie* create_trie() {
     Trie* node = (Trie*) malloc(sizeof(Trie));
     node->freq = 1;
     node->is_leaf = true;
     return node;
-}
-
-void insert(Trie* root, const char* str) {
-
-    //gets the correct node to insert
-    Trie* child = search(root, str);
-
 }
 
 Trie* search(Trie* root, const char* str) {
@@ -26,13 +19,19 @@ Trie* search(Trie* root, const char* str) {
         char c = str[i];
         int idx = c - 'a';
 
+        //no path for current char
         if (!trie->children[idx]) {
+            //FIX: also need to return current options (spin up worker thread?)
+
             trie->children[idx] = create_trie();
+            
+            //set parent is_leaf to false
             trie->is_leaf = false;
             is_new = true;
 
             printf("Created new: %c\n", c);
-        } else {
+        
+        }else {
             trie->children[idx]->freq++;
         }
 

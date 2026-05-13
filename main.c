@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "src/trie.h"
 
@@ -11,7 +12,9 @@ int main(int argc, char* argv[]) {
 
     for(int i = 0;i < 2;i++) {
         printf("\n\n...\n\n");
-        insert(root, argv[1]);
+        search(root, argv[1]);
     }
+
+    search(root, strcat(argv[1], "test"));
     return 0;
 }

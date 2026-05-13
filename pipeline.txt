@@ -1,0 +1,6 @@
+Two seperate processes|-> Receiver - one that loads trie from disk and stays running
+                      |-> Sender   - process within fish (shell) that sends data other processes that handles trie
+
+
+
+Sender - passes string and current directory to receiver

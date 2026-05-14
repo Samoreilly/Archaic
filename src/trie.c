@@ -116,6 +116,7 @@ void* add_leftover(void* args) {
         int idx = c - 'a';
         
         printf("\nChar in leftover: %c\n", c);
+
         curr->children[idx] = create_trie();
         curr->is_leaf = false;
         curr = curr->children[idx];

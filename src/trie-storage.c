@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -6,8 +7,8 @@
 #include "trie-storage.h"
 #include "trie.h"
 
-t_bucket* find_bucket(t_lfu* lfu, char* curr_dir, int depth, bool cut) {
-    int left = 0, right = BUCKETS - 1;
+t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth, bool cut) {
+    int left = 0, right = lfu->right_index;
 
     while(left < right) {
         int mid = left + (right - left) / 2;
@@ -23,20 +24,88 @@ t_bucket* find_bucket(t_lfu* lfu, char* curr_dir, int depth, bool cut) {
         }
     }
 
-    if(!cut && get_dir_depth(curr_dir) <= MIN_DEPTH) {
-        return NULL;
+    /*
+       If full path is not long enough to shorten, insert
+       TODO: insert into trie
+    */
+
+    if((!cut && get_dir_depth(curr_dir) <= MIN_DEPTH) || (cut && depth <= MIN_DEPTH)) {
+        t_bucket* inserted = insert_bucket(lfu, original_dir);
+        return inserted;
     }
  
     /*
-        Cutoff directory to try a parent directory Trie, to minimise memory usage
+       Cutoff directory to try a parent directory Trie, to minimise memory usage
     */
     char* cutoff = cutoff_dir(curr_dir);
-    
+
     if(cut) {
         free(curr_dir);
     }
 
-    return find_bucket(lfu, cutoff, depth - 1, true);
+    return find_bucket(lfu, original_dir, cutoff, depth - 1, true);
+}
+
+t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
+    
+    size_t insertion = find_insertion_point(lfu, curr_dir);
+    if(insertion == SIZE_MAX) {
+        printf("Directory already exists in buckets - [insert_bucket()]");
+        return NULL;
+    }
+
+    if(lfu->right_index + 1 < BUCKETS) {
+        //shift to right
+        for(int i = lfu->right_index + 1;i > insertion;i--) {
+            lfu->buckets[i] = lfu->buckets[i - 1];
+        }
+        
+        lfu->buckets[insertion] = create_bucket(curr_dir);
+        
+        lfu->right_index++;
+
+        return lfu->buckets[insertion];
+
+    }else {
+        //remove least recently used
+    }
+
+    return NULL;
+
+}
+
+size_t find_insertion_point(t_lfu* lfu, char* curr_dir) {
+
+    int left = 0, right = lfu->right_index - 1;
+
+    while(left <= right) {
+        int mid = left + (right - left) / 2;
+
+        int cmp = strcmp(lfu->buckets[mid]->dir_name, curr_dir);
+
+        if(cmp < 0) {
+            left = mid + 1;
+        }else if(cmp > 0) {
+            right = mid - 1;
+        }else {
+            return SIZE_MAX;
+        }
+    }
+    return left;
+}
+
+
+/*
+    UTILITY FUNCTIONS
+*/
+t_bucket* create_bucket(char* dir_name) {
+    t_bucket* bucket = (t_bucket*) malloc(sizeof(t_bucket));
+
+    bucket->dir_name  = dir_name;
+    bucket->dir_count = 0;
+    bucket->dir_trie  = create_trie();
+
+    return bucket;
 }
 
 char* cutoff_dir(char* str) {
@@ -93,7 +162,6 @@ char* normalise_dir(const char* original_str) {
     }
     
     //amount of bytes to copy from src
-
     size_t copy_len = len - (has_trailing_slash ? 1 : 0);
     memcpy(dst, original_str, copy_len);
     

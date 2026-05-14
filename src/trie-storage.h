@@ -29,7 +29,10 @@ typedef struct {
 } t_lfu;
 
 
-t_bucket* find_bucket(t_lfu* lfu, char* curr_dir, int depth, bool cutoff);
+t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth, bool cutoff);
+t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir);
+t_bucket* create_bucket(char* dir_name);
+size_t find_insertion_point(t_lfu* lfu, char* curr_dir);
 
 char* normalise_dir(const char* str);
 char* cutoff_dir(char* str);

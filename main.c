@@ -18,6 +18,8 @@ int main(int argc, char* argv[]) {
     
     char* cut_dir = cutoff_dir(norm_dir);
     printf("\nCutoff directory: %s\n", cut_dir);
+    
+
 
     /* if(argc <= 1) return 1; */
     /*  */

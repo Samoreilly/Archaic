@@ -19,7 +19,7 @@ Trie* create_trie() {
     return node;
 }
 
-Trie* search(Trie* root, scanner* scan, char* str) {
+Trie* search(Trie* root, state* scan, char* str) {
     Trie* trie = root;
     bool is_new = false;
     
@@ -35,6 +35,7 @@ Trie* search(Trie* root, scanner* scan, char* str) {
             //FIX: also need to add chars to trie (spin up worker thread?)
             
             leftover = (char*) realloc(leftover, strlen(str) - i + 1);
+            
             //remaining unfound chars in trie
             strcpy(leftover, str + i); 
             is_new = true;
@@ -44,10 +45,9 @@ Trie* search(Trie* root, scanner* scan, char* str) {
 
             //FIX: return options, based on weight or some other metric
            
-       }else {
+        }else {
             trie->children[idx]->freq++;
         }
-         
         trie = trie->children[idx];
     }
 
@@ -75,19 +75,16 @@ Trie* search(Trie* root, scanner* scan, char* str) {
    Handles background processes such as adding nodes in trie
    NOTE: May extend with function pointers and union in t_args to re-use this method
 */
-void spin_threads(t_args* args, scanner* scan) {
-    
-    if(scan->running) {
-        scan->cancel = true;
-        pthread_cancel(scan->thread);
+void spin_threads(t_args* args, state* scan) {
+    if (scan->running) {
+        scan->stop = true;
+        //wait for thread to finish
+        pthread_join(scan->worker, NULL);
         scan->running = false;
-        printf("\n\n\e[31mThread canceled with string: %s\e[0m\n\n", args->str);
     }
-
-    scan->cancel = false;
+    scan->stop = false;
     scan->running = true;
-    pthread_create(&scan->thread, NULL, add_leftover, (void*) args);
-    pthread_detach(scan->thread);
+    pthread_create(&scan->worker, NULL, add_leftover, (void*)args);
 }
 
 void* add_leftover(void* args) {
@@ -96,16 +93,13 @@ void* add_leftover(void* args) {
 
     Trie* curr = ((t_args*) args)->curr_node;
     char* str = ((t_args*) args)->str;
-    ((t_args*) args)->scan->running = true;    
 
     for(size_t i = 0;str[i] != '\0';i++) {
 
         //another thread entered, return early
-        if(((t_args*) args)->scan->cancel) {
+        if(((t_args*) args)->scan->stop) {
             
             printf("\nCanceled pthread_t in add_leftover %s\n", str);
-            ((t_args*) args)->scan->running = false;
-
             free(str);
             free(args);
 
@@ -124,13 +118,12 @@ void* add_leftover(void* args) {
 
     curr->is_leaf = true;
 
-   
     free(args);
     free(str);
 
     printf("End of leftover");
-    ((t_args*) args)->scan->running = false;
-    
+  
+    return NULL;
 }
 
 

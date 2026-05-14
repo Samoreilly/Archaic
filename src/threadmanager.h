@@ -10,8 +10,8 @@
 */
 
 typedef struct {
-    pthread_t thread;
-    bool running;
-    atomic_bool cancel;
-} scanner;
+    pthread_t worker; 
+    atomic_bool stop;
+    atomic_bool running;
+} state;
 

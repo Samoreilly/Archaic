@@ -5,7 +5,7 @@
 
 #include "threadmanager.h"
 
-#define CHILDREN 26;
+#define CHILDREN 26
 #define RESULTS 10
 
 typedef struct Trie {
@@ -17,7 +17,7 @@ typedef struct Trie {
 
 Trie* create_trie();
 void insert(Trie* root, const char* str);
-Trie* search(Trie* root, scanner* scan, char* str);
+Trie* search(Trie* root, state* scan, char* str);
 
 
 /*
@@ -27,10 +27,10 @@ Trie* search(Trie* root, scanner* scan, char* str);
 typedef struct {
     char* str;
     Trie* curr_node;
-    scanner* scan;
+    state* scan;
 } t_args;
 
-void spin_threads(t_args* args, scanner* scan);
+void spin_threads(t_args* args, state* scan);
 void* add_leftover(void* args);
 
 

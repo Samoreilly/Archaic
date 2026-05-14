@@ -15,6 +15,14 @@ int main(int argc, char* argv[]) {
         search(root, argv[1]);
     }
 
-    search(root, strcat(argv[1], "test"));
+    printf("\n\n");
+    
+    Trie* result = search(root, strcat(argv[1], "test"));
+    if(!result) return 1;
+
+    /*
+       SEND BACK TO
+    */
+    
     return 0;
 }

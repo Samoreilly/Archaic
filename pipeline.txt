@@ -1,6 +1,6 @@
-Two seperate processes|-> Receiver - one that loads trie from disk and stays running
-                      |-> Sender   - process within fish (shell) that sends data other processes that handles trie
+Two seperate processes|-> Daemon - one that loads trie from disk and stays running
+                      |-> Terminal-bound process - process within fish (shell) that sends data to daemon that handles trie
+                
 
 
-
-Sender - passes string and current directory to receiver
+Terminal bound process - passes string and current directory to daemon and receives auto completed string

@@ -1,28 +1,43 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <pthread.h>
 
+#include "src/threadmanager.h"
 #include "src/trie.h"
-
+   
 int main(int argc, char* argv[]) {
 
     if(argc <= 1) return 1;
     
+
+    scanner* scan = (scanner*) calloc(1, sizeof(scanner)); 
     Trie* root = (Trie*) malloc(sizeof(Trie));
+    
+    for(size_t i = 0;i < 26;i++) {
+        root->children[i] = create_trie();
+        root->freq = 1;
+        root->is_leaf = true;
+    }
 
     for(int i = 0;i < 2;i++) {
         printf("\n\n...\n\n");
-        search(root, argv[1]);
+        search(root, scan, argv[1]);
     }
 
-    printf("\n\n");
-    
-    Trie* result = search(root, strcat(argv[1], "test"));
-    if(!result) return 1;
+    char* str = (char*) malloc(sizeof(char));
+    strcat(str, "hellotest");
+        
+    while(true) {
+        //simulating wait for IPC
+        printf("waiting..");
+        Trie* result = search(root, scan, str);
+        sleep(1);        
+    }
+        /*
+        SEND BACK TO TERMINAL PROCESS
+        */
 
-    /*
-       SEND BACK TO
-    */
-    
     return 0;
 }

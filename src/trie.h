@@ -3,6 +3,8 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
+#include "threadmanager.h"
+
 #define CHILDREN 26;
 #define RESULTS 10
 
@@ -13,8 +15,9 @@ typedef struct Trie {
 } Trie;
 
 
+Trie* create_trie();
 void insert(Trie* root, const char* str);
-Trie* search(Trie* root, char* str);
+Trie* search(Trie* root, scanner* scan, char* str);
 
 
 /*
@@ -24,9 +27,10 @@ Trie* search(Trie* root, char* str);
 typedef struct {
     char* str;
     Trie* curr_node;
+    scanner* scan;
 } t_args;
 
-void spin_threads(t_args* args);
+void spin_threads(t_args* args, scanner* scan);
 void* add_leftover(void* args);
 
 

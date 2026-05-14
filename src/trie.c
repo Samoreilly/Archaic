@@ -131,3 +131,6 @@ void* add_leftover(void* args) {
     ((t_args*) args)->scan->running = false;
     
 }
+
+
+

@@ -11,11 +11,9 @@ void save_trie(Trie* trie);
 
 
 /*
-   WORKER THREADS INSERTING FILES INTO TRIE
+   WORKER THREADS INSERTING FOLDER/FILES NAMES INTO TRIE
 */
-
-void spin_up();
-void put();
+void scan_curr_dir(char* path);
 
 
 

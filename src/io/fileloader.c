@@ -9,5 +9,10 @@ void save_trie(Trie* trie) {
 
 }
 
+void scan_curr_dir(char* path) {
+
+}
+
+
 
 

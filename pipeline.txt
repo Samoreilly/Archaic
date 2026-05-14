@@ -14,3 +14,5 @@ When a new query arrives, the weight-based scanner thread is cancelled
 Trie insertion thread is left to finish in the background
 
 
+
+- Hashmap storing folder names -> trie using buckets

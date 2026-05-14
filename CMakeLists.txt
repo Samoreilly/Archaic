@@ -8,6 +8,8 @@ add_executable(
     archaic
     main.c
     src/trie.c
+    src/trie-storage.c
+    src/io/fileloader.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt)

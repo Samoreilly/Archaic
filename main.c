@@ -5,39 +5,43 @@
 #include <pthread.h>
 
 #include "src/threadmanager.h"
+#include "src/trie-storage.h"
 #include "src/trie.h"
    
 int main(int argc, char* argv[]) {
 
-    if(argc <= 1) return 1;
-    
+    char* norm_dir =normalise_dir(argv[1]);
+    printf("%s", norm_dir);
 
-    scanner* scan = (scanner*) calloc(1, sizeof(scanner)); 
-    Trie* root = (Trie*) malloc(sizeof(Trie));
-    
-    for(size_t i = 0;i < 26;i++) {
-        root->children[i] = create_trie();
-        root->freq = 1;
-        root->is_leaf = true;
-    }
+    /* if(argc <= 1) return 1; */
+    /*  */
 
-    for(int i = 0;i < 2;i++) {
-        printf("\n\n...\n\n");
-        search(root, scan, argv[1]);
-    }
+    /* scanner* scan = (scanner*) calloc(1, sizeof(scanner));  */
+    /* Trie* root = (Trie*) malloc(sizeof(Trie)); */
+    /*  */
+    /* for(size_t i = 0;i < 26;i++) { */
+    /*     root->children[i] = create_trie(); */
+    /*     root->freq = 1; */
+    /*     root->is_leaf = true; */
+    /* } */
 
-    char* str = (char*) malloc(sizeof(char));
-    strcat(str, "hellotest");
-        
-    while(true) {
-        //simulating wait for IPC
-        printf("waiting..");
-        Trie* result = search(root, scan, str);
-        sleep(1);        
-    }
-        /*
-        SEND BACK TO TERMINAL PROCESS
-        */
+    /* for(int i = 0;i < 2;i++) { */
+    /*     printf("\n\n...\n\n"); */
+    /*     search(root, scan, argv[1]); */
+    /* } */
+
+    /* char* str = (char*) malloc(sizeof(char)); */
+    /* strcat(str, "hellotest"); */
+    /*      */
+    /* while(true) { */
+    /*     //simulating wait for IPC */
+    /*     printf("waiting.."); */
+    /*     Trie* result = search(root, scan, str); */
+    /*     sleep(1);         */
+    /* } */
+    /*     */
+    /*     SEND BACK TO TERMINAL PROCESS */
+    /*     */ 
 
     return 0;
 }

@@ -7,18 +7,29 @@
 #include "src/threadmanager.h"
 #include "src/trie-storage.h"
 #include "src/trie.h"
-   
+#include "src/io/fileloader.h"
+
+#include <pthread.h>
+
 int main(int argc, char* argv[]) {
+
+    t_lfu* lfu = calloc(1, sizeof(t_lfu));
 
     char* norm_dir = normalise_dir(argv[1]);
     printf("\nNormalised Directory: %s", norm_dir);
+    
+    file_thread* f_thread = (file_thread*) calloc(1, sizeof(file_thread));
+    f_thread->lfu = lfu;
+    spin_scan_thread(f_thread, norm_dir);//argv[1] is temporary until IPC is setup
+    
+    //wait until scanning worker thread has finished
+    pthread_join(f_thread->worker, NULL);
     
     int dir_depth = get_dir_depth(norm_dir);
     printf("\nDir depth: %i\n", dir_depth);
     
     char* cut_dir = cutoff_dir(norm_dir);
     printf("\nCutoff directory: %s\n", cut_dir);
-    
 
 
     /* if(argc <= 1) return 1; */

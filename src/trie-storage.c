@@ -26,9 +26,7 @@ t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth,
 
     /*
        If full path is not long enough to shorten, insert
-       TODO: insert into trie
     */
-
     if((!cut && get_dir_depth(curr_dir) <= MIN_DEPTH) || (cut && depth <= MIN_DEPTH)) {
         t_bucket* inserted = insert_bucket(lfu, original_dir);
         return inserted;

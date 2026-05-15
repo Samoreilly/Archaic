@@ -9,7 +9,7 @@
 
 */
 
-typedef struct {
+typedef struct t_bucket {
     
     char* dir_name;
     Trie* dir_trie;
@@ -20,7 +20,7 @@ typedef struct {
 /*
     LFU to keep memory limited and fast
 */
-typedef struct {
+typedef struct t_lfu {
     //sorted lexographically
     t_bucket* buckets[BUCKETS];
     t_bucket* lru;//bucket with mininum frequency;
@@ -40,6 +40,4 @@ int get_dir_depth(char* str);
 
 void remove_char(char* str, int s_index);
 void add_char(char* str, char c, int s_index);
-
-
 

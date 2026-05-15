@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unistd.h>
+#include "../threadmanager.h"
 #include "../trie.h"
 
 /*
@@ -13,8 +14,8 @@ void save_trie(Trie* trie);
 /*
    WORKER THREADS INSERTING FOLDER/FILES NAMES INTO TRIE
 */
-void scan_curr_dir(char* path);
-
+void spin_scan_thread(file_thread* f_thread, char* path);
+void* scan_curr_dir(void* args);
 
 
 

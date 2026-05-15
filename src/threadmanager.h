@@ -4,6 +4,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 
+//struct t_lfu;
 /*
     Manages thread that handles background insertions
     Ensures one thread runs at a time
@@ -15,3 +16,12 @@ typedef struct {
     atomic_bool running;
 } state;
 
+typedef struct {
+    pthread_t worker;
+    char* path;
+    atomic_bool stop;
+    atomic_bool running;
+
+    struct t_lfu* lfu;
+
+} file_thread;

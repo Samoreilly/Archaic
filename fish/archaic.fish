@@ -202,7 +202,9 @@ end
 
 # Append to existing fish_right_prompt if it exists, otherwise define it
 if functions -q fish_right_prompt
-    functions --copy fish_right_prompt __archaic_orig_right_prompt
+    if not functions -q __archaic_orig_right_prompt
+        functions --copy fish_right_prompt __archaic_orig_right_prompt
+    end
     function fish_right_prompt
         __archaic_orig_right_prompt
         __archaic_right_prompt

@@ -304,7 +304,11 @@ void completions_collect(Trie* root, const char* prefix, completions* out) {
     char buffer[2048];
     size_t depth = 0;
 
-    if (node->is_leaf && matched_in_node == 0) {
+    /* Skip if prefix ends with / - user wants contents, not the dir itself */
+    size_t prefix_len = strlen(prefix);
+    int prefix_is_dir = (prefix_len > 0 && prefix[prefix_len - 1] == '/') ? 1 : 0;
+
+    if (node->is_leaf && matched_in_node == 0 && !prefix_is_dir) {
         size_t plen = strlen(prefix);
         char* full = malloc(plen + 1);
         if (full && out->count < out->capacity) {
@@ -319,7 +323,7 @@ void completions_collect(Trie* root, const char* prefix, completions* out) {
             memcpy(buffer, node->key + matched_in_node, remaining_key);
             depth = remaining_key;
 
-            if (node->is_leaf) {
+            if (node->is_leaf && !prefix_is_dir) {
                 buffer[depth] = '\0';
                 size_t plen = strlen(prefix);
                 char* full = malloc(plen + depth + 1);
@@ -522,7 +526,10 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     ctx.max_depth = path_depth(prefix) + 10;
 
     /* Check if the prefix node itself is a leaf */
-    if (node->is_leaf && matched_in_node == 0) {
+    /* Skip if prefix ends with / - user wants contents, not the dir itself */
+    size_t prefix_len = strlen(prefix);
+    int prefix_is_dir = (prefix_len > 0 && prefix[prefix_len - 1] == '/') ? 1 : 0;
+    if (node->is_leaf && matched_in_node == 0 && !prefix_is_dir) {
         double score = compute_score(prefix, node->freq, node->last_access, node->is_dir, now, ctx.max_depth);
         scored_insert(out, prefix, score, node->freq, node->last_access, node->is_dir);
     }
@@ -533,7 +540,7 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
             memcpy(ctx.buffer, node->key + matched_in_node, remaining_key);
             ctx.depth = remaining_key;
 
-            if (node->is_leaf) {
+            if (node->is_leaf && !prefix_is_dir) {
                 ctx.buffer[ctx.depth] = '\0';
                 size_t plen = strlen(prefix);
                 if (plen + ctx.depth < 4096) {

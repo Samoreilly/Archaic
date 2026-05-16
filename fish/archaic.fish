@@ -153,17 +153,34 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     if not string match -q '/*' -- "$prefix"
         set resolved (pwd)/"$prefix"
     end
+    # Normalize: strip trailing slash for comparison
+    set -l norm_resolved (string replace -r '/+$' '' "$resolved")
     
-    # Query daemon for single best suggestion
-    set -l suggestion (command $archaic_cli_path suggest "$resolved" 2>/dev/null)
+    # Use complete (not suggest) to get best match inside the directory
+    set -l output (command $archaic_cli_path complete "$resolved" 1 2>/dev/null)
     if test $status -ne 0
         set -g __archaic_suggestion ""
         return
     end
     
-    # Only suggest if it extends the current input
-    if string match -q "$prefix*" -- "$suggestion"
-        set -l remainder (string sub -s (math (string length "$prefix") + 1) "$suggestion")
+    # Parse: "D /path" or "F /path"
+    set -l parts (string split " " "$output")
+    if test (count $parts) -lt 2
+        set -g __archaic_suggestion ""
+        return
+    end
+    set -l suggestion $parts[2]
+    
+    # Normalize suggestion for comparison
+    set -l norm_suggestion (string replace -r '/+$' '' "$suggestion")
+    
+    # Check if suggestion starts with the resolved path
+    if string match -q "$norm_resolved*" -- "$norm_suggestion"
+        set -l remainder (string sub -s (math (string length "$norm_resolved") + 1) "$norm_suggestion")
+        # Strip leading slash from remainder if user typed trailing slash
+        if string match -q '*/' -- "$prefix"
+            set remainder (string replace -r '^/' '' "$remainder")
+        end
         if test -n "$remainder"
             set -g __archaic_suggestion "$remainder"
         else

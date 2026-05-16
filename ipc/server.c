@@ -99,7 +99,17 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         uint32_t n = sc->count < 50 ? sc->count : 50;
         resp.count = n;
         for (uint32_t i = 0; i < n; i++) {
-            strncpy(resp.paths[i], sc->entries[i].path, sizeof(resp.paths[i]) - 1);
+            const char* p = sc->entries[i].path;
+            size_t plen = strlen(p);
+            char clean[4096];
+            if (plen > 0 && p[plen - 1] == '/') {
+                memcpy(clean, p, plen - 1);
+                clean[plen - 1] = '\0';
+            } else {
+                strncpy(clean, p, sizeof(clean) - 1);
+                clean[sizeof(clean) - 1] = '\0';
+            }
+            strncpy(resp.paths[i], clean, sizeof(resp.paths[i]) - 1);
             resp.scores[i] = sc->entries[i].score;
             resp.freqs[i] = sc->entries[i].freq;
             resp.is_dirs[i] = sc->entries[i].is_dir ? 1 : 0;
@@ -121,7 +131,15 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
     memset(&resp, 0, sizeof(resp));
 
     if (sc && sc->count > 0) {
-        strncpy(resp.path, sc->entries[0].path, sizeof(resp.path) - 1);
+        const char* p = sc->entries[0].path;
+        size_t plen = strlen(p);
+        if (plen > 0 && p[plen - 1] == '/') {
+            memcpy(resp.path, p, plen - 1);
+            resp.path[plen - 1] = '\0';
+        } else {
+            strncpy(resp.path, p, sizeof(resp.path) - 1);
+            resp.path[sizeof(resp.path) - 1] = '\0';
+        }
         resp.score = sc->entries[0].score;
         resp.freq = sc->entries[0].freq;
         resp.is_dir = sc->entries[0].is_dir ? 1 : 0;

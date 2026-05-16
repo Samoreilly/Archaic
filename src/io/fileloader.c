@@ -63,7 +63,17 @@ static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int
             t_bucket* bucket = find_bucket(f_thread->lfu, path, path, 3, false);
             if (bucket) {
                 trie_lock(bucket);
-                insert(bucket->dir_trie, path);
+                if (entry->d_type == DT_DIR) {
+                    size_t path_len = strlen(path);
+                    char* dir_path = malloc(path_len + 2);
+                    memcpy(dir_path, path, path_len);
+                    dir_path[path_len] = '/';
+                    dir_path[path_len + 1] = '\0';
+                    insert(bucket->dir_trie, dir_path);
+                    free(dir_path);
+                } else {
+                    insert(bucket->dir_trie, path);
+                }
                 bucket->dir_count++;
                 trie_unlock(bucket);
             }

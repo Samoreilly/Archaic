@@ -20,6 +20,11 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         return
     end
 
+    # Only complete path-like inputs (starts with /, ./, ../, or contains /)
+    if not string match -qr '^(\./|\.\./|/|[^/]+/)' -- "$prefix"
+        return
+    end
+
     # Resolve relative paths
     if not string match -q '/*' -- "$prefix"
         set prefix (pwd)/"$prefix"
@@ -36,7 +41,6 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
 end
 
 # Replace completions for common commands
-# -e removes existing completions, -f disables file completion
 complete -e -c cd
 complete -c cd -f -a "(__archaic_do_complete)"
 
@@ -72,3 +76,7 @@ complete -c mkdir -f -a "(__archaic_do_complete)"
 
 complete -e -c touch
 complete -c touch -f -a "(__archaic_do_complete)"
+
+# Catch-all: provide archaic completions for any unrecognized command
+# that looks like a path
+complete -c "" -f -a "(__archaic_do_complete)"

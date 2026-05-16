@@ -431,6 +431,7 @@ typedef struct {
     atomic_long* total_ops;
     pthread_barrier_t* barrier;
     double* samples;
+    pthread_mutex_t* lock;
 } perf_thread_ctx;
 
 static void* perf_insert_worker(void* arg) {
@@ -440,7 +441,9 @@ static void* perf_insert_worker(void* arg) {
     struct timespec t0, t1;
     for (long i = 0; i < ctx->count; i++) {
         clock_gettime(CLOCK_MONOTONIC, &t0);
+        pthread_mutex_lock(ctx->lock);
         insert(ctx->root, ctx->strings[i]);
+        pthread_mutex_unlock(ctx->lock);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         ctx->samples[i] = timespec_to_ms(&t1) - timespec_to_ms(&t0);
         atomic_fetch_add(ctx->total_ops, 1);
@@ -461,6 +464,9 @@ static void perf_concurrent_insert(void) {
         Trie* root = create_trie();
         char** strings = generate_path_strings(PERF_ITERATIONS, 4, 32);
 
+        pthread_mutex_t lock;
+        pthread_mutex_init(&lock, NULL);
+
         pthread_barrier_t barrier;
         pthread_barrier_init(&barrier, NULL, nthreads);
         atomic_long total_ops;
@@ -479,6 +485,7 @@ static void perf_concurrent_insert(void) {
             ctxs[t].total_ops = &total_ops;
             ctxs[t].barrier = &barrier;
             ctxs[t].samples = all_samples[t];
+            ctxs[t].lock = &lock;
             pthread_create(&threads[t], NULL, perf_insert_worker, &ctxs[t]);
         }
 
@@ -513,6 +520,7 @@ static void perf_concurrent_insert(void) {
         free(merged);
         free(strings);
         trie_free_recursive(root);
+        pthread_mutex_destroy(&lock);
         pthread_barrier_destroy(&barrier);
     }
 }

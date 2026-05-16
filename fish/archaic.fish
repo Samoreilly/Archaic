@@ -132,20 +132,19 @@ complete -c touch -f -a "(__archaic_do_complete)"
 # Catch-all for any command with path-like arguments
 complete -c "" -f -a "(__archaic_do_complete)"
 
-# Inline autosuggestion (gray text after cursor)
-function __archaic_autosuggest -d "Inline autosuggestion from archaic daemon"
-    set -l cmd (commandline -o)
-    if test (count $cmd) -eq 0
-        return
-    end
-    
+# Inline autosuggestion via fish_right_prompt
+set -g __archaic_suggestion ""
+
+function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     set -l prefix (commandline -t)
     if test -z "$prefix"
+        set -g __archaic_suggestion ""
         return
     end
     
     # Only suggest for path-like inputs
     if not string match -q '*/*' -- "$prefix"
+        set -g __archaic_suggestion ""
         return
     end
     
@@ -158,6 +157,7 @@ function __archaic_autosuggest -d "Inline autosuggestion from archaic daemon"
     # Query daemon for single best suggestion
     set -l suggestion (command $archaic_cli_path suggest "$resolved" 2>/dev/null)
     if test $status -ne 0
+        set -g __archaic_suggestion ""
         return
     end
     
@@ -165,11 +165,45 @@ function __archaic_autosuggest -d "Inline autosuggestion from archaic daemon"
     if string match -q "$prefix*" -- "$suggestion"
         set -l remainder (string sub -s (math (string length "$prefix") + 1) "$suggestion")
         if test -n "$remainder"
-            echo "$remainder"
+            set -g __archaic_suggestion "$remainder"
+        else
+            set -g __archaic_suggestion ""
         end
+    else
+        set -g __archaic_suggestion ""
     end
 end
 
-# Enable autosuggestion
-# Note: fish autosuggestions work via the fish autosuggestions plugin
-# This function can be used with that plugin or bound to a key
+function __archaic_right_prompt -d "Show archaic autosuggestion"
+    __archaic_get_suggestion
+    if test -n "$__archaic_suggestion"
+        set_color --italics --dim
+        echo -n "$__archaic_suggestion"
+        set_color normal
+    end
+end
+
+# Append to existing fish_right_prompt if it exists, otherwise define it
+if functions -q fish_right_prompt
+    functions --copy fish_right_prompt __archaic_orig_right_prompt
+    function fish_right_prompt
+        __archaic_orig_right_prompt
+        __archaic_right_prompt
+    end
+else
+    function fish_right_prompt
+        __archaic_right_prompt
+    end
+end
+
+# Key bindings to accept the suggestion
+function __archaic_accept_suggestion
+    if test -n "$__archaic_suggestion"
+        commandline -t (commandline -t)"$__archaic_suggestion"
+        set -g __archaic_suggestion ""
+        commandline -f repaint
+    end
+end
+
+bind \e\[1\;3C __archaic_accept_suggestion
+bind \cr __archaic_accept_suggestion

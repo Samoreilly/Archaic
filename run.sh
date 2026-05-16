@@ -58,11 +58,12 @@ stop_daemon() {
 
     echo "Stopping daemon..."
     "$SCRIPT_DIR/build/archaic-cli" shutdown 2>/dev/null || true
-    sleep 1
+    sleep 2
 
     if is_running; then
         echo "Daemon did not stop gracefully, killing..."
         kill "$(cat "${SOCK_PATH}.pid" 2>/dev/null)" 2>/dev/null || true
+        sleep 1
     fi
 
     rm -f "$SOCK_PATH" "${SOCK_PATH}.pid"

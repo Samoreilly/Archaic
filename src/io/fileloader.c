@@ -78,3 +78,22 @@ void* scan_curr_dir(void* args) {
     return NULL;
 }
 
+/*
+    NOTE: Once IPC is implemented, this will be used to verify input from terminal-bound process in main()
+*/
+path_validation process_input(t_bucket_store* store, const char* cwd, const char* input) {
+    path_validation validation = validate_input_path(cwd, input);
+
+    if (!validation.exists || !validation.full_path) {
+        return validation;
+    }
+
+    t_bucket* bucket = find_bucket(store, validation.full_path, validation.full_path, 3, false);
+    if (bucket) {
+        insert(bucket->dir_trie, validation.full_path);
+        bucket->dir_count++;
+    }
+
+    return validation;
+}
+

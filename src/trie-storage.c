@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <sys/stat.h>
 
 #include "trie-storage.h"
 #include "trie.h"
@@ -222,4 +223,70 @@ char* normalise_dir(const char* original_str) {
     *dst = '\0';
 
     return new_str;
+}
+
+static char* join_path(const char* cwd, const char* input) {
+    if (!cwd || !input) {
+        return NULL;
+    }
+
+    if (input[0] == '/') {
+        return normalise_dir(input);
+    }
+
+    size_t cwd_len = strlen(cwd);
+    size_t input_len = strlen(input);
+    bool add_slash = (cwd_len > 0 && cwd[cwd_len - 1] != '/');
+    size_t len = cwd_len + (add_slash ? 1 : 0) + input_len;
+    char* out = (char*) malloc(len + 1);
+    if (!out) {
+        return NULL;
+    }
+
+    memcpy(out, cwd, cwd_len);
+    size_t pos = cwd_len;
+    if (add_slash) {
+        out[pos++] = '/';
+    }
+    memcpy(out + pos, input, input_len);
+    out[len] = '\0';
+
+    char* norm = normalise_dir(out);
+    free(out);
+    return norm;
+}
+
+path_validation validate_input_path(const char* cwd, const char* input) {
+    path_validation result = {0};
+    if (!cwd || !input) {
+        return result;
+    }
+
+    char* full = join_path(cwd, input);
+    if (!full) {
+        return result;
+    }
+
+    struct stat st;
+    if (stat(full, &st) == 0) {
+        result.exists = true;
+        result.is_dir = S_ISDIR(st.st_mode);
+        result.is_file = S_ISREG(st.st_mode);
+        result.full_path = full;
+        return result;
+    }
+
+    free(full);
+    return result;
+}
+
+void free_path_validation(path_validation* result) {
+    if (!result) {
+        return;
+    }
+    free(result->full_path);
+    result->full_path = NULL;
+    result->exists = false;
+    result->is_dir = false;
+    result->is_file = false;
 }

@@ -167,6 +167,26 @@ void test_main(void) {
     bool ok = trie_contains_path(root, test_path);
     printf("\n[Trie test] contains full path: %s\n", ok ? "ok" : "fail");
 
+    printf("\n[Validation] existing file: ");
+    path_validation v1 = validate_input_path("/home/sam/samdev", "archaic/main.c");
+    printf("%s (is_file=%d, is_dir=%d)", v1.exists ? "ok" : "fail", v1.is_file, v1.is_dir);
+    free_path_validation(&v1);
+
+    printf("\n[Validation] existing dir: ");
+    path_validation v2 = validate_input_path("/home/sam/samdev", "archaic/src");
+    printf("%s (is_file=%d, is_dir=%d)", v2.exists ? "ok" : "fail", v2.is_file, v2.is_dir);
+    free_path_validation(&v2);
+
+    printf("\n[Validation] non-existent: ");
+    path_validation v3 = validate_input_path("/home/sam/samdev", "nonexistent_fake_file.xyz");
+    printf("%s (is_file=%d, is_dir=%d)", v3.exists ? "ok" : "fail", v3.is_file, v3.is_dir);
+    free_path_validation(&v3);
+
+    printf("\n[Validation] absolute path: ");
+    path_validation v4 = validate_input_path("/home/sam/samdev", "/etc/hostname");
+    printf("%s (is_file=%d, is_dir=%d)", v4.exists ? "ok" : "fail", v4.is_file, v4.is_dir);
+    free_path_validation(&v4);
+
     t_bucket_store* store = calloc(1, sizeof(t_bucket_store));
     node* parent = calloc(1, sizeof(node));
     parent->is_parent = true;

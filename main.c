@@ -23,6 +23,8 @@ int main(int argc, char* argv[]) {
 
         signal(SIGINT, handle_signal);
         signal(SIGTERM, handle_signal);
+        signal(SIGHUP, SIG_IGN);
+        signal(SIGPIPE, SIG_IGN);
 
         printf("[daemon] initializing...\n");
         daemon_state* daemon = daemon_init();
@@ -41,6 +43,7 @@ int main(int argc, char* argv[]) {
         printf("[daemon] scanning %s...\n", scan_path);
         daemon_run_scan(daemon, scan_path);
         printf("[daemon] ready. %zu buckets loaded.\n", daemon->store->right_index);
+        fflush(stdout);
 
         while (running) {
             sleep(1);

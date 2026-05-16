@@ -20,36 +20,53 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         return
     end
 
-    # Only complete path-like inputs
-    if not string match -qr '^(\./|\.\./|/|[^/]+/)' -- "$prefix"
-        return
-    end
-
-    # Resolve relative paths
-    if not string match -q '/*' -- "$prefix"
-        set prefix (pwd)/"$prefix"
-    end
-
-    # Query daemon
-    set -l output (command $archaic_cli_path complete "$prefix" 20 2>/dev/null)
-    if test $status -ne 0
-        return
-    end
-
-    # Parse output: "  [0] score=0.7332 freq=1 dir=no  /path/to/file"
-    # Split on double space, take last part (the path)
-    for line in (echo "$output")
-        set -l parts (string split "  " "$line")
-        if test (count $parts) -ge 2
-            set -l path $parts[-1]
-            if string match -q "/*" -- "$path"
-                if string match -q "*/" -- "$path"
-                    echo -e "$path\t(dir)"
-                else
-                    echo -e "$path\t(file)"
-                end
-            end
+    # Only complete path-like inputs or simple directory names
+    if not string match -q '*/*' -- "$prefix"
+        if not string match -qr '^[a-zA-Z0-9._-]+$' -- "$prefix"
+            return
         end
+    end
+
+    # Resolve relative paths for the daemon query
+    set -l resolved "$prefix"
+    if not string match -q '/*' -- "$prefix"
+        set -l clean_prefix (string replace -r '^\./' '' "$prefix")
+        set resolved (pwd)/"$clean_prefix"
+    else
+        set resolved (string replace -r '//+' '/' "$resolved")
+        set resolved (string replace -r '/\./' '/' "$resolved")
+    end
+
+    # Normalize prefixes for display conversion
+    set -l norm_resolved (string replace -r '/+$' '' "$resolved")
+    set -l norm_prefix (string replace -r '/+$' '' "$prefix")
+
+    # Query daemon and parse output: "D /path" or "F /path" (one per line)
+    set -l found 0
+    for line in (command $archaic_cli_path complete "$resolved" 20 2>/dev/null)
+        set -l parts (string split " " "$line")
+        if test (count $parts) -ge 2
+            set -l type $parts[1]
+            set -l full_path $parts[2]
+            
+            # Convert to relative if user typed relative path
+            set -l display_path "$full_path"
+            if not string match -q '/*' -- "$prefix"
+                set display_path (string replace "$norm_resolved" "" "$full_path")
+                set display_path "$norm_prefix$display_path"
+            end
+            
+            if test "$type" = "D"
+                echo -e "$display_path\t(dir)"
+            else
+                echo -e "$display_path\t(file)"
+            end
+            set found 1
+        end
+    end
+    
+    if test $found -eq 0
+        return
     end
 end
 

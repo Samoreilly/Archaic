@@ -155,11 +155,22 @@ size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir) {
 t_bucket* create_bucket(char* dir_name) {
     t_bucket* bucket = (t_bucket*) malloc(sizeof(t_bucket));
 
-    bucket->dir_name  = dir_name;
+    bucket->dir_name  = strdup(dir_name);
     bucket->dir_count = 0;
     bucket->dir_trie  = create_trie();
+    pthread_mutex_init(&bucket->lock, NULL);
 
     return bucket;
+}
+
+void destroy_bucket(t_bucket* bucket) {
+    if (!bucket) {
+        return;
+    }
+    pthread_mutex_destroy(&bucket->lock);
+    free(bucket->dir_name);
+    free(bucket->dir_trie);
+    free(bucket);
 }
 
 char* cutoff_dir(char* str) {

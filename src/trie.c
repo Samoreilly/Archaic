@@ -56,7 +56,6 @@ void insert(Trie* root, const char* str) {
         advanced = true;
         if (!curr->children[idx]) {
             curr->children[idx] = create_trie();
-            curr->is_leaf = false;
         }
         curr = curr->children[idx];
     }
@@ -158,8 +157,9 @@ void* add_leftover(void* args) {
             continue;
         }
         
-        curr->children[idx] = create_trie();
-        curr->is_leaf = false;
+        if (!curr->children[idx]) {
+            curr->children[idx] = create_trie();
+        }
         curr = curr->children[idx];
     }
 

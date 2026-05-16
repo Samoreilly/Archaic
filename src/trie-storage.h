@@ -2,8 +2,8 @@
 
 #include "trie.h"
 
-#define BUCKETS 2048
-#define MIN_DEPTH 6
+#define BUCKETS 65536
+#define MIN_DEPTH 8
 
 typedef struct t_bucket {
     

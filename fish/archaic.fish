@@ -16,17 +16,7 @@ set -g archaic_cli_path (dirname (dirname "$plugin_path"))/build/archaic-cli
 
 function __archaic_do_complete -d "Query archaic daemon for completions"
     set -l prefix (commandline -ct)
-    if test -z "$prefix"
-        return
-    end
-
-    # Only complete path-like inputs or simple directory names
-    if not string match -q '*/*' -- "$prefix"
-        if not string match -qr '^[a-zA-Z0-9._-]+$' -- "$prefix"
-            return
-        end
-    end
-
+    
     # Detect the command being completed to apply rules
     set -l cmd_tokens (commandline -co)
     set -l cmd ""
@@ -44,19 +34,34 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         end
     end
 
-    # Resolve relative paths for the daemon query
-    set -l resolved "$prefix"
-    if not string match -q '/*' -- "$prefix"
-        set -l clean_prefix (string replace -r '^\./' '' "$prefix")
-        set resolved (pwd)/"$clean_prefix"
+    # Handle empty prefix (e.g. "ls <tab>")
+    set -l resolved ""
+    set -l norm_prefix ""
+    if test -z "$prefix"
+        set resolved (pwd)
+        set norm_prefix ""
     else
-        set resolved (string replace -r '//+' '/' "$resolved")
-        set resolved (string replace -r '/\./' '/' "$resolved")
+        # Only complete path-like inputs or simple directory names
+        if not string match -q '*/*' -- "$prefix"
+            if not string match -qr '^[a-zA-Z0-9._-]+$' -- "$prefix"
+                return
+            end
+        end
+
+        # Resolve relative paths for the daemon query
+        set resolved "$prefix"
+        if not string match -q '/*' -- "$prefix"
+            set -l clean_prefix (string replace -r '^\./' '' "$prefix")
+            set resolved (pwd)/"$clean_prefix"
+        else
+            set resolved (string replace -r '//+' '/' "$resolved")
+            set resolved (string replace -r '/\./' '/' "$resolved")
+        end
+        set norm_prefix (string replace -r '/+$' '' "$prefix")
     end
 
-    # Normalize prefixes for display conversion
+    # Normalize resolved prefix for display conversion
     set -l norm_resolved (string replace -r '/+$' '' "$resolved")
-    set -l norm_prefix (string replace -r '/+$' '' "$prefix")
 
     # Query daemon and parse output: "D /path" or "F /path" (one per line)
     set -l found 0
@@ -71,9 +76,12 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                 continue
             end
             
-            # Convert to relative if user typed relative path
+            # Convert to relative/basename for display
             set -l display_path "$full_path"
-            if not string match -q '/*' -- "$prefix"
+            if test -z "$prefix"
+                # Empty prefix: show just the basename
+                set display_path (basename "$full_path")
+            else if not string match -q '/*' -- "$prefix"
                 set display_path (string replace "$norm_resolved" "" "$full_path")
                 set display_path "$norm_prefix$display_path"
             end

@@ -127,7 +127,7 @@ static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int
 
 void* scan_curr_dir(void* args) {
     file_thread* f_thread = (file_thread*) args;
-    scan_dir_recursive(f_thread, f_thread->path, 0, 2);
+    scan_dir_recursive(f_thread, f_thread->path, 0, 10);
     return NULL;
 }
 

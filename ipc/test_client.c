@@ -1,0 +1,88 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "client.h"
+#include "protocol.h"
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <command> [args...]\n", argv[0]);
+        fprintf(stderr, "Commands:\n");
+        fprintf(stderr, "  scan <path>\n");
+        fprintf(stderr, "  query <cwd> <input>\n");
+        fprintf(stderr, "  complete <prefix> [limit]\n");
+        fprintf(stderr, "  shutdown\n");
+        return 1;
+    }
+
+    ipc_client* client = ipc_client_connect(IPC_SOCK_PATH);
+    if (!client) {
+        fprintf(stderr, "Failed to connect to daemon at %s\n", IPC_SOCK_PATH);
+        return 1;
+    }
+
+    int rc = 0;
+
+    if (strcmp(argv[1], "scan") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s scan <path>\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        rc = ipc_client_scan(client, argv[2]);
+        if (rc == 0) {
+            printf("Scan started for: %s\n", argv[2]);
+        } else {
+            fprintf(stderr, "Scan failed\n");
+        }
+    } else if (strcmp(argv[1], "query") == 0) {
+        if (argc < 4) {
+            fprintf(stderr, "Usage: %s query <cwd> <input>\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        ipc_validation_resp resp;
+        rc = ipc_client_query(client, argv[2], argv[3], &resp);
+        if (rc == 0) {
+            printf("exists: %s\n", resp.exists ? "yes" : "no");
+            printf("is_dir: %s\n", resp.is_dir ? "yes" : "no");
+            printf("is_file: %s\n", resp.is_file ? "yes" : "no");
+            printf("path: %s\n", resp.full_path);
+        } else {
+            fprintf(stderr, "Query failed\n");
+        }
+    } else if (strcmp(argv[1], "complete") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s complete <prefix> [limit]\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        uint32_t limit = argc > 3 ? (uint32_t)atoi(argv[3]) : 10;
+        ipc_completions_resp resp;
+        rc = ipc_client_complete(client, argv[2], limit, &resp);
+        if (rc == 0) {
+            printf("Found %u completions:\n", resp.count);
+            for (uint32_t i = 0; i < resp.count; i++) {
+                printf("  %s\n", resp.paths[i]);
+            }
+        } else {
+            fprintf(stderr, "Completions failed\n");
+        }
+    } else if (strcmp(argv[1], "shutdown") == 0) {
+        rc = ipc_client_shutdown(client);
+        if (rc == 0) {
+            printf("Daemon shutdown requested\n");
+        } else {
+            fprintf(stderr, "Shutdown failed\n");
+        }
+    } else {
+        fprintf(stderr, "Unknown command: %s\n", argv[1]);
+        rc = 1;
+    }
+
+done:
+    ipc_client_disconnect(client);
+    return rc;
+}

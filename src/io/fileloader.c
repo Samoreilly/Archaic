@@ -8,6 +8,7 @@
 #include "../threadmanager.h"
 #include "../trie-storage.h"
 #include "../lru.h"
+#include "../../ipc/server.h"
 
 void load_trie() {
 
@@ -157,6 +158,11 @@ void daemon_shutdown(daemon_state* state) {
         return;
     }
 
+    if (state->ipc) {
+        ipc_server_stop(state->ipc);
+        state->ipc = NULL;
+    }
+
     if (state->scanner) {
         if (state->scanner->running) {
             state->scanner->stop = true;
@@ -225,5 +231,11 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
     store_unlock(state->store);
 
     return out;
+}
+
+int daemon_start_ipc(daemon_state* state, const char* sock_path) {
+    if (!state) return -1;
+    state->ipc = ipc_server_start(state, sock_path);
+    return state->ipc ? 0 : -1;
 }
 

@@ -5,6 +5,8 @@
 #include "../trie.h"
 #include "../trie-storage.h"
 
+struct ipc_server;
+
 /*
    DISK OPERATIONS
 */
@@ -32,6 +34,7 @@ typedef struct {
     t_bucket_store* store;
     struct node* parent;
     file_thread* scanner;
+    struct ipc_server* ipc;
 } daemon_state;
 
 daemon_state* daemon_init(void);
@@ -44,6 +47,11 @@ path_validation daemon_process_query(daemon_state* state, const char* cwd, const
    Returns a completions struct that must be freed with completions_free().
 */
 completions* daemon_get_completions(daemon_state* state, const char* prefix, size_t limit);
+
+/*
+   Start the IPC server. Call after daemon_init().
+*/
+int daemon_start_ipc(daemon_state* state, const char* sock_path);
 
 
 

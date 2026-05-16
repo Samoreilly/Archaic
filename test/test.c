@@ -14,6 +14,9 @@
 #include "../src/trie.h"
 #include "../src/io/fileloader.h"
 #include "../src/lru.h"
+#include "../ipc/client.h"
+#include "../ipc/protocol.h"
+#include "../ipc/server.h"
 
 static const char* test_scan_path = NULL;
 
@@ -589,6 +592,74 @@ static bool test_lock_integrity(void) {
     return pass;
 }
 
+/*
+    TEST 10: IPC end-to-end
+    Start IPC server, connect via client, verify all message types work.
+*/
+static bool test_ipc_e2e(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 10] IPC end-to-end\n");
+
+    const char* sock = "/tmp/archaic-test-ipc.sock";
+    unlink(sock);
+
+    if (daemon_start_ipc(daemon, sock) != 0) {
+        printf("  FAIL: could not start IPC server\n");
+        return false;
+    }
+
+    usleep(50000);
+
+    ipc_client* client = ipc_client_connect(sock);
+    if (!client) {
+        printf("  FAIL: could not connect to IPC server\n");
+        ipc_server_stop(daemon->ipc);
+        daemon->ipc = NULL;
+        return false;
+    }
+
+    bool pass = true;
+
+    char* probe_file = path_join(scan_root, "ipc_probe.txt");
+    FILE* f = fopen(probe_file, "w");
+    if (f) fclose(f);
+
+    ipc_validation_resp vresp;
+    if (ipc_client_query(client, scan_root, "ipc_probe.txt", &vresp) == 0) {
+        printf("  Query: exists=%s\n", vresp.exists ? "yes" : "no");
+        if (!vresp.exists) pass = false;
+    } else {
+        printf("  Query: FAILED\n");
+        pass = false;
+    }
+
+    ipc_completions_resp cresp;
+    if (ipc_client_complete(client, probe_file, 10, &cresp) == 0) {
+        printf("  Completions: count=%u\n", cresp.count);
+        if (cresp.count == 0) pass = false;
+    } else {
+        printf("  Completions: FAILED\n");
+        pass = false;
+    }
+
+    if (ipc_client_scan(client, scan_root) == 0) {
+        printf("  Scan: OK\n");
+    } else {
+        printf("  Scan: FAILED\n");
+        pass = false;
+    }
+
+    ipc_client_disconnect(client);
+    ipc_server_stop(daemon->ipc);
+    daemon->ipc = NULL;
+    unlink(sock);
+
+    free(probe_file);
+    unlink(probe_file);
+
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 void test_main(void) {
     printf("\n========================================\n");
     printf("  Full Pipeline Integration Tests\n");
@@ -622,6 +693,7 @@ void test_main(void) {
     RUN_TEST(test_empty_input(daemon, base_path));
     RUN_TEST(test_concurrent_queries(daemon, base_path));
     RUN_TEST(test_lock_integrity());
+    RUN_TEST(test_ipc_e2e(daemon, base_path));
 
     printf("\n========================================\n");
     printf("  Results: %d/%d tests passed\n", passed, total);

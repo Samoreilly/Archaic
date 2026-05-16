@@ -289,6 +289,15 @@ void completions_collect(Trie* root, const char* prefix, completions* out) {
     char buffer[2048];
     size_t depth = 0;
 
+    if (node->is_leaf && matched_in_node == 0) {
+        size_t plen = strlen(prefix);
+        char* full = malloc(plen + 1);
+        if (full && out->count < out->capacity) {
+            memcpy(full, prefix, plen + 1);
+            out->paths[out->count++] = full;
+        }
+    }
+
     if (node != root && node->key && node->key_len > 0 && matched_in_node > 0) {
         size_t remaining_key = node->key_len - matched_in_node;
         if (remaining_key > 0 && remaining_key < 2048) {

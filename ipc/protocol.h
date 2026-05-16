@@ -1,0 +1,89 @@
+#pragma once
+
+#include <stdint.h>
+#include <stddef.h>
+
+#define IPC_SOCK_PATH "/tmp/archaic-daemon.sock"
+#define IPC_MAX_PAYLOAD 262144
+#define IPC_MAGIC 0x41524348
+
+/*
+    Message types
+*/
+typedef enum {
+    IPC_MSG_SCAN = 1,
+    IPC_MSG_QUERY = 2,
+    IPC_MSG_COMPLETE = 3,
+    IPC_MSG_SHUTDOWN = 4,
+
+    IPC_MSG_OK = 100,
+    IPC_MSG_ERROR = 101,
+    IPC_MSG_COMPLETIONS = 102,
+    IPC_MSG_VALIDATION = 103,
+} ipc_msg_type;
+
+/*
+    Binary message header
+*/
+typedef struct {
+    uint32_t magic;
+    uint32_t msg_type;
+    uint32_t payload_len;
+    uint32_t request_id;
+} __attribute__((packed)) ipc_header;
+
+/*
+    Payload structures
+*/
+typedef struct {
+    char path[4096];
+} __attribute__((packed)) ipc_scan_req;
+
+typedef struct {
+    char cwd[4096];
+    char input[4096];
+} __attribute__((packed)) ipc_query_req;
+
+typedef struct {
+    char prefix[4096];
+    uint32_t limit;
+} __attribute__((packed)) ipc_complete_req;
+
+typedef struct {
+    int32_t error_code;
+    char message[256];
+} __attribute__((packed)) ipc_error_resp;
+
+typedef struct {
+    int32_t exists;
+    int32_t is_dir;
+    int32_t is_file;
+    char full_path[4096];
+} __attribute__((packed)) ipc_validation_resp;
+
+typedef struct {
+    uint32_t count;
+    char paths[50][4096];
+} __attribute__((packed)) ipc_completions_resp;
+
+typedef struct {
+    int32_t status;
+} __attribute__((packed)) ipc_ok_resp;
+
+/*
+    Serialization helpers
+*/
+static inline size_t ipc_header_size(void) {
+    return sizeof(ipc_header);
+}
+
+static inline void ipc_write_header(ipc_header* hdr, uint32_t type, uint32_t len, uint32_t req_id) {
+    hdr->magic = IPC_MAGIC;
+    hdr->msg_type = type;
+    hdr->payload_len = len;
+    hdr->request_id = req_id;
+}
+
+static inline int ipc_validate_header(const ipc_header* hdr) {
+    return hdr->magic == IPC_MAGIC && hdr->payload_len < IPC_MAX_PAYLOAD;
+}

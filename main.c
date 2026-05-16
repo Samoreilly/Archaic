@@ -12,6 +12,7 @@ int main(int argc, char* argv[]) {
         set_test_scan_path(argv[1]);
     }
     test_main();
+    perf_main(argc > 1 ? argv[1] : "/home/sam/samdev");
 
 
     /* if(argc <= 1) return 1; */

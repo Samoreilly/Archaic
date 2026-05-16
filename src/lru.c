@@ -76,6 +76,7 @@ t_bucket* create_or_to_front(t_bucket_store* lfu, t_bucket* bucket) {
         lfu->by_id[bucket->id] = new_node;
     }
 
+    return bucket;
 }
 
 void move_to_front(t_bucket_store* lfu, t_bucket* bucket) {
@@ -166,6 +167,8 @@ t_bucket* create_or_to_back(t_bucket_store* lfu, t_bucket* bucket) {
     if (bucket->id < BUCKETS) {
         lfu->by_id[bucket->id] = new_node;
     }
+
+    return bucket;
 }
 
 void to_back(t_bucket_store* lfu, node* new_node) {

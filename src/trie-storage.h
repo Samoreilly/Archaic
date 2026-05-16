@@ -24,6 +24,8 @@ typedef struct t_bucket_store {
     t_bucket* lru;
     size_t right_index;
 
+    pthread_mutex_t store_lock;
+
     struct node* parent;
     struct node* by_id[BUCKETS];
     size_t lru_size;
@@ -66,6 +68,18 @@ static inline void trie_lock(t_bucket* bucket) {
 static inline void trie_unlock(t_bucket* bucket) {
     if (bucket) {
         pthread_mutex_unlock(&bucket->lock);
+    }
+}
+
+static inline void store_lock(t_bucket_store* store) {
+    if (store) {
+        pthread_mutex_lock(&store->store_lock);
+    }
+}
+
+static inline void store_unlock(t_bucket_store* store) {
+    if (store) {
+        pthread_mutex_unlock(&store->store_lock);
     }
 }
 

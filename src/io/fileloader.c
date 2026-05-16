@@ -45,6 +45,10 @@ static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int
             return;
         }
 
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
         size_t len = strlen(base_path) + 1 + strlen(entry->d_name) + 1;
         char* path = (char*) malloc(len);
         if (!path) {
@@ -54,6 +58,7 @@ static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int
         snprintf(path, len, "%s/%s", base_path, entry->d_name);
 
         if (entry->d_type == DT_REG || entry->d_type == DT_DIR) {
+            store_lock(f_thread->lfu);
             t_bucket* bucket = find_bucket(f_thread->lfu, path, path, 3, false);
             if (bucket) {
                 trie_lock(bucket);
@@ -61,6 +66,7 @@ static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int
                 bucket->dir_count++;
                 trie_unlock(bucket);
             }
+            store_unlock(f_thread->lfu);
         }
 
         if (entry->d_type == DT_DIR && depth < max_depth) {
@@ -91,6 +97,7 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
         return validation;
     }
 
+    store_lock(store);
     t_bucket* bucket = find_bucket(store, validation.full_path, validation.full_path, 3, false);
     if (bucket) {
         trie_lock(bucket);
@@ -98,6 +105,7 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
         bucket->dir_count++;
         trie_unlock(bucket);
     }
+    store_unlock(store);
 
     return validation;
 }
@@ -117,6 +125,8 @@ daemon_state* daemon_init(void) {
         free(state);
         return NULL;
     }
+
+    pthread_mutex_init(&state->store->store_lock, NULL);
 
     state->parent = (struct node*) calloc(1, sizeof(struct node));
     if (!state->parent) {
@@ -162,6 +172,7 @@ void daemon_shutdown(daemon_state* state) {
                 destroy_bucket(bucket);
             }
         }
+        pthread_mutex_destroy(&state->store->store_lock);
         free(state->store);
     }
 
@@ -181,6 +192,7 @@ void daemon_run_scan(daemon_state* state, const char* path) {
     state->scanner->path = norm;
     spin_scan_thread(state->scanner, norm);
     pthread_join(state->scanner->worker, NULL);
+    state->scanner->running = false;
     free(norm);
 }
 
@@ -191,5 +203,27 @@ path_validation daemon_process_query(daemon_state* state, const char* cwd, const
     }
 
     return process_input(state->store, cwd, input);
+}
+
+completions* daemon_get_completions(daemon_state* state, const char* prefix, size_t limit) {
+    if (!state || !state->store || !prefix) {
+        return NULL;
+    }
+
+    completions* out = completions_create(limit > 0 ? limit : 50);
+    if (!out) return NULL;
+
+    store_lock(state->store);
+    for (size_t i = 0; i < state->store->right_index && out->count < out->capacity; i++) {
+        t_bucket* bucket = state->store->buckets[i];
+        if (!bucket || !bucket->dir_trie) continue;
+
+        trie_lock(bucket);
+        completions_collect(bucket->dir_trie, prefix, out);
+        trie_unlock(bucket);
+    }
+    store_unlock(state->store);
+
+    return out;
 }
 

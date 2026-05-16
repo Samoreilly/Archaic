@@ -8,6 +8,26 @@
 
 #include "threadmanager.h"
 
+static char index_to_char(int idx) {
+    if (idx >= 0 && idx < 26) return (char)('a' + idx);
+    if (idx >= 26 && idx < 36) return (char)('0' + (idx - 26));
+    if (idx == 36) return '/';
+    if (idx == 37) return '.';
+    if (idx == 38) return '_';
+    if (idx == 39) return '-';
+    return '?';
+}
+
+void trie_free_recursive(Trie* node) {
+    if (!node) return;
+    for (size_t i = 0; i < TRIE_CHILDREN; i++) {
+        if (node->children[i]) {
+            trie_free_recursive(node->children[i]);
+        }
+    }
+    free(node);
+}
+
 Trie* create_trie() {
     Trie* node = (Trie*) malloc(sizeof(Trie));
 
@@ -15,7 +35,7 @@ Trie* create_trie() {
         node->children[i] = 0;
     }
     node->freq = 1;
-    node->is_leaf = true;
+    node->is_leaf = false;
     return node;
 }
 
@@ -67,107 +87,101 @@ void insert(Trie* root, const char* str) {
 }
 
 Trie* search(Trie* root, state* scan, char* str) {
+    (void)scan;
+
+    if (!root || !str) {
+        return NULL;
+    }
+
     Trie* trie = root;
-    bool is_new = false;
-    
-    char* leftover = malloc(strlen(str) + 1);
+    bool found_all = true;
 
     for (size_t i = 0; str[i] != '\0'; i++) {
-        char c = str[i];
-        int idx = char_index(c);
-
+        int idx = char_index(str[i]);
         if (idx < 0 || idx >= TRIE_CHILDREN) {
             continue;
         }
 
-        //no path for current char
         if (!trie->children[idx]) {
-            
-            //FIX: also need to add chars to trie (spin up worker thread?)
-            
-            leftover = (char*) realloc(leftover, strlen(str) - i + 1);
-            
-            //remaining unfound chars in trie
-            strcpy(leftover, str + i); 
-            is_new = true;
-            
-            
-            break;        
-
-            //FIX: return options, based on weight or some other metric
-           
-        }else {
-            trie->children[idx]->freq++;
+            found_all = false;
+            break;
         }
+
+        trie->children[idx]->freq++;
         trie = trie->children[idx];
     }
 
-    if(is_new) {
-        //spin-up a thread to extend trie
-        t_args* args = (t_args*) malloc(sizeof(t_args));
-        args->str = leftover;
-        args->curr_node = trie;
-        args->scan = scan;
-        
-        spin_threads(args, scan);    
-    }else {
-
-        //TODO: pass to results handling
-        free(leftover);
+    if (found_all) {
+        return trie;
     }
 
-    //word complete, no auto-complete for now
-    return trie;
+    return NULL;
 }
 
 /*
-   Handles background processes such as adding nodes in trie
+   Completion collection
 */
-void spin_threads(t_args* args, state* scan) {
-    if (scan->running) {
-        scan->stop = true;
-        //wait for thread to finish
-        pthread_join(scan->worker, NULL);
-        scan->running = false;
-    }
-    scan->stop = false;
-    scan->running = true;
-    pthread_create(&scan->worker, NULL, add_leftover, (void*)args);
+
+completions* completions_create(size_t capacity) {
+    completions* c = (completions*) calloc(1, sizeof(completions));
+    c->paths = (char**) calloc(capacity, sizeof(char*));
+    c->capacity = capacity;
+    c->count = 0;
+    return c;
 }
 
-void* add_leftover(void* args) {
+void completions_free(completions* c) {
+    if (!c) return;
+    for (size_t i = 0; i < c->count; i++) {
+        free(c->paths[i]);
+    }
+    free(c->paths);
+    free(c);
+}
 
-    Trie* curr = ((t_args*) args)->curr_node;
-    char* str = ((t_args*) args)->str;
-
-    for(size_t i = 0;str[i] != '\0';i++) {
-
-        //another thread entered, return early
-        if(((t_args*) args)->scan->stop) {
-            
-            free(str);
-            free(args);
-
-            return NULL;
-        }   
-
-        char c = str[i];
-        int idx = char_index(c);
-
-        if (idx < 0 || idx >= TRIE_CHILDREN) {
-            continue;
-        }
-        
-        if (!curr->children[idx]) {
-            curr->children[idx] = create_trie();
-        }
-        curr = curr->children[idx];
+static void collect_dfs(Trie* node, char* buffer, size_t depth, const char* prefix, completions* out) {
+    if (!node || out->count >= out->capacity) {
+        return;
     }
 
-    curr->is_leaf = true;
+    if (node->is_leaf && depth > 0) {
+        buffer[depth] = '\0';
+        size_t plen = strlen(prefix);
+        size_t slen = strlen(buffer);
+        char* full = (char*) malloc(plen + slen + 1);
+        if (full) {
+            memcpy(full, prefix, plen);
+            memcpy(full + plen, buffer, slen + 1);
+            out->paths[out->count++] = full;
+        }
+    }
 
-    free(args);
-    free(str);
+    for (int i = 0; i < TRIE_CHILDREN; i++) {
+        if (!node->children[i]) continue;
+        buffer[depth] = index_to_char(i);
+        collect_dfs(node->children[i], buffer, depth + 1, prefix, out);
+        if (out->count >= out->capacity) return;
+    }
+}
 
-    return NULL;
+static Trie* find_prefix_node(Trie* root, const char* prefix) {
+    if (!root || !prefix) return NULL;
+    Trie* curr = root;
+    for (size_t i = 0; prefix[i] != '\0'; i++) {
+        int idx = char_index(prefix[i]);
+        if (idx < 0 || idx >= TRIE_CHILDREN) continue;
+        if (!curr->children[idx]) return NULL;
+        curr = curr->children[idx];
+    }
+    return curr;
+}
+
+void completions_collect(Trie* root, const char* prefix, completions* out) {
+    if (!root || !out) return;
+
+    Trie* node = find_prefix_node(root, prefix);
+    if (!node) return;
+
+    char buffer[2048];
+    collect_dfs(node, buffer, 0, prefix, out);
 }

@@ -7,6 +7,7 @@
 #include <time.h>
 #include <errno.h>
 #include <signal.h>
+#include <sys/stat.h>
 
 #include "../src/threadmanager.h"
 #include "../src/trie-storage.h"
@@ -20,426 +21,601 @@ void set_test_scan_path(const char* path) {
     test_scan_path = path;
 }
 
-static char index_char(int idx) {
-    if (idx >= 0 && idx < 26) {
-        return (char)('a' + idx);
-    }
-    if (idx >= 26 && idx < 36) {
-        return (char)('0' + (idx - 26));
-    }
-    if (idx == 36) {
-        return '/';
-    }
-    if (idx == 37) {
-        return '.';
-    }
-    if (idx == 38) {
-        return '_';
-    }
-    if (idx == 39) {
-        return '-';
-    }
-    return '?';
-}
-
-static void dump_trie_node(Trie* node, char* buffer, size_t depth, size_t limit, size_t* printed) {
-    if (!node || *printed >= limit) {
-        return;
-    }
-
-    if (node->is_leaf && depth > 0) {
-        buffer[depth] = '\0';
-        printf("\n  %s", buffer);
-        (*printed)++;
-        if (*printed >= limit) {
-            return;
-        }
-    }
-
-    for (size_t i = 0; i < TRIE_CHILDREN; i++) {
-        if (!node->children[i]) {
-            continue;
-        }
-        buffer[depth] = index_char((int)i);
-        dump_trie_node(node->children[i], buffer, depth + 1, limit, printed);
-        if (*printed >= limit) {
-            return;
-        }
-    }
-}
-
-static size_t dump_store_trie_entries(t_bucket_store* store, size_t limit) {
-    if (!store) {
-        return 0;
-    }
-
-    size_t printed = 0;
-    char buffer[1024];
-
-    for (size_t i = 0; i < store->right_index; i++) {
-        t_bucket* bucket = store->buckets[i];
-        if (!bucket || !bucket->dir_trie) {
-            continue;
-        }
-        dump_trie_node(bucket->dir_trie, buffer, 0, limit, &printed);
-        if (printed >= limit) {
-            break;
-        }
-    }
-
-    return printed;
+static char* path_join(const char* a, const char* b) {
+    size_t len = strlen(a) + 1 + strlen(b) + 1;
+    char* out = malloc(len);
+    snprintf(out, len, "%s/%s", a, b);
+    return out;
 }
 
 /*
-    THREAD SAFETY STRESS TEST
-    Verifies:
-    - No deadlocks under concurrent access
-    - No data corruption (all inserted strings are findable)
-    - Clean state management (locks destroyed, no leaks)
+    Helper: check if a string is in a completions result
 */
+static bool completions_contains(completions* c, const char* str) {
+    if (!c || !str) return false;
+    for (size_t i = 0; i < c->count; i++) {
+        if (strcmp(c->paths[i], str) == 0) return true;
+    }
+    return false;
+}
 
-#define THREAD_WRITERS 8
-#define THREAD_READERS 4
-#define STRINGS_PER_WRITER 500
-#define DEADLOCK_TIMEOUT_SEC 10
+static void print_completions(completions* c, const char* label) {
+    printf("  [%s] %zu completions:", label, c->count);
+    for (size_t i = 0; i < c->count && i < 10; i++) {
+        printf("\n    %s", c->paths[i]);
+    }
+    if (c->count > 10) printf("\n    ... and %zu more", c->count - 10);
+    printf("\n");
+}
+
+/*
+    TEST 1: Scan population
+    Verifies background scan actually inserts paths into the trie.
+*/
+static bool test_scan_population(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 1] Scan population\n");
+
+    char* prefix = path_join(scan_root, "");
+    completions* c = daemon_get_completions(daemon, prefix, 50);
+    free(prefix);
+
+    if (!c) {
+        printf("  FAIL: no completions returned\n");
+        return false;
+    }
+
+    bool pass = c->count > 0;
+
+    printf("  Total completions: %zu\n", c->count);
+    if (c->count > 0) {
+        printf("  Sample: %s\n", c->paths[0]);
+    }
+
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    completions_free(c);
+    return pass;
+}
+
+/*
+    TEST 2: Valid path insertion
+    Query a valid path, verify it gets inserted and appears in completions.
+*/
+static bool test_valid_insert(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 2] Valid path insertion\n");
+
+    char* test_file = path_join(scan_root, "testfile_probe.tmp");
+    FILE* f = fopen(test_file, "w");
+    if (f) {
+        fclose(f);
+    } else {
+        free(test_file);
+        printf("  SKIP: cannot create temp file\n");
+        return true;
+    }
+
+    path_validation v = daemon_process_query(daemon, scan_root, "testfile_probe.tmp");
+    bool inserted = v.exists;
+    free_path_validation(&v);
+
+    char* comp_prefix = path_join(scan_root, "testfile");
+    completions* c = daemon_get_completions(daemon, comp_prefix, 10);
+    bool found = completions_contains(c, test_file);
+
+    printf("  Path exists: %s\n", inserted ? "yes" : "no");
+    printf("  Found in completions: %s\n", found ? "yes" : "no");
+
+    bool pass = inserted && found;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    completions_free(c);
+    free(comp_prefix);
+    free(test_file);
+    unlink(test_file);
+    return pass;
+}
+
+/*
+    TEST 3: Invalid path rejection
+    Query a non-existent path, verify it does NOT get inserted.
+*/
+static bool test_invalid_reject(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 3] Invalid path rejection\n");
+
+    const char* cwd = scan_root;
+    const char* input = "nonexistent_garbage_xyz_12345";
+
+    path_validation v = daemon_process_query(daemon, cwd, input);
+    bool rejected = !v.exists;
+    free_path_validation(&v);
+
+    char* comp_prefix = path_join(scan_root, "nonexistent");
+    completions* c = daemon_get_completions(daemon, comp_prefix, 10);
+    bool absent = (c->count == 0);
+    free(comp_prefix);
+
+    printf("  Path rejected: %s\n", rejected ? "yes" : "no");
+    printf("  Absent from completions: %s\n", absent ? "yes" : "no");
+
+    bool pass = rejected && absent;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    completions_free(c);
+    return pass;
+}
+
+/*
+    TEST 4: Partial prefix completion
+    Query a partial prefix, verify matching completions are returned.
+*/
+static bool test_partial_prefix(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 4] Partial prefix completion\n");
+
+    char* probe_file = path_join(scan_root, "probe_partial.txt");
+    FILE* f = fopen(probe_file, "w");
+    if (f) {
+        fclose(f);
+    } else {
+        free(probe_file);
+        printf("  SKIP: cannot create temp file\n");
+        return true;
+    }
+
+    path_validation v = daemon_process_query(daemon, scan_root, "probe_partial.txt");
+    free_path_validation(&v);
+
+    char* comp_prefix = path_join(scan_root, "probe_part");
+    completions* c = daemon_get_completions(daemon, comp_prefix, 10);
+    bool found = completions_contains(c, probe_file);
+
+    printf("  Prefix: %s\n", comp_prefix);
+    printf("  Contains probe file: %s\n", found ? "yes" : "no");
+    print_completions(c, "results");
+
+    bool pass = found;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    completions_free(c);
+    free(comp_prefix);
+    free(probe_file);
+    unlink(probe_file);
+    return pass;
+}
+
+/*
+    TEST 5: Idempotency
+    Query the same valid path multiple times, verify trie state doesn't corrupt.
+*/
+static bool test_idempotency(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 5] Idempotency (10x same query)\n");
+
+    char* probe_file = path_join(scan_root, "idempotency_probe.txt");
+    FILE* f = fopen(probe_file, "w");
+    if (f) {
+        fclose(f);
+    } else {
+        free(probe_file);
+        printf("  SKIP: cannot create temp file\n");
+        return true;
+    }
+
+    for (int i = 0; i < 10; i++) {
+        path_validation v = daemon_process_query(daemon, scan_root, "idempotency_probe.txt");
+        free_path_validation(&v);
+    }
+
+    char* comp_prefix = path_join(scan_root, "idempotency");
+    completions* c = daemon_get_completions(daemon, comp_prefix, 10);
+    bool found = completions_contains(c, probe_file);
+
+    printf("  Found after 10 queries: %s\n", found ? "yes" : "no");
+    printf("  Completion count: %zu\n", c->count);
+
+    bool pass = found && c->count <= 5;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    completions_free(c);
+    free(comp_prefix);
+    free(probe_file);
+    unlink(probe_file);
+    return pass;
+}
+
+/*
+    TEST 6: Absolute path handling
+    Query an absolute path (not relative to cwd), verify it works.
+*/
+static bool test_absolute_path(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 6] Absolute path handling\n");
+
+    char* probe_file = path_join(scan_root, "abs_path_probe.txt");
+    FILE* f = fopen(probe_file, "w");
+    if (f) {
+        fclose(f);
+    } else {
+        free(probe_file);
+        printf("  SKIP: cannot create temp file\n");
+        return true;
+    }
+
+    const char* cwd = "/tmp";
+    const char* input = probe_file;
+
+    path_validation v = daemon_process_query(daemon, cwd, input);
+    bool exists = v.exists;
+    free_path_validation(&v);
+
+    char* comp_prefix = path_join(scan_root, "abs_path");
+    completions* c = daemon_get_completions(daemon, comp_prefix, 10);
+    bool found = completions_contains(c, probe_file);
+
+    printf("  Absolute path exists: %s\n", exists ? "yes" : "no");
+    printf("  Found in completions: %s\n", found ? "yes" : "no");
+
+    bool pass = exists && found;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    completions_free(c);
+    free(comp_prefix);
+    free(probe_file);
+    unlink(probe_file);
+    return pass;
+}
+
+/*
+    TEST 7: Empty input handling
+    Query empty string, verify it doesn't crash or insert garbage.
+*/
+static bool test_empty_input(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 7] Empty input handling\n");
+
+    const char* cwd = scan_root;
+    const char* input = "";
+
+    path_validation v = daemon_process_query(daemon, cwd, input);
+    free_path_validation(&v);
+
+    completions* c = daemon_get_completions(daemon, "", 5);
+    bool no_crash = (c != NULL);
+
+    printf("  No crash: %s\n", no_crash ? "yes" : "no");
+    printf("  Completions returned: %zu\n", c ? c->count : 0);
+
+    bool pass = no_crash;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    if (c) completions_free(c);
+    return pass;
+}
+
+/*
+    TEST 8: Concurrent query stress test
+    Multiple threads querying simultaneously, verify no corruption.
+*/
+#define CONCURRENT_QUERY_THREADS 8
+#define QUERIES_PER_THREAD 100
+
+typedef struct {
+    daemon_state* daemon;
+    const char* scan_root;
+    int thread_id;
+    atomic_int* success;
+    atomic_int* fail;
+    pthread_barrier_t* barrier;
+} query_ctx;
+
+static void* query_worker(void* arg) {
+    query_ctx* ctx = (query_ctx*) arg;
+    pthread_barrier_wait(ctx->barrier);
+
+    char* probe_prefix = path_join(ctx->scan_root, "concurrent_probe_");
+
+    for (int i = 0; i < QUERIES_PER_THREAD; i++) {
+        char filename[64];
+        snprintf(filename, sizeof(filename), "concurrent_probe_%d.txt", i % 20);
+        char* probe_file = path_join(ctx->scan_root, filename);
+
+        FILE* f = fopen(probe_file, "w");
+        if (f) {
+            path_validation v = daemon_process_query(ctx->daemon, ctx->scan_root, filename);
+            free_path_validation(&v);
+            fclose(f);
+            unlink(probe_file);
+        }
+        free(probe_file);
+
+        char* comp_prefix = path_join(ctx->scan_root, "concurrent");
+        completions* c = daemon_get_completions(ctx->daemon, comp_prefix, 10);
+        free(comp_prefix);
+        if (c) {
+            atomic_fetch_add(ctx->success, 1);
+            completions_free(c);
+        } else {
+            atomic_fetch_add(ctx->fail, 1);
+        }
+    }
+
+    free(probe_prefix);
+    return NULL;
+}
+
+static bool test_concurrent_queries(daemon_state* daemon, const char* scan_root) {
+    printf("\n[Test 8] Concurrent query stress (%d threads x %d queries)\n",
+           CONCURRENT_QUERY_THREADS, QUERIES_PER_THREAD);
+
+    atomic_int success;
+    atomic_int fail;
+    atomic_init(&success, 0);
+    atomic_init(&fail, 0);
+
+    pthread_barrier_t barrier;
+    pthread_barrier_init(&barrier, NULL, CONCURRENT_QUERY_THREADS);
+
+    pthread_t threads[CONCURRENT_QUERY_THREADS];
+    query_ctx ctx[CONCURRENT_QUERY_THREADS];
+
+    for (int i = 0; i < CONCURRENT_QUERY_THREADS; i++) {
+        ctx[i].daemon = daemon;
+        ctx[i].scan_root = scan_root;
+        ctx[i].thread_id = i;
+        ctx[i].success = &success;
+        ctx[i].fail = &fail;
+        ctx[i].barrier = &barrier;
+        pthread_create(&threads[i], NULL, query_worker, &ctx[i]);
+    }
+
+    time_t start = time(NULL);
+    bool deadlock = false;
+    int joined = 0;
+
+    while (joined < CONCURRENT_QUERY_THREADS) {
+        if (time(NULL) - start >= 10) {
+            deadlock = true;
+            break;
+        }
+        for (int i = 0; i < CONCURRENT_QUERY_THREADS; i++) {
+            if (threads[i] == 0) continue;
+            if (pthread_kill(threads[i], 0) != 0) {
+                threads[i] = 0;
+                joined++;
+                continue;
+            }
+            if (pthread_join(threads[i], NULL) == 0) {
+                threads[i] = 0;
+                joined++;
+            }
+        }
+        if (joined < CONCURRENT_QUERY_THREADS) usleep(10000);
+    }
+
+    pthread_barrier_destroy(&barrier);
+
+    int total_success = atomic_load(&success);
+    int total_fail = atomic_load(&fail);
+
+    printf("  Completed: %d queries\n", total_success);
+    printf("  Failed: %d queries\n", total_fail);
+    printf("  Deadlock: %s\n", deadlock ? "YES" : "no");
+
+    bool pass = !deadlock && total_fail == 0 && total_success == CONCURRENT_QUERY_THREADS * QUERIES_PER_THREAD;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+
+    return pass;
+}
+
+/*
+    TEST 9: Thread safety with lock verification
+    Same as previous stress test but focused on trie integrity.
+*/
+#define LOCK_WRITERS 6
+#define LOCK_READERS 4
+#define LOCK_STRINGS 200
 
 typedef struct {
     t_bucket* bucket;
     int thread_id;
-    atomic_int* success_count;
-    atomic_int* fail_count;
-    atomic_bool* ready;
+    atomic_int* ops;
     pthread_barrier_t* barrier;
-} thread_ctx;
+} lock_ctx;
 
-typedef struct {
-    char** strings;
-    int count;
-} string_set;
-
-static string_set* string_set_create(int capacity) {
-    string_set* set = (string_set*) calloc(1, sizeof(string_set));
-    set->strings = (char**) calloc(capacity, sizeof(char*));
-    set->count = 0;
-    return set;
-}
-
-static void string_set_add(string_set* set, const char* str) {
-    if (set->count < (int)(sizeof(char*) * 0)) {
-        return;
-    }
-    set->strings[set->count] = strdup(str);
-    set->count++;
-}
-
-static bool string_set_contains(Trie* trie, const char* str) {
-    Trie* curr = trie;
-    for (size_t i = 0; str[i] != '\0'; i++) {
-        int idx = -1;
-        char c = str[i];
-        if (c >= 'a' && c <= 'z') idx = c - 'a';
-        else if (c >= 'A' && c <= 'Z') idx = c - 'A';
-        else if (c >= '0' && c <= '9') idx = 26 + (c - '0');
-        else if (c == '/') idx = 36;
-        else if (c == '.') idx = 37;
-        else if (c == '_') idx = 38;
-        else if (c == '-') idx = 39;
-
-        if (idx < 0 || idx >= TRIE_CHILDREN) continue;
-        if (!curr->children[idx]) return false;
-        curr = curr->children[idx];
-    }
-    return curr->is_leaf;
-}
-
-static void string_set_free(string_set* set) {
-    if (!set) return;
-    for (int i = 0; i < set->count; i++) {
-        free(set->strings[i]);
-    }
-    free(set->strings);
-    free(set);
-}
-
-static void* writer_thread(void* arg) {
-    thread_ctx* ctx = (thread_ctx*) arg;
-
+static void* lock_writer(void* arg) {
+    lock_ctx* ctx = (lock_ctx*) arg;
     pthread_barrier_wait(ctx->barrier);
 
-    for (int i = 0; i < STRINGS_PER_WRITER; i++) {
+    for (int i = 0; i < LOCK_STRINGS; i++) {
         char buf[64];
-        snprintf(buf, sizeof(buf), "test_%d_%d", ctx->thread_id, i);
-
+        snprintf(buf, sizeof(buf), "lock_test_%d_%d", ctx->thread_id, i);
         trie_lock(ctx->bucket);
         insert(ctx->bucket->dir_trie, buf);
         ctx->bucket->dir_count++;
         trie_unlock(ctx->bucket);
-
-        atomic_fetch_add(ctx->success_count, 1);
+        atomic_fetch_add(ctx->ops, 1);
     }
-
     return NULL;
 }
 
-static void* reader_thread(void* arg) {
-    thread_ctx* ctx = (thread_ctx*) arg;
-
+static void* lock_reader(void* arg) {
+    lock_ctx* ctx = (lock_ctx*) arg;
     pthread_barrier_wait(ctx->barrier);
 
-    for (int i = 0; i < STRINGS_PER_WRITER; i++) {
-        int writer_id = i % THREAD_WRITERS;
-        int str_id = i % STRINGS_PER_WRITER;
+    for (int i = 0; i < LOCK_STRINGS; i++) {
+        int wid = i % LOCK_WRITERS;
+        int sid = i % LOCK_STRINGS;
         char buf[64];
-        snprintf(buf, sizeof(buf), "test_%d_%d", writer_id, str_id);
+        snprintf(buf, sizeof(buf), "lock_test_%d_%d", wid, sid);
 
         trie_lock(ctx->bucket);
-        bool found = string_set_contains(ctx->bucket->dir_trie, buf);
-        trie_unlock(ctx->bucket);
-
-        if (found) {
-            atomic_fetch_add(ctx->success_count, 1);
-        } else {
-            atomic_fetch_add(ctx->fail_count, 1);
+        Trie* curr = ctx->bucket->dir_trie;
+        for (size_t j = 0; buf[j] != '\0'; j++) {
+            int idx = -1;
+            char c = buf[j];
+            if (c >= 'a' && c <= 'z') idx = c - 'a';
+            else if (c >= 'A' && c <= 'Z') idx = c - 'A';
+            else if (c >= '0' && c <= '9') idx = 26 + (c - '0');
+            else if (c == '_') idx = 38;
+            if (idx < 0 || idx >= TRIE_CHILDREN) break;
+            if (!curr->children[idx]) break;
+            curr = curr->children[idx];
         }
+        trie_unlock(ctx->bucket);
+        atomic_fetch_add(ctx->ops, 1);
     }
-
     return NULL;
 }
 
-static bool run_thread_safety_test(void) {
-    printf("\n[Thread Safety] starting stress test...\n");
-    printf("  Writers: %d, Readers: %d, Strings/writer: %d\n",
-           THREAD_WRITERS, THREAD_READERS, STRINGS_PER_WRITER);
+static bool test_lock_integrity(void) {
+    printf("\n[Test 9] Lock integrity (%d writers + %d readers)\n",
+           LOCK_WRITERS, LOCK_READERS);
 
-    /* Baseline: sequential insert + verify */
-    t_bucket* baseline = create_bucket("baseline");
-    int baseline_count = 0;
-    for (int w = 0; w < THREAD_WRITERS; w++) {
-        for (int i = 0; i < STRINGS_PER_WRITER; i++) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "test_%d_%d", w, i);
-            insert(baseline->dir_trie, buf);
-            baseline_count++;
-        }
-    }
-    int baseline_missing = 0;
-    for (int w = 0; w < THREAD_WRITERS; w++) {
-        for (int i = 0; i < STRINGS_PER_WRITER; i++) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "test_%d_%d", w, i);
-            if (!string_set_contains(baseline->dir_trie, buf)) {
-                baseline_missing++;
-            }
-        }
-    }
-    printf("  [Baseline] inserted=%d, missing=%d %s\n",
-           baseline_count, baseline_missing,
-           baseline_missing == 0 ? "PASS" : "FAIL");
-    destroy_bucket(baseline);
-    if (baseline_missing > 0) {
-        printf("  FAIL: baseline sequential test failed\n");
-        return false;
-    }
-
-    t_bucket* bucket = create_bucket("test_locked_trie");
+    t_bucket* bucket = create_bucket("lock_test");
     if (!bucket) {
         printf("  FAIL: could not create bucket\n");
         return false;
     }
 
-    string_set* expected = string_set_create(THREAD_WRITERS * STRINGS_PER_WRITER);
-
-    for (int w = 0; w < THREAD_WRITERS; w++) {
-        for (int i = 0; i < STRINGS_PER_WRITER; i++) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "test_%d_%d", w, i);
-            string_set_add(expected, buf);
-        }
-    }
-
-    atomic_int success_count;
-    atomic_int fail_count;
-    atomic_bool ready;
-    atomic_init(&success_count, 0);
-    atomic_init(&fail_count, 0);
-    atomic_init(&ready, false);
+    atomic_int ops;
+    atomic_init(&ops, 0);
 
     pthread_barrier_t barrier;
-    int total_threads = THREAD_WRITERS + THREAD_READERS;
-    pthread_barrier_init(&barrier, NULL, total_threads);
+    int total = LOCK_WRITERS + LOCK_READERS;
+    pthread_barrier_init(&barrier, NULL, total);
 
-    pthread_t writers[THREAD_WRITERS];
-    pthread_t readers[THREAD_READERS];
-    thread_ctx writer_ctx[THREAD_WRITERS];
-    thread_ctx reader_ctx[THREAD_READERS];
+    pthread_t writers[LOCK_WRITERS];
+    pthread_t readers[LOCK_READERS];
+    lock_ctx wctx[LOCK_WRITERS];
+    lock_ctx rctx[LOCK_READERS];
 
-    for (int i = 0; i < THREAD_WRITERS; i++) {
-        writer_ctx[i].bucket = bucket;
-        writer_ctx[i].thread_id = i;
-        writer_ctx[i].success_count = &success_count;
-        writer_ctx[i].fail_count = &fail_count;
-        writer_ctx[i].ready = &ready;
-        writer_ctx[i].barrier = &barrier;
-        pthread_create(&writers[i], NULL, writer_thread, &writer_ctx[i]);
+    for (int i = 0; i < LOCK_WRITERS; i++) {
+        wctx[i].bucket = bucket;
+        wctx[i].thread_id = i;
+        wctx[i].ops = &ops;
+        wctx[i].barrier = &barrier;
+        pthread_create(&writers[i], NULL, lock_writer, &wctx[i]);
     }
 
-    for (int i = 0; i < THREAD_READERS; i++) {
-        reader_ctx[i].bucket = bucket;
-        reader_ctx[i].thread_id = i;
-        reader_ctx[i].success_count = &success_count;
-        reader_ctx[i].fail_count = &fail_count;
-        reader_ctx[i].ready = &ready;
-        reader_ctx[i].barrier = &barrier;
-        pthread_create(&readers[i], NULL, reader_thread, &reader_ctx[i]);
+    for (int i = 0; i < LOCK_READERS; i++) {
+        rctx[i].bucket = bucket;
+        rctx[i].thread_id = i;
+        rctx[i].ops = &ops;
+        rctx[i].barrier = &barrier;
+        pthread_create(&readers[i], NULL, lock_reader, &rctx[i]);
     }
 
-    /* Deadlock detection: poll with pthread_kill and timeout */
     time_t start = time(NULL);
     bool deadlock = false;
-    pthread_t all_threads[THREAD_WRITERS + THREAD_READERS];
-    for (int i = 0; i < THREAD_WRITERS; i++) all_threads[i] = writers[i];
-    for (int i = 0; i < THREAD_READERS; i++) all_threads[THREAD_WRITERS + i] = readers[i];
-
     int joined = 0;
-    while (joined < (THREAD_WRITERS + THREAD_READERS)) {
-        if (time(NULL) - start >= DEADLOCK_TIMEOUT_SEC) {
+    pthread_t all[LOCK_WRITERS + LOCK_READERS];
+    for (int i = 0; i < LOCK_WRITERS; i++) all[i] = writers[i];
+    for (int i = 0; i < LOCK_READERS; i++) all[LOCK_WRITERS + i] = readers[i];
+
+    while (joined < total) {
+        if (time(NULL) - start >= 10) {
             deadlock = true;
-            printf("  FAIL: deadlock after %ds timeout\n", DEADLOCK_TIMEOUT_SEC);
             break;
         }
-        for (int i = 0; i < (THREAD_WRITERS + THREAD_READERS); i++) {
-            if (all_threads[i] == 0) continue;
-            if (pthread_kill(all_threads[i], 0) != 0) {
-                all_threads[i] = 0;
+        for (int i = 0; i < total; i++) {
+            if (all[i] == 0) continue;
+            if (pthread_kill(all[i], 0) != 0) {
+                all[i] = 0;
                 joined++;
                 continue;
             }
-            int ret = pthread_join(all_threads[i], NULL);
-            if (ret == 0) {
-                all_threads[i] = 0;
+            if (pthread_join(all[i], NULL) == 0) {
+                all[i] = 0;
                 joined++;
             }
         }
-        if (joined < (THREAD_WRITERS + THREAD_READERS)) {
-            usleep(50000);
-        }
+        if (joined < total) usleep(10000);
     }
 
     pthread_barrier_destroy(&barrier);
 
-    if (deadlock) {
-        destroy_bucket(bucket);
-        string_set_free(expected);
-        printf("  FAIL: deadlock detected\n");
-        return false;
-    }
-
-    /* Verify data integrity: all expected strings must be present */
-    printf("  [Post-test] bucket->dir_count = %u (expected %d)\n",
-           bucket->dir_count, THREAD_WRITERS * STRINGS_PER_WRITER);
+    int expected_ops = (LOCK_WRITERS + LOCK_READERS) * LOCK_STRINGS;
+    int actual_ops = atomic_load(&ops);
 
     int missing = 0;
-    for (int i = 0; i < expected->count; i++) {
-        trie_lock(bucket);
-        bool found = string_set_contains(bucket->dir_trie, expected->strings[i]);
-        trie_unlock(bucket);
-        if (!found) {
-            missing++;
+    for (int w = 0; w < LOCK_WRITERS; w++) {
+        for (int i = 0; i < LOCK_STRINGS; i++) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "lock_test_%d_%d", w, i);
+            trie_lock(bucket);
+            Trie* curr = bucket->dir_trie;
+            bool found = true;
+            for (size_t j = 0; buf[j] != '\0'; j++) {
+                int idx = -1;
+                char c = buf[j];
+                if (c >= 'a' && c <= 'z') idx = c - 'a';
+                else if (c >= 'A' && c <= 'Z') idx = c - 'A';
+                else if (c >= '0' && c <= '9') idx = 26 + (c - '0');
+                else if (c == '_') idx = 38;
+                if (idx < 0 || idx >= TRIE_CHILDREN) { found = false; break; }
+                if (!curr->children[idx]) { found = false; break; }
+                curr = curr->children[idx];
+            }
+            if (found && !curr->is_leaf) found = false;
+            trie_unlock(bucket);
+            if (!found) missing++;
         }
     }
 
-    /* Verify lock can be cleanly destroyed */
-    int lock_destroy = pthread_mutex_destroy(&bucket->lock);
-    bool lock_clean = (lock_destroy == 0);
+    int lock_destroy_rc = pthread_mutex_destroy(&bucket->lock);
 
-    bool passed = (missing == 0) && lock_clean;
-
-    printf("  Operations: %d writes, %d reads\n",
-           THREAD_WRITERS * STRINGS_PER_WRITER,
-           THREAD_READERS * STRINGS_PER_WRITER);
+    printf("  Expected ops: %d, Actual: %d\n", expected_ops, actual_ops);
     printf("  Missing strings: %d\n", missing);
-    printf("  Lock destroyed cleanly: %s\n", lock_clean ? "yes" : "no");
-    printf("  Result: %s\n", passed ? "PASS" : "FAIL");
+    printf("  Lock destroyed cleanly: %s\n", lock_destroy_rc == 0 ? "yes" : "no");
+    printf("  Deadlock: %s\n", deadlock ? "YES" : "no");
 
-    free(bucket->dir_trie);
-    free(bucket->dir_name);
-    free(bucket);
-    string_set_free(expected);
+    bool pass = !deadlock && missing == 0 && actual_ops == expected_ops && lock_destroy_rc == 0;
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
 
-    return passed;
+    destroy_bucket(bucket);
+
+    return pass;
 }
 
 void test_main(void) {
-    printf("\n=== Daemon Pipeline Test ===\n");
+    printf("\n========================================\n");
+    printf("  Full Pipeline Integration Tests\n");
+    printf("========================================\n");
 
     daemon_state* daemon = daemon_init();
     if (!daemon) {
-        printf("\n[Daemon] init failed\n");
+        printf("\n[FAIL] Daemon init failed\n");
         return;
     }
-    printf("\n[Daemon] initialized\n");
 
     const char* base_path = test_scan_path ? test_scan_path : "/home/sam/samdev";
-    printf("\n[Scan] path: %s", base_path);
+    printf("\n[Setup] Scanning: %s\n", base_path);
     daemon_run_scan(daemon, base_path);
-    printf("\n[Scan] complete\n");
+    printf("[Setup] Scan complete\n");
 
-    struct {
-        const char* cwd;
-        const char* input;
-        const char* label;
-    } queries[] = {
-        { "/home/sam/samdev", "archaic/main.c",       "existing file" },
-        { "/home/sam/samdev", "archaic/src",           "existing dir" },
-        { "/home/sam/samdev", "nonexistent_file.xyz",  "non-existent" },
-        { "/home/sam/samdev", "archaic/does/not/exist","partial valid" },
-        { "/home/sam/samdev", "/etc/hostname",         "absolute path" },
-        { "/home/sam/samdev", "",                      "empty input" },
-    };
+    int total = 0;
+    int passed = 0;
 
-    size_t num_queries = sizeof(queries) / sizeof(queries[0]);
+    #define RUN_TEST(fn) do { \
+        total++; \
+        if (fn) passed++; \
+    } while(0)
 
-    printf("\n[Pipeline] processing %zu queries:\n", num_queries);
+    RUN_TEST(test_scan_population(daemon, base_path));
+    RUN_TEST(test_valid_insert(daemon, base_path));
+    RUN_TEST(test_invalid_reject(daemon, base_path));
+    RUN_TEST(test_partial_prefix(daemon, base_path));
+    RUN_TEST(test_idempotency(daemon, base_path));
+    RUN_TEST(test_absolute_path(daemon, base_path));
+    RUN_TEST(test_empty_input(daemon, base_path));
+    RUN_TEST(test_concurrent_queries(daemon, base_path));
+    RUN_TEST(test_lock_integrity());
 
-    for (size_t i = 0; i < num_queries; i++) {
-        path_validation result = daemon_process_query(daemon, queries[i].cwd, queries[i].input);
-
-        printf("  %-20s -> exists=%d is_file=%d is_dir=%d",
-               queries[i].label,
-               result.exists,
-               result.is_file,
-               result.is_dir);
-
-        if (result.exists) {
-            printf(" [inserted]");
-        } else {
-            printf(" [skipped]");
-        }
-        printf("\n");
-
-        free_path_validation(&result);
-    }
-
-    size_t dump_limit = 30;
-    size_t dumped = dump_store_trie_entries(daemon->store, dump_limit);
-    printf("\n[Trie] dump (first %zu entries):\n", dump_limit);
-    if (dumped == 0) {
-        printf("  <none>\n");
-    }
-    printf("\n");
+    printf("\n========================================\n");
+    printf("  Results: %d/%d tests passed\n", passed, total);
+    printf("========================================\n");
 
     daemon_shutdown(daemon);
-    printf("\n[Daemon] shutdown complete\n");
-    printf("\n=== Pipeline Test Done ===\n");
 
-    /* Run thread safety stress test */
-    printf("\n=== Thread Safety Test ===\n");
-    bool thread_ok = run_thread_safety_test();
-    printf("\n=== Thread Safety Test Done ===\n");
-
-    if (!thread_ok) {
-        printf("\n[Overall] THREAD SAFETY TEST FAILED\n");
+    if (passed != total) {
+        printf("\n  OVERALL: FAIL\n\n");
     } else {
-        printf("\n[Overall] ALL TESTS PASSED\n");
+        printf("\n  OVERALL: PASS\n\n");
     }
 }

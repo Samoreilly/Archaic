@@ -18,20 +18,20 @@ typedef struct Trie {
 Trie* create_trie();
 void insert(Trie* root, const char* str);
 Trie* search(Trie* root, state* scan, char* str);
-
+void trie_free_recursive(Trie* node);
 
 /*
-    Auxilliary methods
+   Completion collection
 */
-
 typedef struct {
-    char* str;
-    Trie* curr_node;
-    state* scan;
-} t_args;
+    char** paths;
+    size_t count;
+    size_t capacity;
+} completions;
 
-void spin_threads(t_args* args, state* scan);
-void* add_leftover(void* args);
+completions* completions_create(size_t capacity);
+void completions_free(completions* c);
+void completions_collect(Trie* root, const char* prefix, completions* out);
 
 
 

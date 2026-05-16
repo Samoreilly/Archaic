@@ -45,8 +45,13 @@ t_bucket* find_bucket(t_bucket_store* lfu, char* original_dir, char* curr_dir, i
     */
     char* cutoff = cutoff_dir(curr_dir);
 
-    if(cut) {
+    if (cut) {
         free(curr_dir);
+    }
+
+    if (depth <= 0) {
+        free(cutoff);
+        return NULL;
     }
 
     return find_bucket(lfu, original_dir, cutoff, depth - 1, true);
@@ -169,7 +174,7 @@ void destroy_bucket(t_bucket* bucket) {
     }
     pthread_mutex_destroy(&bucket->lock);
     free(bucket->dir_name);
-    free(bucket->dir_trie);
+    trie_free_recursive(bucket->dir_trie);
     free(bucket);
 }
 

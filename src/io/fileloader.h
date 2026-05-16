@@ -39,5 +39,11 @@ void daemon_shutdown(daemon_state* state);
 void daemon_run_scan(daemon_state* state, const char* path);
 path_validation daemon_process_query(daemon_state* state, const char* cwd, const char* input);
 
+/*
+   Query the daemon for completions matching a prefix.
+   Returns a completions struct that must be freed with completions_free().
+*/
+completions* daemon_get_completions(daemon_state* state, const char* prefix, size_t limit);
+
 
 

@@ -12,7 +12,8 @@ add_executable(
     src/lru.c
     src/io/fileloader.c
     test/test.c
+    test/perf.c
 )
 
-target_link_libraries(archaic PRIVATE fmt::fmt)
+target_link_libraries(archaic PRIVATE fmt::fmt m pthread)
 target_compile_options(archaic PRIVATE -Wall -Wpedantic -Wextra)

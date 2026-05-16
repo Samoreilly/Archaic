@@ -5,11 +5,11 @@
 
 #include "threadmanager.h"
 
-#define CHILDREN 26
+#define TRIE_CHILDREN 40
 #define RESULTS 10
 
 typedef struct Trie {
-    struct Trie* children[26];
+    struct Trie* children[TRIE_CHILDREN];
     uint64_t freq;
     bool is_leaf;
 } Trie;
@@ -32,7 +32,6 @@ typedef struct {
 
 void spin_threads(t_args* args, state* scan);
 void* add_leftover(void* args);
-
 
 
 

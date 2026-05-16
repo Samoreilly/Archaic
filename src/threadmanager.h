@@ -4,7 +4,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 
-//struct t_lfu;
+//struct t_bucket_store;
 /*
     Manages thread that handles background insertions
     Ensures one thread runs at a time
@@ -22,7 +22,7 @@ typedef struct {
     atomic_bool stop;
     atomic_bool running;
 
-    struct t_lfu* lfu;
+    struct t_bucket_store* lfu;
     struct node* parent;
 
 } file_thread;

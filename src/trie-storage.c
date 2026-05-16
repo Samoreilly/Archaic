@@ -10,7 +10,7 @@
 
 struct node;
 
-t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth, bool cut) {
+t_bucket* find_bucket(t_bucket_store* lfu, char* original_dir, char* curr_dir, int depth, bool cut) {
     int left = 0, right = lfu->right_index;
 
     while(left < right) {
@@ -23,14 +23,18 @@ t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth,
         }else if(cmp > 0) {
             right = mid;
         }else {
+            //accessed so move to front
+            move_to_front(lfu, lfu->buckets[mid]);
             return lfu->buckets[mid];
         }
     }
 
     /*
-       If full path is not long enough to shorten and no ancestor exists, insert it 
+       If path has no ancestor paths, insert it
+       e.g. ancestor path /home/sam/samdev
+       e.g. path /home/sam/samdev/projects/archaic/src
     */
-    if((!cut && get_dir_depth(curr_dir) <= MIN_DEPTH) || (cut && depth <= MIN_DEPTH)) {
+    if((!cut && get_dir_depth(curr_dir) <= MIN_DEPTH) || (cut && depth == 0)) {
         t_bucket* inserted = insert_bucket(lfu, original_dir); 
         return inserted;
     }
@@ -47,7 +51,7 @@ t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth,
     return find_bucket(lfu, original_dir, cutoff, depth - 1, true);
 }
 
-t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
+t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir) {
     
     size_t insertion = find_insertion_point(lfu, curr_dir);
     if(insertion == SIZE_MAX) {
@@ -71,6 +75,12 @@ t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
         //    .       ^         
         //1,2,3,4,5,6,7,8,9,10
          
+
+        /*
+            Removes least recently used bucket and node from lru
+            Inserts a new node(curr_dir) into buckets and to front of lru
+        */
+
         t_bucket* removed = remove_last(lfu);
         if (!removed) {
             return NULL;
@@ -99,7 +109,7 @@ t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
 }
 
 
-void shift_left(t_lfu* lfu, size_t removal_index, size_t last_index) {
+void shift_left(t_bucket_store* lfu, size_t removal_index, size_t last_index) {
     for (size_t i = removal_index; i < last_index; i++) {
         lfu->buckets[i] = lfu->buckets[i + 1];
         if (lfu->buckets[i]) {
@@ -108,7 +118,7 @@ void shift_left(t_lfu* lfu, size_t removal_index, size_t last_index) {
     }
 }
 
-void shift_right(t_lfu* lfu, size_t insertion_index, size_t last_index) {
+void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t last_index) {
     for (size_t i = last_index; i > insertion_index; i--) {
         lfu->buckets[i] = lfu->buckets[i - 1];
         if (lfu->buckets[i]) {
@@ -117,7 +127,7 @@ void shift_right(t_lfu* lfu, size_t insertion_index, size_t last_index) {
     }
 }
 
-size_t find_insertion_point(t_lfu* lfu, char* curr_dir) {
+size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir) {
 
     int left = 0, right = lfu->right_index - 1;
 

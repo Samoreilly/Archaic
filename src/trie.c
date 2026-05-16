@@ -11,12 +11,59 @@
 Trie* create_trie() {
     Trie* node = (Trie*) malloc(sizeof(Trie));
 
-    for(size_t i = 0;i < 26;i++) {
+    for(size_t i = 0;i < TRIE_CHILDREN;i++) {
         node->children[i] = 0;
     }
     node->freq = 1;
     node->is_leaf = true;
     return node;
+}
+
+static int char_index(char c) {
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a';
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A';
+    }
+    if (c >= '0' && c <= '9') {
+        return 26 + (c - '0');
+    }
+    if (c == '/') {
+        return 36;
+    }
+    if (c == '.') {
+        return 37;
+    }
+    if (c == '_') {
+        return 38;
+    }
+    if (c == '-') {
+        return 39;
+    }
+    return -1;
+}
+
+void insert(Trie* root, const char* str) {
+    Trie* curr = root;
+    bool advanced = false;
+
+    for (size_t i = 0; str[i] != '\0'; i++) {
+        int idx = char_index(str[i]);
+        if (idx < 0 || idx >= TRIE_CHILDREN) {
+            continue;
+        }
+        advanced = true;
+        if (!curr->children[idx]) {
+            curr->children[idx] = create_trie();
+            curr->is_leaf = false;
+        }
+        curr = curr->children[idx];
+    }
+
+    if (advanced) {
+        curr->is_leaf = true;
+    }
 }
 
 Trie* search(Trie* root, state* scan, char* str) {
@@ -27,7 +74,11 @@ Trie* search(Trie* root, state* scan, char* str) {
 
     for (size_t i = 0; str[i] != '\0'; i++) {
         char c = str[i];
-        int idx = c - 'a';
+        int idx = char_index(c);
+
+        if (idx < 0 || idx >= TRIE_CHILDREN) {
+            continue;
+        }
 
         //no path for current char
         if (!trie->children[idx]) {
@@ -40,7 +91,7 @@ Trie* search(Trie* root, state* scan, char* str) {
             strcpy(leftover, str + i); 
             is_new = true;
             
-            printf("\nBREAK in search: %s\n", leftover);
+            
             break;        
 
             //FIX: return options, based on weight or some other metric
@@ -52,8 +103,6 @@ Trie* search(Trie* root, state* scan, char* str) {
     }
 
     if(is_new) {
-        printf("\nIS_NEW in search: %s\n", leftover);
-
         //spin-up a thread to extend trie
         t_args* args = (t_args*) malloc(sizeof(t_args));
         args->str = leftover;
@@ -73,7 +122,6 @@ Trie* search(Trie* root, state* scan, char* str) {
 
 /*
    Handles background processes such as adding nodes in trie
-   NOTE: May extend with function pointers and union in t_args to re-use this method
 */
 void spin_threads(t_args* args, state* scan) {
     if (scan->running) {
@@ -89,8 +137,6 @@ void spin_threads(t_args* args, state* scan) {
 
 void* add_leftover(void* args) {
 
-    printf("\nEntered leftover\n");
-
     Trie* curr = ((t_args*) args)->curr_node;
     char* str = ((t_args*) args)->str;
 
@@ -99,7 +145,6 @@ void* add_leftover(void* args) {
         //another thread entered, return early
         if(((t_args*) args)->scan->stop) {
             
-            printf("\nCanceled pthread_t in add_leftover %s\n", str);
             free(str);
             free(args);
 
@@ -107,10 +152,12 @@ void* add_leftover(void* args) {
         }   
 
         char c = str[i];
-        int idx = c - 'a';
-        
-        printf("\nChar in leftover: %c\n", c);
+        int idx = char_index(c);
 
+        if (idx < 0 || idx >= TRIE_CHILDREN) {
+            continue;
+        }
+        
         curr->children[idx] = create_trie();
         curr->is_leaf = false;
         curr = curr->children[idx];
@@ -121,10 +168,5 @@ void* add_leftover(void* args) {
     free(args);
     free(str);
 
-    printf("End of leftover");
-
     return NULL;
 }
-
-
-

@@ -25,7 +25,7 @@ typedef struct t_bucket {
 /*
     LrU to keep memory limited and fast
 */
-typedef struct t_lfu {
+typedef struct t_bucket_store {
     //sorted lexographically
     t_bucket* buckets[BUCKETS];
     t_bucket* lru;//bucket with mininum frequency;
@@ -36,19 +36,19 @@ typedef struct t_lfu {
     size_t lru_size;
 
     //TODO: Add locking around trie access
-} t_lfu;
+} t_bucket_store;
 
 struct node;
 
-t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth, bool cutoff);
-t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir);
+t_bucket* find_bucket(t_bucket_store* lfu, char* original_dir, char* curr_dir, int depth, bool cutoff);
+t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir);
 t_bucket* create_bucket(char* dir_name);
-size_t find_insertion_point(t_lfu* lfu, char* curr_dir);
-void shift_left(t_lfu* lfu, size_t removal_index, size_t last_index);
-void shift_right(t_lfu* lfu, size_t insertion_index, size_t last_index);
+size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir);
+void shift_left(t_bucket_store* lfu, size_t removal_index, size_t last_index);
+void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t last_index);
 
-void shift_left(t_lfu* lfu, size_t insertion_index, size_t removal_index);
-void shift_right(t_lfu* lfu, size_t insertion_index, size_t removal_index);
+void shift_left(t_bucket_store* lfu, size_t insertion_index, size_t removal_index);
+void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t removal_index);
 
 char* normalise_dir(const char* str);
 char* cutoff_dir(char* str);

@@ -2,8 +2,8 @@
 #include "trie-storage.h"
 #include <stdlib.h>
 
-static void detach_node(t_lfu* lfu, node* nde) {
-    node* parent = lfu ? lfu->parent : NULL;
+static void detach_node(t_bucket_store* lfu, node* nde) {
+    node* parent = lfu->parent;
     if (!parent || !nde) {
         return;
     }
@@ -25,7 +25,7 @@ static void detach_node(t_lfu* lfu, node* nde) {
     nde->next = NULL;
 }
 
-node* create_node(t_lfu* lfu, t_bucket* bucket) {
+node* create_node(t_bucket_store* lfu, t_bucket* bucket) {
     node* nde = calloc(1, sizeof(node));
     nde->bucket = bucket;
     return nde;
@@ -40,8 +40,8 @@ node* create_node(t_lfu* lfu, t_bucket* bucket) {
     This will be used for HOT buckets
     e.g. user enters a file (high chance of it being used again)
 */
-t_bucket* create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
-    node* parent = lfu ? lfu->parent : NULL;
+t_bucket* create_or_to_front(t_bucket_store* lfu, t_bucket* bucket) {
+    node* parent = lfu->parent;
     if (!lfu || !parent || !bucket) {
         return NULL;
     }
@@ -78,8 +78,34 @@ t_bucket* create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
 
 }
 
-t_bucket* remove_last(t_lfu* lfu) {
-    node* parent = lfu ? lfu->parent : NULL;
+void move_to_front(t_bucket_store* lfu, t_bucket* bucket) {
+    node* parent = lfu->parent;
+    if (!lfu || !parent || !bucket) {
+        return;
+    }
+
+    node* existing = NULL;
+    if (bucket->id < BUCKETS) {
+        existing = lfu->by_id[bucket->id];
+    }
+
+    if (!existing) {
+        existing = traverse_nodes(lfu, bucket);
+        if (existing && bucket->id < BUCKETS) {
+            lfu->by_id[bucket->id] = existing;
+        }
+    }
+
+    if (!existing) {
+        return;
+    }
+
+    detach_node(lfu, existing);
+    to_front(lfu, existing);
+}
+
+t_bucket* remove_last(t_bucket_store* lfu) {
+    node* parent = lfu->parent;
     if (!lfu || !parent || !parent->tail) {
         return NULL;
     }
@@ -104,8 +130,9 @@ t_bucket* remove_last(t_lfu* lfu) {
     e.g. my background folder/file scanner
     
 */
-t_bucket* create_or_to_back(t_lfu* lfu, t_bucket* bucket) {
-    node* parent = lfu ? lfu->parent : NULL;
+t_bucket* create_or_to_back(t_bucket_store* lfu, t_bucket* bucket) {
+    node* parent = lfu->parent;
+
     if (!lfu || !parent || !bucket) {
         return NULL;
     }
@@ -141,8 +168,8 @@ t_bucket* create_or_to_back(t_lfu* lfu, t_bucket* bucket) {
     }
 }
 
-void to_back(t_lfu* lfu, node* new_node) {
-    node* parent = lfu ? lfu->parent : NULL;
+void to_back(t_bucket_store* lfu, node* new_node) {
+    node* parent = lfu->parent;
     if (!parent || !new_node) {
         return;
     }
@@ -158,8 +185,8 @@ void to_back(t_lfu* lfu, node* new_node) {
     parent->next = parent->first;
 }
 
-void to_front(t_lfu* lfu, node* new_node) {
-    node* parent = lfu ? lfu->parent : NULL;
+void to_front(t_bucket_store* lfu, node* new_node) {
+    node* parent = lfu->parent;
     if (!parent || !new_node) {
         return;
     }
@@ -181,8 +208,8 @@ void to_front(t_lfu* lfu, node* new_node) {
    Auxilliary methods
 */
 
-node* traverse_nodes(t_lfu* lfu, t_bucket* bucket) {
-    node* parent = lfu ? lfu->parent : NULL;
+node* traverse_nodes(t_bucket_store* lfu, t_bucket* bucket) {
+    node* parent = lfu->parent;
     if (!parent) {
         return NULL;
     }
@@ -198,7 +225,6 @@ node* traverse_nodes(t_lfu* lfu, t_bucket* bucket) {
 
     return NULL;
 }
-
 
 
 

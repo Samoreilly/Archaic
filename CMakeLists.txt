@@ -11,8 +11,8 @@ add_executable(
     src/trie-storage.c
     src/lru.c
     src/io/fileloader.c
+    test/test.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt)
 target_compile_options(archaic PRIVATE -Wall -Wpedantic -Wextra)
-

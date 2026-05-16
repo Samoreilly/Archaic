@@ -446,16 +446,24 @@ static void* lock_reader(void* arg) {
 
         trie_lock(ctx->bucket);
         Trie* curr = ctx->bucket->dir_trie;
-        for (size_t j = 0; buf[j] != '\0'; j++) {
-            int idx = -1;
-            char c = buf[j];
-            if (c >= 'a' && c <= 'z') idx = c - 'a';
-            else if (c >= 'A' && c <= 'Z') idx = c - 'A';
-            else if (c >= '0' && c <= '9') idx = 26 + (c - '0');
-            else if (c == '_') idx = 38;
-            if (idx < 0 || idx >= TRIE_CHILDREN) break;
-            if (!curr->children[idx]) break;
-            curr = curr->children[idx];
+        for (size_t j = 0; buf[j] != '\0'; ) {
+            RadixChild* child = NULL;
+            for (uint8_t k = 0; k < curr->child_count; k++) {
+                if (curr->children[k].edge_char == buf[j]) {
+                    child = &curr->children[k];
+                    break;
+                }
+            }
+            if (!child) break;
+            Trie* child_node = child->node;
+            size_t match = 0;
+            while (match < child_node->key_len && buf[j + match] != '\0' &&
+                   child_node->key[match] == buf[j + match]) {
+                match++;
+            }
+            if (match == 0) break;
+            j += match;
+            curr = child_node;
         }
         trie_unlock(ctx->bucket);
         atomic_fetch_add(ctx->ops, 1);
@@ -541,16 +549,24 @@ static bool test_lock_integrity(void) {
             trie_lock(bucket);
             Trie* curr = bucket->dir_trie;
             bool found = true;
-            for (size_t j = 0; buf[j] != '\0'; j++) {
-                int idx = -1;
-                char c = buf[j];
-                if (c >= 'a' && c <= 'z') idx = c - 'a';
-                else if (c >= 'A' && c <= 'Z') idx = c - 'A';
-                else if (c >= '0' && c <= '9') idx = 26 + (c - '0');
-                else if (c == '_') idx = 38;
-                if (idx < 0 || idx >= TRIE_CHILDREN) { found = false; break; }
-                if (!curr->children[idx]) { found = false; break; }
-                curr = curr->children[idx];
+            for (size_t j = 0; buf[j] != '\0'; ) {
+                RadixChild* child = NULL;
+                for (uint8_t k = 0; k < curr->child_count; k++) {
+                    if (curr->children[k].edge_char == buf[j]) {
+                        child = &curr->children[k];
+                        break;
+                    }
+                }
+                if (!child) { found = false; break; }
+                Trie* child_node = child->node;
+                size_t match = 0;
+                while (match < child_node->key_len && buf[j + match] != '\0' &&
+                       child_node->key[match] == buf[j + match]) {
+                    match++;
+                }
+                if (match == 0) { found = false; break; }
+                j += match;
+                curr = child_node;
             }
             if (found && !curr->is_leaf) found = false;
             trie_unlock(bucket);

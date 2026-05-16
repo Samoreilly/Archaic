@@ -1,0 +1,345 @@
+
+========================================
+  Full Pipeline Integration Tests
+========================================
+
+[Setup] Scanning: /home/sam/samdev
+[Setup] Scan complete
+
+[Test 1] Scan population
+  Total completions: 50
+  Sample: /home/sam/samdev/archaic
+  Result: PASS
+
+[Test 2] Valid path insertion
+  Path exists: yes
+  Found in completions: yes
+  Result: PASS
+
+[Test 3] Invalid path rejection
+  Path rejected: yes
+  Absent from completions: yes
+  Result: PASS
+
+[Test 4] Partial prefix completion
+  Prefix: /home/sam/samdev/probe_part
+  Contains probe file: yes
+  [results] 2 completions:
+    /home/sam/samdev/probe_partial.txt
+    /home/sam/samdev/probe_partial.txt
+  Result: PASS
+
+[Test 5] Idempotency (10x same query)
+  Found after 10 queries: yes
+  Completion count: 2
+  Result: PASS
+
+[Test 6] Absolute path handling
+  Absolute path exists: yes
+  Found in completions: yes
+  Result: PASS
+
+[Test 7] Empty input handling
+  No crash: yes
+  Completions returned: 5
+  Result: PASS
+
+[Test 8] Concurrent query stress (8 threads x 100 queries)
+  Completed: 800 queries
+  Failed: 0 queries
+  Deadlock: no
+  Result: PASS
+
+[Test 9] Lock integrity (6 writers + 4 readers)
+  Expected ops: 2000, Actual: 2000
+  Missing strings: 0
+  Lock destroyed cleanly: yes
+  Deadlock: no
+  Result: PASS
+
+========================================
+  Results: 9/9 tests passed
+========================================
+
+  OVERALL: PASS
+
+
+========================================
+  Performance Benchmark Suite
+========================================
+  Iterations per test: 100000
+  Radix inline:        4
+  Max buckets:         250
+  Node size:           112 bytes
+========================================
+
+[Perf 1] Trie insertion throughput
+
+  Bulk insert (aggregate)
+    Ops:          100000
+    Total time:   30.820 ms
+    Throughput:   3244627 ops/sec
+    Min:          0.0003 ms
+    Mean:         0.0003 ms
+    P50:          0.0003 ms
+    P95:          0.0003 ms
+    P99:          0.0003 ms
+    Max:          0.0003 ms
+    StdDev:       0.0000 ms
+    Nodes:        119005
+    Trie memory:  12.71 MB
+    Bytes/node:   112.0
+    Bytes/string: 133.3
+
+[Perf 2] Trie search latency
+
+  Search HIT
+    Ops:          100000
+    Total time:   20.033 ms
+    Throughput:   4991686 ops/sec
+    Min:          0.0001 ms
+    Mean:         0.0002 ms
+    P50:          0.0002 ms
+    P95:          0.0004 ms
+    P99:          0.0005 ms
+    Max:          0.1191 ms
+    StdDev:       0.0006 ms
+
+  Search MISS
+    Ops:          100000
+    Total time:   1.976 ms
+    Throughput:   50614281 ops/sec
+    Min:          0.0000 ms
+    Mean:         0.0000 ms
+    P50:          0.0000 ms
+    P95:          0.0000 ms
+    P99:          0.0000 ms
+    Max:          0.0020 ms
+    StdDev:       0.0000 ms
+
+[Perf 3] Completion collection latency
+
+  Collect prefix='/home/user/project/src' (results=50)
+    Ops:          100000
+    Total time:   169.208 ms
+    Throughput:   590990 ops/sec
+    Min:          0.0013 ms
+    Mean:         0.0017 ms
+    P50:          0.0016 ms
+    P95:          0.0020 ms
+    P99:          0.0033 ms
+    Max:          0.1838 ms
+    StdDev:       0.0012 ms
+
+  Collect prefix='/home/user/project/lib' (results=50)
+    Ops:          100000
+    Total time:   165.747 ms
+    Throughput:   603328 ops/sec
+    Min:          0.0012 ms
+    Mean:         0.0017 ms
+    P50:          0.0016 ms
+    P95:          0.0020 ms
+    P99:          0.0029 ms
+    Max:          0.1766 ms
+    StdDev:       0.0016 ms
+
+  Collect prefix='/home/user/project' (results=50)
+    Ops:          100000
+    Total time:   166.994 ms
+    Throughput:   598823 ops/sec
+    Min:          0.0014 ms
+    Mean:         0.0017 ms
+    P50:          0.0016 ms
+    P95:          0.0019 ms
+    P99:          0.0028 ms
+    Max:          0.0775 ms
+    StdDev:       0.0005 ms
+
+[Perf 4] Bucket store operations
+
+  find_bucket (all)
+    Ops:          100000
+    Total time:   109.885 ms
+    Throughput:   910046 ops/sec
+    Min:          0.0003 ms
+    Mean:         0.0011 ms
+    P50:          0.0010 ms
+    P95:          0.0019 ms
+    P99:          0.0028 ms
+    Max:          0.2243 ms
+    StdDev:       0.0016 ms
+
+  insert_bucket (new only)
+    Ops:          100000
+    Total time:   109.885 ms
+    Throughput:   910046 ops/sec
+    Min:          0.0003 ms
+    Mean:         0.0011 ms
+    P50:          0.0010 ms
+    P95:          0.0019 ms
+    P99:          0.0028 ms
+    Max:          0.2243 ms
+    StdDev:       0.0016 ms
+    Active buckets: 249
+
+[Perf 5] LRU operations
+
+  move_to_front
+    Ops:          100000
+    Total time:   1.966 ms
+    Throughput:   50868156 ops/sec
+    Min:          0.0000 ms
+    Mean:         0.0000 ms
+    P50:          0.0000 ms
+    P95:          0.0000 ms
+    P99:          0.0000 ms
+    Max:          0.0039 ms
+    StdDev:       0.0000 ms
+
+  create_or_to_front
+    Ops:          100000
+    Total time:   2.128 ms
+    Throughput:   46982807 ops/sec
+    Min:          0.0000 ms
+    Mean:         0.0000 ms
+    P50:          0.0000 ms
+    P95:          0.0000 ms
+    P99:          0.0000 ms
+    Max:          0.0229 ms
+    StdDev:       0.0001 ms
+
+[Perf 6] Concurrent insert scaling
+
+  Concurrent insert (1 threads)
+    Ops:          100000
+    Total time:   41.082 ms
+    Throughput:   2434169 ops/sec
+    Min:          0.0001 ms
+    Mean:         0.0004 ms
+    P50:          0.0003 ms
+    P95:          0.0013 ms
+    P99:          0.0017 ms
+    Max:          0.2278 ms
+    StdDev:       0.0013 ms
+
+  Concurrent insert (2 threads)
+    Ops:          100000
+    Total time:   21.823 ms
+    Throughput:   4582296 ops/sec
+    Min:          0.0002 ms
+    Mean:         0.0004 ms
+    P50:          0.0003 ms
+    P95:          0.0005 ms
+    P99:          0.0015 ms
+    Max:          0.1299 ms
+    StdDev:       0.0008 ms
+
+  Concurrent insert (4 threads)
+    Ops:          100000
+    Total time:   15.145 ms
+    Throughput:   6602996 ops/sec
+    Min:          0.0002 ms
+    Mean:         0.0005 ms
+    P50:          0.0004 ms
+    P95:          0.0007 ms
+    P99:          0.0022 ms
+    Max:          0.1710 ms
+    StdDev:       0.0011 ms
+
+  Concurrent insert (8 threads)
+    Ops:          100000
+    Total time:   10.326 ms
+    Throughput:   9684225 ops/sec
+    Min:          0.0002 ms
+    Mean:         0.0006 ms
+    P50:          0.0005 ms
+    P95:          0.0009 ms
+    P99:          0.0030 ms
+    Max:          0.1313 ms
+    StdDev:       0.0008 ms
+
+[Perf 7] Memory overhead analysis
+    sizeof(RadixNode):    112 bytes
+    sizeof(t_bucket):     80 bytes
+    sizeof(t_bucket_store): 4072 bytes
+    sizeof(node):         56 bytes
+    sizeof(completions):  24 bytes
+    BUCKETS:              250
+    RADIX_INLINE:         4
+
+    RSS baseline:         159888 KB
+    RSS after load:       177092 KB
+    RSS delta:            17204 KB (16.80 MB)
+    Trie nodes (50k):     59505
+    Bucket trie nodes:    22200 (200 buckets x 100 files)
+    Bucket overhead:      16000 bytes (200 buckets)
+    Store array:          2000 bytes (250 pointers)
+    LRU nodes:            11200 bytes (200 nodes)
+
+[Perf 8] String length scaling
+    len=16   insert=5.7ms (3539605 ops/s) search=3.9ms (5142454 ops/s) nodes=24261 mem=2.59MB
+    len=32   insert=4.6ms (4365187 ops/s) search=4.0ms (4967345 ops/s) nodes=24218 mem=2.59MB
+    len=64   insert=4.5ms (4424894 ops/s) search=4.4ms (4514215 ops/s) nodes=24237 mem=2.59MB
+    len=128  insert=5.0ms (4038984 ops/s) search=4.3ms (4602366 ops/s) nodes=24191 mem=2.58MB
+    len=256  insert=6.8ms (2929636 ops/s) search=4.9ms (4075224 ops/s) nodes=24144 mem=2.58MB
+    len=512  insert=10.3ms (1937658 ops/s) search=6.8ms (2921311 ops/s) nodes=24233 mem=2.59MB
+
+[Perf 9] Daemon end-to-end throughput
+    Init time:          0.002 ms
+    Scan time:          1.426 ms
+    Active buckets:     249
+    Total entries:      249
+    Scan throughput:    174618 entries/sec
+
+  Query (prefix='/home/sam/samdev')
+    Ops:          100000
+    Total time:   32.133 ms
+    Throughput:   3112102 ops/sec
+    Min:          0.0003 ms
+    Mean:         0.0003 ms
+    P50:          0.0003 ms
+    P95:          0.0005 ms
+    P99:          0.0005 ms
+    Max:          0.1801 ms
+    StdDev:       0.0008 ms
+
+  Completions (prefix='/home/sam/samdev')
+    Ops:          100000
+    Total time:   142.383 ms
+    Throughput:   702329 ops/sec
+    Min:          0.0011 ms
+    Mean:         0.0014 ms
+    P50:          0.0013 ms
+    P95:          0.0019 ms
+    P99:          0.0020 ms
+    Max:          0.2197 ms
+    StdDev:       0.0016 ms
+
+  Query (prefix='')
+    Ops:          100000
+    Total time:   32.449 ms
+    Throughput:   3081788 ops/sec
+    Min:          0.0003 ms
+    Mean:         0.0003 ms
+    P50:          0.0003 ms
+    P95:          0.0004 ms
+    P99:          0.0005 ms
+    Max:          0.1313 ms
+    StdDev:       0.0006 ms
+
+  Completions (prefix='')
+    Ops:          100000
+    Total time:   209.836 ms
+    Throughput:   476562 ops/sec
+    Min:          0.0018 ms
+    Mean:         0.0021 ms
+    P50:          0.0020 ms
+    P95:          0.0025 ms
+    P99:          0.0031 ms
+    Max:          0.1991 ms
+    StdDev:       0.0012 ms
+
+========================================
+  Performance benchmarks complete
+========================================
+

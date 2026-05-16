@@ -86,6 +86,7 @@ static void print_metrics(const char* label, perf_metrics* m) {
 }
 
 static char** generate_path_strings(long count, int max_depth, int name_len) {
+    (void)name_len;
     char** strings = malloc(count * sizeof(char*));
     const char* dirs[] = {"src", "lib", "bin", "doc", "test", "build", "include", "config", "data", "scripts"};
     const char* exts[] = {".c", ".h", ".txt", ".md", ".py", ".sh", ".json", ".toml", ".rs", ".go"};
@@ -174,9 +175,9 @@ static void perf_trie_insert(void) {
             Trie* n = stack[--top];
             node_count++;
             trie_mem += sizeof(Trie);
-            for (int i = 0; i < TRIE_CHILDREN; i++) {
-                if (n->children[i] && top < 5000000) {
-                    stack[top++] = n->children[i];
+            for (uint8_t i = 0; i < n->child_count; i++) {
+                if (n->children[i].node && top < 5000000) {
+                    stack[top++] = n->children[i].node;
                 }
             }
         }
@@ -522,13 +523,13 @@ static void perf_concurrent_insert(void) {
 static void perf_memory(void) {
     printf("\n[Perf 7] Memory overhead analysis\n");
 
-    printf("    sizeof(Trie):         %zu bytes\n", sizeof(Trie));
+    printf("    sizeof(RadixNode):    %zu bytes\n", sizeof(Trie));
     printf("    sizeof(t_bucket):     %zu bytes\n", sizeof(t_bucket));
     printf("    sizeof(t_bucket_store): %zu bytes\n", sizeof(t_bucket_store));
     printf("    sizeof(node):         %zu bytes\n", sizeof(struct node));
     printf("    sizeof(completions):  %zu bytes\n", sizeof(completions));
     printf("    BUCKETS:              %d\n", BUCKETS);
-    printf("    TRIE_CHILDREN:        %d\n", TRIE_CHILDREN);
+    printf("    RADIX_INLINE:         %d\n", RADIX_INLINE_CHILDREN);
 
     struct rusage ru;
     getrusage(RUSAGE_SELF, &ru);
@@ -574,9 +575,9 @@ static void perf_memory(void) {
         while (top > 0) {
             Trie* n = stack[--top];
             trie_nodes++;
-            for (int i = 0; i < TRIE_CHILDREN; i++) {
-                if (n->children[i] && top < 5000000) {
-                    stack[top++] = n->children[i];
+            for (uint8_t i = 0; i < n->child_count; i++) {
+                if (n->children[i].node && top < 5000000) {
+                    stack[top++] = n->children[i].node;
                 }
             }
         }
@@ -592,9 +593,9 @@ static void perf_memory(void) {
         while (top > 0) {
             Trie* n = stack[--top];
             bucket_trie_nodes++;
-            for (int j = 0; j < TRIE_CHILDREN; j++) {
-                if (n->children[j] && top < 500000) {
-                    stack[top++] = n->children[j];
+            for (uint8_t j = 0; j < n->child_count; j++) {
+                if (n->children[j].node && top < 500000) {
+                    stack[top++] = n->children[j].node;
                 }
             }
         }
@@ -658,9 +659,9 @@ static void perf_string_length_scaling(void) {
             while (top > 0) {
                 Trie* n = stack[--top];
                 node_count++;
-                for (int i = 0; i < TRIE_CHILDREN; i++) {
-                    if (n->children[i] && top < 5000000) {
-                        stack[top++] = n->children[i];
+                for (uint8_t i = 0; i < n->child_count; i++) {
+                    if (n->children[i].node && top < 5000000) {
+                        stack[top++] = n->children[i].node;
                     }
                 }
             }
@@ -757,7 +758,7 @@ void perf_main(const char* scan_path) {
     printf("\n  Performance Benchmark Suite");
     printf("\n========================================");
     printf("\n  Iterations per test: %d", PERF_ITERATIONS);
-    printf("\n  Trie children:       %d", TRIE_CHILDREN);
+    printf("\n  Radix inline:        %d", RADIX_INLINE_CHILDREN);
     printf("\n  Max buckets:         %d", BUCKETS);
     printf("\n  Node size:           %zu bytes", sizeof(Trie));
     printf("\n========================================\n");

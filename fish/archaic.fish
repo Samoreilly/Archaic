@@ -53,10 +53,14 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         if not string match -q '/*' -- "$prefix"
             set -l clean_prefix (string replace -r '^\./' '' "$prefix")
             set resolved (pwd)/"$clean_prefix"
-        else
-            set resolved (string replace -r '//+' '/' "$resolved")
-            set resolved (string replace -r '/\./' '/' "$resolved")
         end
+        # Normalize path: resolve //, /./, and /../
+        while string match -q '*/../*' -- "$resolved"
+            set resolved (string replace -r '/[^/]+/\.\./' '/' "$resolved")
+        end
+        set resolved (string replace -r '/\.$' '/' "$resolved")
+        set resolved (string replace -r '//+' '/' "$resolved")
+        set resolved (string replace -r '/\./' '/' "$resolved")
         set norm_prefix (string replace -r '/+$' '' "$prefix")
     end
 

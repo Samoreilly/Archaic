@@ -112,6 +112,27 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     write_exact(fd, &resp, sizeof(resp));
 }
 
+static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_suggest_req* req) {
+    uint64_t now = (uint64_t)time(NULL);
+    scored_completions* sc = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now);
+
+    ipc_header hdr;
+    ipc_suggestion_resp resp;
+    memset(&resp, 0, sizeof(resp));
+
+    if (sc && sc->count > 0) {
+        strncpy(resp.path, sc->entries[0].path, sizeof(resp.path) - 1);
+        resp.score = sc->entries[0].score;
+        resp.freq = sc->entries[0].freq;
+        resp.is_dir = sc->entries[0].is_dir ? 1 : 0;
+        scored_completions_free(sc);
+    }
+
+    ipc_write_header(&hdr, IPC_MSG_SUGGESTION, sizeof(resp), req_id);
+    write_exact(fd, &hdr, sizeof(hdr));
+    write_exact(fd, &resp, sizeof(resp));
+}
+
 static void handle_client(ipc_server* srv, int fd) {
     ipc_header hdr;
 
@@ -156,6 +177,15 @@ static void handle_client(ipc_server* srv, int fd) {
                 break;
             }
             handle_complete(srv, fd, hdr.request_id, &req);
+            break;
+        }
+        case IPC_MSG_SUGGEST: {
+            ipc_suggest_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid suggest payload");
+                break;
+            }
+            handle_suggest(srv, fd, hdr.request_id, &req);
             break;
         }
         case IPC_MSG_SHUTDOWN: {

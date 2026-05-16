@@ -126,6 +126,20 @@ int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit,
     return 0;
 }
 
+int ipc_client_suggest(ipc_client* client, const char* prefix,
+                       ipc_suggestion_resp* out) {
+    ipc_suggest_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
+
+    if (send_request(client, IPC_MSG_SUGGEST, &req, sizeof(req)) < 0) return -1;
+
+    ipc_header hdr;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0) return -1;
+    if (hdr.msg_type != IPC_MSG_SUGGESTION) return -1;
+    return 0;
+}
+
 int ipc_client_shutdown(ipc_client* client) {
     if (send_request(client, IPC_MSG_SHUTDOWN, NULL, 0) < 0) return -1;
 

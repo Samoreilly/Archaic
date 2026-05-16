@@ -13,6 +13,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  scan <path>\n");
         fprintf(stderr, "  query <cwd> <input>\n");
         fprintf(stderr, "  complete <prefix> [limit]\n");
+        fprintf(stderr, "  suggest <prefix>\n");
         fprintf(stderr, "  shutdown\n");
         return 1;
     }
@@ -71,6 +72,19 @@ int main(int argc, char* argv[]) {
             }
         } else {
             fprintf(stderr, "Completions failed\n");
+        }
+    } else if (strcmp(argv[1], "suggest") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s suggest <prefix>\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        ipc_suggestion_resp resp;
+        rc = ipc_client_suggest(client, argv[2], &resp);
+        if (rc == 0 && resp.path[0] != '\0') {
+            printf("%s", resp.path);
+        } else {
+            rc = 1;
         }
     } else if (strcmp(argv[1], "shutdown") == 0) {
         rc = ipc_client_shutdown(client);

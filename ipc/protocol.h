@@ -15,11 +15,13 @@ typedef enum {
     IPC_MSG_QUERY = 2,
     IPC_MSG_COMPLETE = 3,
     IPC_MSG_SHUTDOWN = 4,
+    IPC_MSG_SUGGEST = 5,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
     IPC_MSG_COMPLETIONS = 102,
     IPC_MSG_VALIDATION = 103,
+    IPC_MSG_SUGGESTION = 104,
 } ipc_msg_type;
 
 /*
@@ -50,6 +52,10 @@ typedef struct {
 } __attribute__((packed)) ipc_complete_req;
 
 typedef struct {
+    char prefix[4096];
+} __attribute__((packed)) ipc_suggest_req;
+
+typedef struct {
     int32_t error_code;
     char message[256];
 } __attribute__((packed)) ipc_error_resp;
@@ -68,6 +74,13 @@ typedef struct {
     uint64_t freqs[50];
     uint32_t is_dirs[50];
 } __attribute__((packed)) ipc_completions_resp;
+
+typedef struct {
+    char path[4096];
+    double score;
+    uint64_t freq;
+    uint32_t is_dir;
+} __attribute__((packed)) ipc_suggestion_resp;
 
 typedef struct {
     int32_t status;

@@ -122,7 +122,8 @@ void* add_leftover(void* args) {
     free(str);
 
     printf("End of leftover");
-   
+
+    return NULL;
 }
 
 

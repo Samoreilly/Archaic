@@ -9,6 +9,7 @@ add_executable(
     main.c
     src/trie.c
     src/trie-storage.c
+    src/lru.c
     src/io/fileloader.c
 )
 

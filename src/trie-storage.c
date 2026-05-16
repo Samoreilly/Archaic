@@ -6,6 +6,9 @@
 
 #include "trie-storage.h"
 #include "trie.h"
+#include "lru.h"
+
+struct node;
 
 t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth, bool cut) {
     int left = 0, right = lfu->right_index;
@@ -25,10 +28,10 @@ t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth,
     }
 
     /*
-       If full path is not long enough to shorten, insert
+       If full path is not long enough to shorten and no ancestor exists, insert it 
     */
     if((!cut && get_dir_depth(curr_dir) <= MIN_DEPTH) || (cut && depth <= MIN_DEPTH)) {
-        t_bucket* inserted = insert_bucket(lfu, original_dir);
+        t_bucket* inserted = insert_bucket(lfu, original_dir); 
         return inserted;
     }
  
@@ -59,9 +62,11 @@ t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
         }
         
         lfu->buckets[insertion] = create_bucket(curr_dir);
-        
-        lfu->right_index++;
+        lfu->buckets[insertion]->id = insertion;
+        create_or_to_front(lfu, lfu->buckets[insertion]);
 
+        lfu->right_index++;
+        
         return lfu->buckets[insertion];
 
     }else {

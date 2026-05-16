@@ -8,12 +8,16 @@
 #include "src/trie-storage.h"
 #include "src/trie.h"
 #include "src/io/fileloader.h"
+#include "src/lru.h"
 
-#include <pthread.h>
 
 int main(int argc, char* argv[]) {
 
     t_lfu* lfu = calloc(1, sizeof(t_lfu));
+
+    node* parent = calloc(1, sizeof(node));
+    parent->is_parent = true;
+    
 
     char* norm_dir = normalise_dir(argv[1]);
     printf("\nNormalised Directory: %s", norm_dir);

@@ -15,10 +15,14 @@ typedef struct t_bucket {
     Trie* dir_trie;
     uint32_t dir_count;//N of files/folders in trie
 
+    //unique-id used to give O(1) access node* in lru (lru.c/.h)
+    size_t id;
+
 } t_bucket;
 
+
 /*
-    LFU to keep memory limited and fast
+    LrU to keep memory limited and fast
 */
 typedef struct t_lfu {
     //sorted lexographically
@@ -26,8 +30,14 @@ typedef struct t_lfu {
     t_bucket* lru;//bucket with mininum frequency;
     size_t right_index;//dynamically keeps tracks of right border
 
+    struct node* parent;
+    struct node* by_id[BUCKETS];//used to find node for lru
+    size_t lru_size;
+
+    //TODO: Add locking around trie access
 } t_lfu;
 
+struct node;
 
 t_bucket* find_bucket(t_lfu* lfu, char* original_dir, char* curr_dir, int depth, bool cutoff);
 t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir);

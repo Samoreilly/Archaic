@@ -23,5 +23,6 @@ typedef struct {
     atomic_bool running;
 
     struct t_lfu* lfu;
+    struct node* parent;
 
 } file_thread;

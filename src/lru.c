@@ -51,7 +51,7 @@ t_bucket* create_or_to_front(t_bucket_store* lfu, t_bucket* bucket) {
         if (existing) {
             detach_node(lfu, existing);
             to_front(lfu, existing);
-            return NULL;
+            return bucket;
         }
     }
 
@@ -62,7 +62,7 @@ t_bucket* create_or_to_front(t_bucket_store* lfu, t_bucket* bucket) {
         }
         detach_node(lfu, nde);
         to_front(lfu, nde);
-        return NULL;
+        return bucket;
     }
 
     if (lfu->lru_size >= BUCKETS) {
@@ -143,7 +143,7 @@ t_bucket* create_or_to_back(t_bucket_store* lfu, t_bucket* bucket) {
         if (existing) {
             detach_node(lfu, existing);
             to_back(lfu, existing);
-            return NULL;
+            return bucket;
         }
     }
 
@@ -154,7 +154,7 @@ t_bucket* create_or_to_back(t_bucket_store* lfu, t_bucket* bucket) {
         }
         detach_node(lfu, nde);
         to_back(lfu, nde);
-        return NULL;
+        return bucket;
     }
 
     if (lfu->lru_size >= BUCKETS) {

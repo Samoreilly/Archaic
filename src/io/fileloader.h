@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unistd.h>
+#include <stdint.h>
 #include "../threadmanager.h"
 #include "../trie.h"
 #include "../trie-storage.h"
@@ -13,6 +14,18 @@ struct ipc_server;
 void load_trie();
 void save_trie(Trie* trie);
 
+/*
+   DAEMON STATE
+   Owns the bucket store, scan state, and lifecycle
+*/
+typedef struct {
+    t_bucket_store* store;
+    struct node* parent;
+    file_thread* scanner;
+    struct ipc_server* ipc;
+} daemon_state;
+
+void daemon_save_state(daemon_state* state, const char* path);
 
 /*
    WORKER THREADS INSERTING FOLDER/FILES NAMES INTO TRIE
@@ -27,16 +40,8 @@ void* scan_curr_dir(void* args);
 path_validation process_input(t_bucket_store* store, const char* cwd, const char* input);
 
 /*
-   DAEMON STATE
-   Owns the bucket store, scan state, and lifecycle
+   DAEMON STATE LIFECYCLE
 */
-typedef struct {
-    t_bucket_store* store;
-    struct node* parent;
-    file_thread* scanner;
-    struct ipc_server* ipc;
-} daemon_state;
-
 daemon_state* daemon_init(void);
 void daemon_shutdown(daemon_state* state);
 void daemon_run_scan(daemon_state* state, const char* path);
@@ -58,6 +63,3 @@ scored_completions* daemon_get_scored_completions(daemon_state* state, const cha
    Start the IPC server. Call after daemon_init().
 */
 int daemon_start_ipc(daemon_state* state, const char* sock_path);
-
-
-

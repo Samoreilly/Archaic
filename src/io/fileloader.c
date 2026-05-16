@@ -15,7 +15,40 @@ void load_trie() {
 }
 
 void save_trie(Trie* trie) {
+    (void)trie;
+}
 
+static int collect_paths_cb(Trie* node, char* buffer, size_t depth, FILE* out) {
+    (void)node;
+    (void)buffer;
+    (void)depth;
+    (void)out;
+    return 0;
+}
+
+void daemon_save_state(daemon_state* state, const char* path) {
+    if (!state || !state->store || !path) return;
+
+    FILE* f = fopen(path, "w");
+    if (!f) return;
+
+    fprintf(f, "# archaic state file\n");
+    fprintf(f, "# format: freq last_access is_dir path\n");
+
+    store_lock(state->store);
+    for (size_t i = 0; i < state->store->right_index; i++) {
+        t_bucket* bucket = state->store->buckets[i];
+        if (!bucket || !bucket->dir_trie) continue;
+
+        trie_lock(bucket);
+        /* Walk the trie and emit entries */
+        /* For now, just emit bucket-level metadata */
+        fprintf(f, "bucket %s %zu\n", bucket->dir_name, bucket->dir_count);
+        trie_unlock(bucket);
+    }
+    store_unlock(state->store);
+
+    fclose(f);
 }
 
 void spin_scan_thread(file_thread* f_thread, char* path) {
@@ -51,7 +84,7 @@ static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int
         }
 
         size_t len = strlen(base_path) + 1 + strlen(entry->d_name) + 1;
-        char* path = (char*) malloc(len);
+        char* path = (char*) malloc(len + 1);
         if (!path) {
             continue;
         }
@@ -209,6 +242,7 @@ void daemon_run_scan(daemon_state* state, const char* path) {
     spin_scan_thread(state->scanner, norm);
     pthread_join(state->scanner->worker, NULL);
     state->scanner->running = false;
+    state->scanner->path = NULL;
     free(norm);
 }
 

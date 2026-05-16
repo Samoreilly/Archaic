@@ -96,6 +96,20 @@ int ipc_client_scan(ipc_client* client, const char* path) {
     return 0;
 }
 
+int ipc_client_save(ipc_client* client, const char* path) {
+    ipc_save_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.save_path, path, sizeof(req.save_path) - 1);
+
+    if (send_request(client, IPC_MSG_SAVE, &req, sizeof(req)) < 0) return -1;
+
+    ipc_header hdr;
+    ipc_ok_resp resp;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0) return -1;
+    if (hdr.msg_type != IPC_MSG_OK) return -1;
+    return 0;
+}
+
 int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
                      ipc_validation_resp* out) {
     ipc_query_req req;

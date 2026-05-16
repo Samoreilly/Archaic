@@ -83,6 +83,37 @@ int main(int argc, char* argv[]) {
         } else {
             rc = 1;
         }
+    } else if (strcmp(argv[1], "complete-raw") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s complete-raw <prefix> [limit]\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        uint32_t limit = argc > 3 ? (uint32_t)atoi(argv[3]) : 10;
+        ipc_completions_resp resp;
+        rc = ipc_client_complete(client, argv[2], limit, &resp);
+        if (rc == 0) {
+            printf("Found %u completions:\n", resp.count);
+            for (uint32_t i = 0; i < resp.count; i++) {
+                printf("  [%d] score=%.4f freq=%lu dir=%s  %s\n",
+                       i, resp.scores[i], (unsigned long)resp.freqs[i],
+                       resp.is_dirs[i] ? "yes" : "no", resp.paths[i]);
+            }
+        } else {
+            fprintf(stderr, "Completions failed\n");
+        }
+    } else if (strcmp(argv[1], "save") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s save <path>\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        rc = ipc_client_save(client, argv[2]);
+        if (rc == 0) {
+            printf("State saved to: %s\n", argv[2]);
+        } else {
+            fprintf(stderr, "Save failed\n");
+        }
     } else if (strcmp(argv[1], "shutdown") == 0) {
         rc = ipc_client_shutdown(client);
         if (rc == 0) {

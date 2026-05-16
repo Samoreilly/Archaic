@@ -63,6 +63,11 @@ static void handle_scan(ipc_server* srv, int fd, uint32_t req_id, const ipc_scan
     send_ok(fd, req_id);
 }
 
+static void handle_save(ipc_server* srv, int fd, uint32_t req_id, const ipc_save_req* req) {
+    daemon_save_state(srv->daemon, req->save_path);
+    send_ok(fd, req_id);
+}
+
 static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_query_req* req) {
     path_validation v = daemon_process_query(srv->daemon, req->cwd, req->input);
 
@@ -177,6 +182,15 @@ static void handle_client(ipc_server* srv, int fd) {
                 break;
             }
             handle_scan(srv, fd, hdr.request_id, &req);
+            break;
+        }
+        case IPC_MSG_SAVE: {
+            ipc_save_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid save payload");
+                break;
+            }
+            handle_save(srv, fd, hdr.request_id, &req);
             break;
         }
         case IPC_MSG_QUERY: {

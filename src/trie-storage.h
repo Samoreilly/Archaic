@@ -49,8 +49,8 @@ size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir);
 void shift_left(t_bucket_store* lfu, size_t removal_index, size_t last_index);
 void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t last_index);
 
-void shift_left(t_bucket_store* lfu, size_t insertion_index, size_t removal_index);
-void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t removal_index);
+void shift_left(t_bucket_store* lfu, size_t removal_index, size_t last_index);
+void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t last_index);
 
 char* normalise_dir(const char* str);
 char* cutoff_dir(char* str);

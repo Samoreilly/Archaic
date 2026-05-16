@@ -19,6 +19,7 @@ void ipc_client_disconnect(ipc_client* client);
     Send a scan request. Returns 0 on success.
 */
 int ipc_client_scan(ipc_client* client, const char* path);
+int ipc_client_save(ipc_client* client, const char* path);
 
 /*
     Send a query request. Fills validation response.

@@ -27,6 +27,23 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         end
     end
 
+    # Detect the command being completed to apply rules
+    set -l cmd_tokens (commandline -co)
+    set -l cmd ""
+    if test (count $cmd_tokens) -gt 0
+        set cmd $cmd_tokens[1]
+    end
+
+    # Commands that only accept directories
+    set -l dir_only_cmds cd mkdir pushd popd rmdir
+    set -l dirs_only 0
+    for dc in $dir_only_cmds
+        if test "$cmd" = "$dc"
+            set dirs_only 1
+            break
+        end
+    end
+
     # Resolve relative paths for the daemon query
     set -l resolved "$prefix"
     if not string match -q '/*' -- "$prefix"
@@ -48,6 +65,11 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         if test (count $parts) -ge 2
             set -l type $parts[1]
             set -l full_path $parts[2]
+            
+            # Skip files for directory-only commands
+            if test "$dirs_only" -eq 1 -a "$type" != "D"
+                continue
+            end
             
             # Convert to relative if user typed relative path
             set -l display_path "$full_path"
@@ -109,3 +131,45 @@ complete -c touch -f -a "(__archaic_do_complete)"
 
 # Catch-all for any command with path-like arguments
 complete -c "" -f -a "(__archaic_do_complete)"
+
+# Inline autosuggestion (gray text after cursor)
+function __archaic_autosuggest -d "Inline autosuggestion from archaic daemon"
+    set -l cmd (commandline -o)
+    if test (count $cmd) -eq 0
+        return
+    end
+    
+    set -l prefix (commandline -t)
+    if test -z "$prefix"
+        return
+    end
+    
+    # Only suggest for path-like inputs
+    if not string match -q '*/*' -- "$prefix"
+        return
+    end
+    
+    # Resolve relative paths
+    set -l resolved "$prefix"
+    if not string match -q '/*' -- "$prefix"
+        set resolved (pwd)/"$prefix"
+    end
+    
+    # Query daemon for single best suggestion
+    set -l suggestion (command $archaic_cli_path suggest "$resolved" 2>/dev/null)
+    if test $status -ne 0
+        return
+    end
+    
+    # Only suggest if it extends the current input
+    if string match -q "$prefix*" -- "$suggestion"
+        set -l remainder (string sub -s (math (string length "$prefix") + 1) "$suggestion")
+        if test -n "$remainder"
+            echo "$remainder"
+        end
+    end
+end
+
+# Enable autosuggestion
+# Note: fish autosuggestions work via the fish autosuggestions plugin
+# This function can be used with that plugin or bound to a key

@@ -16,6 +16,7 @@ typedef enum {
     IPC_MSG_COMPLETE = 3,
     IPC_MSG_SHUTDOWN = 4,
     IPC_MSG_SUGGEST = 5,
+    IPC_MSG_SAVE = 6,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
@@ -40,6 +41,10 @@ typedef struct {
 typedef struct {
     char path[4096];
 } __attribute__((packed)) ipc_scan_req;
+
+typedef struct {
+    char save_path[4096];
+} __attribute__((packed)) ipc_save_req;
 
 typedef struct {
     char cwd[4096];

@@ -56,13 +56,10 @@ t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
     }
 
     if(lfu->right_index + 1 < BUCKETS) {
-        //shift to right
-        for(int i = lfu->right_index + 1;i > insertion;i--) {
-            lfu->buckets[i] = lfu->buckets[i - 1];
-        }
-        
+        shift_right(lfu, insertion, lfu->right_index);
         lfu->buckets[insertion] = create_bucket(curr_dir);
         lfu->buckets[insertion]->id = insertion;
+        lfu->buckets[insertion]->array_index = insertion;
         create_or_to_front(lfu, lfu->buckets[insertion]);
 
         lfu->right_index++;
@@ -70,11 +67,54 @@ t_bucket* insert_bucket(t_lfu* lfu, char* curr_dir) {
         return lfu->buckets[insertion];
 
     }else {
-        //remove least recently used
+        //NOTE: insertion var is the index in buckets array
+        //    .       ^         
+        //1,2,3,4,5,6,7,8,9,10
+         
+        t_bucket* removed = remove_last(lfu);
+        if (!removed) {
+            return NULL;
+        }
+
+        size_t removal_index = removed->array_index;
+        if (removal_index < insertion) {
+            insertion--;
+        }
+
+        shift_left(lfu, removal_index, lfu->right_index - 1);
+        lfu->buckets[lfu->right_index - 1] = NULL;
+
+        shift_right(lfu, insertion, lfu->right_index - 1);
+        
+        lfu->buckets[insertion] = create_bucket(curr_dir);
+        lfu->buckets[insertion]->id = insertion;
+        lfu->buckets[insertion]->array_index = insertion;
+
+        create_or_to_front(lfu, lfu->buckets[insertion]);
+
     }
 
-    return NULL;
+    return lfu->buckets[insertion];
 
+}
+
+
+void shift_left(t_lfu* lfu, size_t removal_index, size_t last_index) {
+    for (size_t i = removal_index; i < last_index; i++) {
+        lfu->buckets[i] = lfu->buckets[i + 1];
+        if (lfu->buckets[i]) {
+            lfu->buckets[i]->array_index = i;
+        }
+    }
+}
+
+void shift_right(t_lfu* lfu, size_t insertion_index, size_t last_index) {
+    for (size_t i = last_index; i > insertion_index; i--) {
+        lfu->buckets[i] = lfu->buckets[i - 1];
+        if (lfu->buckets[i]) {
+            lfu->buckets[i]->array_index = i;
+        }
+    }
 }
 
 size_t find_insertion_point(t_lfu* lfu, char* curr_dir) {

@@ -40,10 +40,10 @@ node* create_node(t_lfu* lfu, t_bucket* bucket) {
     This will be used for HOT buckets
     e.g. user enters a file (high chance of it being used again)
 */
-void create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
+t_bucket* create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
     node* parent = lfu ? lfu->parent : NULL;
     if (!lfu || !parent || !bucket) {
-        return;
+        return NULL;
     }
 
     if (bucket->id < BUCKETS) {
@@ -51,7 +51,7 @@ void create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
         if (existing) {
             detach_node(lfu, existing);
             to_front(lfu, existing);
-            return;
+            return NULL;
         }
     }
 
@@ -62,7 +62,7 @@ void create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
         }
         detach_node(lfu, nde);
         to_front(lfu, nde);
-        return;
+        return NULL;
     }
 
     if (lfu->lru_size >= BUCKETS) {
@@ -75,12 +75,13 @@ void create_or_to_front(t_lfu* lfu, t_bucket* bucket) {
     if (bucket->id < BUCKETS) {
         lfu->by_id[bucket->id] = new_node;
     }
+
 }
 
-void remove_last(t_lfu* lfu) {
+t_bucket* remove_last(t_lfu* lfu) {
     node* parent = lfu ? lfu->parent : NULL;
     if (!lfu || !parent || !parent->tail) {
-        return;
+        return NULL;
     }
 
     node* victim = parent->tail;
@@ -92,7 +93,7 @@ void remove_last(t_lfu* lfu) {
         lfu->by_id[victim->bucket->id] = NULL;
     }
 
-    free(victim);
+    return victim->bucket;
 }
 
 /*
@@ -103,10 +104,10 @@ void remove_last(t_lfu* lfu) {
     e.g. my background folder/file scanner
     
 */
-void create_or_to_back(t_lfu* lfu, t_bucket* bucket) {
+t_bucket* create_or_to_back(t_lfu* lfu, t_bucket* bucket) {
     node* parent = lfu ? lfu->parent : NULL;
     if (!lfu || !parent || !bucket) {
-        return;
+        return NULL;
     }
 
     if (bucket->id < BUCKETS) {
@@ -114,7 +115,7 @@ void create_or_to_back(t_lfu* lfu, t_bucket* bucket) {
         if (existing) {
             detach_node(lfu, existing);
             to_back(lfu, existing);
-            return;
+            return NULL;
         }
     }
 
@@ -125,7 +126,7 @@ void create_or_to_back(t_lfu* lfu, t_bucket* bucket) {
         }
         detach_node(lfu, nde);
         to_back(lfu, nde);
-        return;
+        return NULL;
     }
 
     if (lfu->lru_size >= BUCKETS) {

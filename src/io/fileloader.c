@@ -233,6 +233,28 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
     return out;
 }
 
+scored_completions* daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now) {
+    if (!state || !state->store || !prefix) {
+        return NULL;
+    }
+
+    scored_completions* out = scored_completions_create(limit > 0 ? limit : 50);
+    if (!out) return NULL;
+
+    store_lock(state->store);
+    for (size_t i = 0; i < state->store->right_index && out->count < out->capacity; i++) {
+        t_bucket* bucket = state->store->buckets[i];
+        if (!bucket || !bucket->dir_trie) continue;
+
+        trie_lock(bucket);
+        scored_completions_collect(bucket->dir_trie, prefix, out, now);
+        trie_unlock(bucket);
+    }
+    store_unlock(state->store);
+
+    return out;
+}
+
 int daemon_start_ipc(daemon_state* state, const char* sock_path) {
     if (!state) return -1;
     state->ipc = ipc_server_start(state, sock_path);

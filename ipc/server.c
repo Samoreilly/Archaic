@@ -84,20 +84,27 @@ static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_que
 }
 
 static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_complete_req* req) {
-    completions* c = daemon_get_completions(srv->daemon, req->prefix, req->limit);
+    uint64_t now = (uint64_t)time(NULL);
+    scored_completions* sc = daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now);
 
     ipc_header hdr;
     ipc_completions_resp resp;
     resp.count = 0;
     memset(resp.paths, 0, sizeof(resp.paths));
+    memset(resp.scores, 0, sizeof(resp.scores));
+    memset(resp.freqs, 0, sizeof(resp.freqs));
+    memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
 
-    if (c) {
-        uint32_t n = c->count < 50 ? c->count : 50;
+    if (sc) {
+        uint32_t n = sc->count < 50 ? sc->count : 50;
         resp.count = n;
         for (uint32_t i = 0; i < n; i++) {
-            strncpy(resp.paths[i], c->paths[i], sizeof(resp.paths[i]) - 1);
+            strncpy(resp.paths[i], sc->entries[i].path, sizeof(resp.paths[i]) - 1);
+            resp.scores[i] = sc->entries[i].score;
+            resp.freqs[i] = sc->entries[i].freq;
+            resp.is_dirs[i] = sc->entries[i].is_dir ? 1 : 0;
         }
-        completions_free(c);
+        scored_completions_free(sc);
     }
 
     ipc_write_header(&hdr, IPC_MSG_COMPLETIONS, sizeof(resp), req_id);

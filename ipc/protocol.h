@@ -64,6 +64,9 @@ typedef struct {
 typedef struct {
     uint32_t count;
     char paths[50][4096];
+    double scores[50];
+    uint64_t freqs[50];
+    uint32_t is_dirs[50];
 } __attribute__((packed)) ipc_completions_resp;
 
 typedef struct {

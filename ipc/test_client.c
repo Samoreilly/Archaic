@@ -65,7 +65,9 @@ int main(int argc, char* argv[]) {
         if (rc == 0) {
             printf("Found %u completions:\n", resp.count);
             for (uint32_t i = 0; i < resp.count; i++) {
-                printf("  %s\n", resp.paths[i]);
+                printf("  [%d] score=%.4f freq=%lu dir=%s  %s\n",
+                       i, resp.scores[i], (unsigned long)resp.freqs[i],
+                       resp.is_dirs[i] ? "yes" : "no", resp.paths[i]);
             }
         } else {
             fprintf(stderr, "Completions failed\n");

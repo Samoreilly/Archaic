@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
 #include "trie.h"
 #include <unistd.h>
 #include <pthread.h>
@@ -562,4 +563,123 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
 
     /* Sort by score descending */
     qsort(out->entries, out->count, sizeof(scored_entry), cmp_score_desc);
+}
+
+/*
+   Fuzzy matching: subsequence match against all leaf paths
+*/
+
+typedef struct {
+    char path[4096];
+    int match_quality;
+    uint64_t freq;
+    uint64_t last_access;
+    bool is_dir;
+} fuzzy_entry;
+
+static int fuzzy_score(const char* path, const char* query) {
+    int path_len = (int)strlen(path);
+    int query_len = (int)strlen(query);
+    if (query_len == 0 || path_len < query_len) return -1;
+
+    const char* basename = path;
+    for (const char* p = path; *p; p++) {
+        if (*p == '/') basename = p + 1;
+    }
+
+    int matches = 0;
+    int contiguous = 0;
+    int best_contiguous = 0;
+    int bn_len = (int)strlen(basename);
+
+    int bi = 0;
+    int qi = 0;
+    while (qi < query_len && bi < bn_len) {
+        if (tolower((unsigned char)basename[bi]) == tolower((unsigned char)query[qi])) {
+            matches++;
+            contiguous++;
+            if (contiguous > best_contiguous) best_contiguous = contiguous;
+            qi++;
+        } else {
+            contiguous = 0;
+        }
+        bi++;
+    }
+
+    if (matches != query_len) return -1;
+
+    int skipped = bi - matches;
+    return matches * 10 + best_contiguous * 5 - skipped;
+}
+
+static void fuzzy_collect_dfs(RadixNode* node, char* buffer, size_t depth,
+                               const char* query, fuzzy_entry* entries,
+                               size_t* count, size_t capacity, int* min_score) {
+    if (!node || *count >= capacity * 2) return;
+
+    if (node->is_leaf && depth > 0) {
+        buffer[depth] = '\0';
+        int score = fuzzy_score(buffer, query);
+        if (score >= 0 && score >= *min_score) {
+            if (*count < capacity) {
+                fuzzy_entry* e = &entries[*count];
+                strncpy(e->path, buffer, sizeof(e->path) - 1);
+                e->path[sizeof(e->path) - 1] = '\0';
+                e->match_quality = score;
+                e->freq = node->freq;
+                e->last_access = node->last_access;
+                e->is_dir = node->is_dir;
+                (*count)++;
+            }
+            if (*count >= capacity) {
+                *min_score = entries[0].match_quality;
+            }
+        }
+    }
+
+    for (uint8_t i = 0; i < node->child_count; i++) {
+        RadixChild* child = &node->children[i];
+        RadixNode* child_node = child->node;
+        size_t klen = child_node->key_len;
+        if (depth + klen >= 2048) continue;
+        memcpy(buffer + depth, child_node->key, klen);
+        fuzzy_collect_dfs(child_node, buffer, depth + klen, query,
+                          entries, count, capacity, min_score);
+    }
+}
+
+static int cmp_fuzzy(const void* a, const void* b) {
+    const fuzzy_entry* ea = (const fuzzy_entry*)a;
+    const fuzzy_entry* eb = (const fuzzy_entry*)b;
+    if (eb->match_quality != ea->match_quality)
+        return eb->match_quality - ea->match_quality;
+    return strcmp(ea->path, eb->path);
+}
+
+int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity) {
+    if (!root || !query || query[0] == '\0' || !paths || capacity <= 0) return 0;
+
+    fuzzy_entry* entries = calloc((size_t)capacity, sizeof(fuzzy_entry));
+    if (!entries) return 0;
+
+    size_t count = 0;
+    int min_score = 0;
+    char buffer[2048];
+
+    fuzzy_collect_dfs(root, buffer, 0, query, entries, &count, (size_t)capacity, &min_score);
+
+    qsort(entries, count, sizeof(fuzzy_entry), cmp_fuzzy);
+
+    int n = (int)(count < (size_t)capacity ? count : (size_t)capacity);
+    for (int i = 0; i < n; i++) {
+        paths[i] = strdup(entries[i].path);
+        if (!paths[i]) {
+            for (int j = 0; j < i; j++) free(paths[j]);
+            free(entries);
+            return i;
+        }
+    }
+
+    free(entries);
+    return n;
 }

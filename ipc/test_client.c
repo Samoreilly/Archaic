@@ -17,6 +17,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  ping\n");
         fprintf(stderr, "  metrics\n");
         fprintf(stderr, "  scan-status\n");
+        fprintf(stderr, "  fuzzy <query> [limit]\n");
         fprintf(stderr, "  shutdown\n");
         return 1;
     }
@@ -154,6 +155,22 @@ int main(int argc, char* argv[]) {
             printf("buckets: %lu\n", (unsigned long)resp.buckets_so_far);
         } else {
             fprintf(stderr, "Scan status failed\n");
+        }
+    } else if (strcmp(argv[1], "fuzzy") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s fuzzy <query> [limit]\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        uint32_t limit = argc > 3 ? (uint32_t)atoi(argv[3]) : 20;
+        ipc_completions_resp resp;
+        rc = ipc_client_fuzzy(client, argv[2], limit, &resp);
+        if (rc == 0) {
+            for (uint32_t i = 0; i < resp.count; i++) {
+                printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+            }
+        } else {
+            fprintf(stderr, "Fuzzy completions failed\n");
         }
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);

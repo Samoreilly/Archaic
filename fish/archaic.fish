@@ -204,6 +204,44 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     end
 
     if test $found -eq 0
+        # Try fuzzy matching
+        set -l fuzzy_results ""
+        if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
+            set fuzzy_results (echo "fuzzy $resolved 20" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+        end
+        if test -z "$fuzzy_results"
+            set fuzzy_results (command $archaic_cli_path fuzzy "$resolved" 20 2>/dev/null)
+        end
+
+        for line in $fuzzy_results
+            set -l parts (string split " " "$line")
+            if test (count $parts) -ge 2
+                set -l type $parts[1]
+                set -l full_path $parts[2]
+
+                if test "$dirs_only" -eq 1 -a "$type" != "D"
+                    continue
+                end
+
+                set -l display_path "$full_path"
+                if test -z "$prefix"
+                    set display_path (basename "$full_path")
+                else if not string match -q '/*' -- "$prefix"
+                    set display_path (string replace "$norm_resolved" "" "$full_path")
+                    set display_path "$norm_prefix$display_path"
+                end
+
+                if test "$type" = "D"
+                    echo -e "$display_path\t(dir fuzzy)"
+                else
+                    echo -e "$display_path\t(file fuzzy)"
+                end
+                set found 1
+            end
+        end
+    end
+
+    if test $found -eq 0
         set -g __archaic_daemon_healthy 0
         return
     end

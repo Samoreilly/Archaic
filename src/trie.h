@@ -72,3 +72,5 @@ void completions_collect(Trie* root, const char* prefix, completions* out);
 scored_completions* scored_completions_create(size_t capacity);
 void scored_completions_free(scored_completions* sc);
 void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out, uint64_t now);
+
+int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity);

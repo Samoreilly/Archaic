@@ -213,6 +213,42 @@ static void handle_scan_status(ipc_server* srv, int fd, uint32_t req_id) {
     write_exact(fd, &resp, sizeof(resp));
 }
 
+static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_complete_req* req) {
+    completions* fc = daemon_get_fuzzy_completions(srv->daemon, req->prefix, req->limit);
+
+    ipc_header hdr;
+    ipc_completions_resp resp;
+    resp.count = 0;
+    memset(resp.paths, 0, sizeof(resp.paths));
+    memset(resp.scores, 0, sizeof(resp.scores));
+    memset(resp.freqs, 0, sizeof(resp.freqs));
+    memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
+
+    if (fc) {
+        uint32_t n = fc->count < 50 ? fc->count : 50;
+        resp.count = n;
+        for (uint32_t i = 0; i < n; i++) {
+            const char* p = fc->paths[i];
+            size_t plen = strlen(p);
+            char clean[4096];
+            if (plen > 0 && p[plen - 1] == '/') {
+                memcpy(clean, p, plen - 1);
+                clean[plen - 1] = '\0';
+            } else {
+                strncpy(clean, p, sizeof(clean) - 1);
+                clean[sizeof(clean) - 1] = '\0';
+            }
+            strncpy(resp.paths[i], clean, sizeof(resp.paths[i]) - 1);
+            resp.is_dirs[i] = 0;
+        }
+        completions_free(fc);
+    }
+
+    ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS, sizeof(resp), req_id);
+    write_exact(fd, &hdr, sizeof(hdr));
+    write_exact(fd, &resp, sizeof(resp));
+}
+
 static void handle_client(ipc_server* srv, int fd) {
     ipc_header hdr;
 
@@ -300,6 +336,15 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_SCAN_STATUS: {
             handle_scan_status(srv, fd, hdr.request_id);
+            break;
+        }
+        case IPC_MSG_FUZZY_COMPLETE: {
+            ipc_complete_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid fuzzy complete payload");
+                break;
+            }
+            handle_fuzzy_complete(srv, fd, hdr.request_id, &req);
             break;
         }
         default:

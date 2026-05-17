@@ -190,6 +190,21 @@ int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out) {
     return 0;
 }
 
+int ipc_client_fuzzy(ipc_client* client, const char* query, uint32_t limit,
+                     ipc_completions_resp* out) {
+    ipc_complete_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.prefix, query, sizeof(req.prefix) - 1);
+    req.limit = limit;
+
+    if (send_request(client, IPC_MSG_FUZZY_COMPLETE, &req, sizeof(req)) < 0) return -1;
+
+    ipc_header hdr;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0) return -1;
+    if (hdr.msg_type != IPC_MSG_FUZZY_COMPLETIONS) return -1;
+    return 0;
+}
+
 #include "../src/config.h"
 
 ipc_client* ipc_client_connect_default(void) {

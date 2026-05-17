@@ -28,6 +28,7 @@ typedef enum {
     IPC_MSG_PING = 7,
     IPC_MSG_METRICS = 8,
     IPC_MSG_SCAN_STATUS = 9,
+    IPC_MSG_FUZZY_COMPLETE = 10,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
@@ -37,6 +38,7 @@ typedef enum {
     IPC_MSG_PONG = 105,
     IPC_MSG_METRICS_RESP = 106,
     IPC_MSG_SCAN_STATUS_RESP = 107,
+    IPC_MSG_FUZZY_COMPLETIONS = 108,
 } ipc_msg_type;
 
 /*

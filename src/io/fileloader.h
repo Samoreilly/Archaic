@@ -55,4 +55,6 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
 
 scored_completions* daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now);
 
+completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit);
+
 int daemon_start_ipc(daemon_state* state, const char* sock_path);

@@ -3,27 +3,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <time.h>
 
 #include "fileloader.h"
 #include "../threadmanager.h"
+#include "../scanner.h"
+#include "../metrics.h"
 #include "../trie-storage.h"
 #include "../lru.h"
 #include "../../ipc/server.h"
 
 void load_trie() {
-
 }
 
 void save_trie(Trie* trie) {
     (void)trie;
-}
-
-static int collect_paths_cb(Trie* node, char* buffer, size_t depth, FILE* out) {
-    (void)node;
-    (void)buffer;
-    (void)depth;
-    (void)out;
-    return 0;
 }
 
 void daemon_save_state(daemon_state* state, const char* path) {
@@ -41,9 +35,7 @@ void daemon_save_state(daemon_state* state, const char* path) {
         if (!bucket || !bucket->dir_trie) continue;
 
         trie_lock(bucket);
-        /* Walk the trie and emit entries */
-        /* For now, just emit bucket-level metadata */
-        fprintf(f, "bucket %s %zu\n", bucket->dir_name, bucket->dir_count);
+        fprintf(f, "bucket %s %u\n", bucket->dir_name, (unsigned)bucket->dir_count);
         trie_unlock(bucket);
     }
     store_unlock(state->store);
@@ -51,89 +43,6 @@ void daemon_save_state(daemon_state* state, const char* path) {
     fclose(f);
 }
 
-void spin_scan_thread(file_thread* f_thread, char* path) {
-    //if another thread is running, wait until completed
-    if(f_thread->running) {
-        f_thread->stop = true;
-        pthread_join(f_thread->worker, NULL);
-        f_thread->running = false;
-    }
-
-    f_thread->running = true;
-    f_thread->path = path;
-    pthread_create(&f_thread->worker, NULL, scan_curr_dir, (void*) f_thread);
-}
-
-static void scan_dir_recursive(file_thread* f_thread, const char* base_path, int depth, int max_depth) {
-    DIR* dir = opendir(base_path);
-
-    if (!dir) {
-        return;
-    }
-
-    struct dirent* entry;
-
-    while ((entry = readdir(dir))) {
-        if (f_thread->stop) {
-            closedir(dir);
-            return;
-        }
-
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-
-        size_t len = strlen(base_path) + 1 + strlen(entry->d_name) + 1;
-        char* path = (char*) malloc(len + 1);
-        if (!path) {
-            continue;
-        }
-
-        snprintf(path, len, "%s/%s", base_path, entry->d_name);
-
-        if (entry->d_type == DT_REG || entry->d_type == DT_DIR) {
-            store_lock(f_thread->lfu);
-            t_bucket* bucket = find_bucket(f_thread->lfu, path, path, 3, false);
-            if (bucket) {
-                trie_lock(bucket);
-                if (entry->d_type == DT_DIR) {
-                    size_t path_len = strlen(path);
-                    char* dir_path = malloc(path_len + 2);
-                    memcpy(dir_path, path, path_len);
-                    dir_path[path_len] = '/';
-                    dir_path[path_len + 1] = '\0';
-                    insert(bucket->dir_trie, dir_path);
-                    free(dir_path);
-                } else {
-                    insert(bucket->dir_trie, path);
-                }
-                bucket->dir_count++;
-                trie_unlock(bucket);
-            }
-            store_unlock(f_thread->lfu);
-        }
-
-        if (entry->d_type == DT_DIR && depth < max_depth) {
-            if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-                scan_dir_recursive(f_thread, path, depth + 1, max_depth);
-            }
-        }
-
-        free(path);
-    }
-
-    closedir(dir);
-}
-
-void* scan_curr_dir(void* args) {
-    file_thread* f_thread = (file_thread*) args;
-    scan_dir_recursive(f_thread, f_thread->path, 0, 10);
-    return NULL;
-}
-
-/*
-    NOTE: Once IPC is implemented, this will be used to verify input from terminal-bound process in main()
-*/
 path_validation process_input(t_bucket_store* store, const char* cwd, const char* input) {
     path_validation validation = validate_input_path(cwd, input);
 
@@ -153,10 +62,6 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
 
     return validation;
 }
-
-/*
-    DAEMON STATE LIFECYCLE
-*/
 
 daemon_state* daemon_init(void) {
     daemon_state* state = (daemon_state*) calloc(1, sizeof(daemon_state));
@@ -182,16 +87,9 @@ daemon_state* daemon_init(void) {
     state->parent->is_parent = true;
     state->store->parent = state->parent;
 
-    state->scanner = (file_thread*) calloc(1, sizeof(file_thread));
-    if (!state->scanner) {
-        free(state->parent);
-        free(state->store);
-        free(state);
-        return NULL;
-    }
+    parallel_scanner_init(&state->scanner, state->store, state->parent, 10, 4);
 
-    state->scanner->lfu = state->store;
-    state->scanner->parent = state->parent;
+    metrics_init(&state->metrics);
 
     return state;
 }
@@ -206,12 +104,11 @@ void daemon_shutdown(daemon_state* state) {
         state->ipc = NULL;
     }
 
-    if (state->scanner) {
-        if (state->scanner->running) {
-            state->scanner->stop = true;
-            pthread_join(state->scanner->worker, NULL);
-        }
-        free(state->scanner);
+    parallel_scanner_stop(&state->scanner);
+    if (state->scanner.queue) {
+        pthread_mutex_destroy(&state->scanner.queue->queue_lock);
+        pthread_cond_destroy(&state->scanner.queue->queue_not_empty);
+        free(state->scanner.queue);
     }
 
     if (state->store) {
@@ -233,16 +130,15 @@ void daemon_shutdown(daemon_state* state) {
 }
 
 void daemon_run_scan(daemon_state* state, const char* path) {
-    if (!state || !state->scanner || !path) {
+    if (!state || !path) {
         return;
     }
 
+    metrics_record_scan(&state->metrics);
+
     char* norm = normalise_dir(path);
-    state->scanner->path = norm;
-    spin_scan_thread(state->scanner, norm);
-    pthread_join(state->scanner->worker, NULL);
-    state->scanner->running = false;
-    state->scanner->path = NULL;
+    parallel_scanner_start(&state->scanner, norm);
+    parallel_scanner_wait(&state->scanner);
     free(norm);
 }
 
@@ -252,7 +148,17 @@ path_validation daemon_process_query(daemon_state* state, const char* cwd, const
         return empty;
     }
 
-    return process_input(state->store, cwd, input);
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
+    path_validation result = process_input(state->store, cwd, input);
+
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    uint64_t latency_ns = (uint64_t)(ts_end.tv_sec - ts_start.tv_sec) * 1000000000ULL
+                        + (uint64_t)(ts_end.tv_nsec - ts_start.tv_nsec);
+    metrics_record_query(&state->metrics, latency_ns);
+
+    return result;
 }
 
 completions* daemon_get_completions(daemon_state* state, const char* prefix, size_t limit) {
@@ -260,20 +166,43 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
         return NULL;
     }
 
+    metrics_record_completion(&state->metrics);
+
     completions* out = completions_create(limit > 0 ? limit : 50);
     if (!out) return NULL;
 
+    /* Step 1: Snapshot bucket pointers under store_lock, increment refcounts */
     store_lock(state->store);
-    for (size_t i = 0; i < state->store->right_index && out->count < out->capacity; i++) {
+    size_t count = state->store->right_index;
+    t_bucket** snapshot = (t_bucket**) malloc(count * sizeof(t_bucket*));
+    if (!snapshot) {
+        store_unlock(state->store);
+        completions_free(out);
+        return NULL;
+    }
+    for (size_t i = 0; i < count; i++) {
         t_bucket* bucket = state->store->buckets[i];
-        if (!bucket || !bucket->dir_trie) continue;
+        if (bucket && bucket->dir_trie) {
+            atomic_fetch_add(&bucket->refcount, 1);
+            snapshot[i] = bucket;
+        } else {
+            snapshot[i] = NULL;
+        }
+    }
+    store_unlock(state->store);
+
+    /* Step 2: Iterate snapshot without store_lock */
+    for (size_t i = 0; i < count && out->count < out->capacity; i++) {
+        t_bucket* bucket = snapshot[i];
+        if (!bucket) continue;
 
         trie_lock(bucket);
         completions_collect(bucket->dir_trie, prefix, out);
         trie_unlock(bucket);
+        bucket_release(bucket);
     }
-    store_unlock(state->store);
 
+    free(snapshot);
     return out;
 }
 
@@ -282,20 +211,41 @@ scored_completions* daemon_get_scored_completions(daemon_state* state, const cha
         return NULL;
     }
 
+    metrics_record_completion(&state->metrics);
+
     scored_completions* out = scored_completions_create(limit > 0 ? limit : 50);
     if (!out) return NULL;
 
     store_lock(state->store);
-    for (size_t i = 0; i < state->store->right_index && out->count < out->capacity; i++) {
+    size_t count = state->store->right_index;
+    t_bucket** snapshot = (t_bucket**) malloc(count * sizeof(t_bucket*));
+    if (!snapshot) {
+        store_unlock(state->store);
+        scored_completions_free(out);
+        return NULL;
+    }
+    for (size_t i = 0; i < count; i++) {
         t_bucket* bucket = state->store->buckets[i];
-        if (!bucket || !bucket->dir_trie) continue;
+        if (bucket && bucket->dir_trie) {
+            atomic_fetch_add(&bucket->refcount, 1);
+            snapshot[i] = bucket;
+        } else {
+            snapshot[i] = NULL;
+        }
+    }
+    store_unlock(state->store);
+
+    for (size_t i = 0; i < count && out->count < out->capacity; i++) {
+        t_bucket* bucket = snapshot[i];
+        if (!bucket) continue;
 
         trie_lock(bucket);
         scored_completions_collect(bucket->dir_trie, prefix, out, now);
         trie_unlock(bucket);
+        bucket_release(bucket);
     }
-    store_unlock(state->store);
 
+    free(snapshot);
     return out;
 }
 
@@ -304,4 +254,3 @@ int daemon_start_ipc(daemon_state* state, const char* sock_path) {
     state->ipc = ipc_server_start(state, sock_path);
     return state->ipc ? 0 : -1;
 }
-

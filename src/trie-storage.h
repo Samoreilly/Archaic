@@ -1,12 +1,15 @@
 #pragma once
 
+#include <stdatomic.h>
 #include "trie.h"
 
 #define BUCKETS 65536
 #define MIN_DEPTH 8
 
 typedef struct t_bucket {
-    
+    atomic_int refcount;
+    bool pending_destroy;
+
     char* dir_name;
     Trie* dir_trie;
     uint32_t dir_count;
@@ -45,6 +48,7 @@ t_bucket* find_bucket(t_bucket_store* lfu, char* original_dir, char* curr_dir, i
 t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir);
 t_bucket* create_bucket(char* dir_name);
 void destroy_bucket(t_bucket* bucket);
+void bucket_release(t_bucket* bucket);
 size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir);
 void shift_left(t_bucket_store* lfu, size_t removal_index, size_t last_index);
 void shift_right(t_bucket_store* lfu, size_t insertion_index, size_t last_index);

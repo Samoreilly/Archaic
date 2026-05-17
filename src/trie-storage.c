@@ -99,6 +99,7 @@ t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir) {
 
         shift_left(lfu, removal_index, lfu->right_index - 1);
         lfu->buckets[lfu->right_index - 1] = NULL;
+        destroy_bucket(removed);
 
         shift_right(lfu, insertion, lfu->right_index - 1);
         
@@ -160,6 +161,8 @@ size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir) {
 t_bucket* create_bucket(char* dir_name) {
     t_bucket* bucket = (t_bucket*) malloc(sizeof(t_bucket));
 
+    atomic_store(&bucket->refcount, 0);
+    bucket->pending_destroy = false;
     bucket->dir_name  = strdup(dir_name);
     bucket->dir_count = 0;
     bucket->dir_trie  = create_trie();
@@ -168,7 +171,7 @@ t_bucket* create_bucket(char* dir_name) {
     return bucket;
 }
 
-void destroy_bucket(t_bucket* bucket) {
+static void bucket_do_free(t_bucket* bucket) {
     if (!bucket) {
         return;
     }
@@ -176,6 +179,27 @@ void destroy_bucket(t_bucket* bucket) {
     free(bucket->dir_name);
     trie_free_recursive(bucket->dir_trie);
     free(bucket);
+}
+
+void destroy_bucket(t_bucket* bucket) {
+    if (!bucket) {
+        return;
+    }
+    if (atomic_load(&bucket->refcount) > 0) {
+        bucket->pending_destroy = true;
+        return;
+    }
+    bucket_do_free(bucket);
+}
+
+void bucket_release(t_bucket* bucket) {
+    if (!bucket) {
+        return;
+    }
+    int old = atomic_fetch_sub(&bucket->refcount, 1);
+    if (old == 1 && bucket->pending_destroy) {
+        bucket_do_free(bucket);
+    }
 }
 
 char* cutoff_dir(char* str) {

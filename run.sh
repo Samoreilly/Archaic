@@ -55,13 +55,14 @@ resolve_sock_path() {
 }
 
 usage() {
-    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|restart} [scan_path]"
+    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|restart|rescan} [scan_path]"
     echo ""
     echo "Commands:"
     echo "  start [path]    Start the daemon scanning the given path (default: /home/sam/samdev)"
     echo "  stop            Stop the running daemon"
     echo "  status          Check if daemon is running"
     echo "  restart [path]  Restart the daemon"
+    echo "  rescan [path]   Trigger an immediate rescan"
     echo "  install-fish    Install fish shell plugin for tab completion"
     echo "  uninstall-fish  Remove fish shell plugin"
     exit 1
@@ -182,6 +183,10 @@ case "${1:-}" in
         ;;
     uninstall-fish)
         uninstall_fish
+        ;;
+    rescan)
+        echo "Triggering rescan..."
+        "$SCRIPT_DIR/build/archaic-cli" scan "${2:-/home/sam/samdev}"
         ;;
     *)
         usage

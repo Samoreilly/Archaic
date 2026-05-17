@@ -48,6 +48,8 @@ int main(int argc, char* argv[]) {
 
         printf("[daemon] scanning %s (background)...\n", scan_path);
         daemon_run_scan(daemon, scan_path);
+        daemon->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
+        daemon_start_rescan_timer(daemon);
         printf("[daemon] ready for queries. scan running in background.\n");
         fflush(stdout);
 

@@ -363,6 +363,10 @@ daemon_state* daemon_init(void) {
 
     state->cache = cache_create(CACHE_DEFAULT_MAX_ENTRIES, CACHE_DEFAULT_TTL_SECONDS);
 
+    state->rescan_interval_seconds = 300; /* default 5 min */
+    atomic_store(&state->rescan_timer_running, false);
+    state->last_scan_path[0] = '\0';
+
     const char* state_path = "/tmp/archaic-state.bin";
     FILE* sf = fopen(state_path, "rb");
     if (sf) {
@@ -379,6 +383,8 @@ void daemon_shutdown(daemon_state* state) {
     if (!state) {
         return;
     }
+
+    daemon_stop_rescan_timer(state);
 
     if (state->ipc) {
         ipc_server_stop(state->ipc);
@@ -429,6 +435,28 @@ typedef struct {
     char* path;
 } scan_thread_ctx;
 
+/* ── Periodic rescan timer thread ────────────────────────────────── */
+
+static void* rescan_timer_func(void* arg) {
+    daemon_state* state = (daemon_state*)arg;
+
+    while (atomic_load(&state->rescan_timer_running)) {
+        /* Sleep in 1-second increments so we can check running flag */
+        for (int i = 0; i < state->rescan_interval_seconds && atomic_load(&state->rescan_timer_running); i++) {
+            sleep(1);
+        }
+
+        if (!atomic_load(&state->rescan_timer_running)) break;
+
+        /* Trigger a rescan if not already scanning */
+        if (!atomic_load(&state->scanning) && state->last_scan_path[0] != '\0') {
+            printf("[daemon] periodic rescan triggered\n");
+            daemon_run_scan(state, state->last_scan_path);
+        }
+    }
+    return NULL;
+}
+
 static void* scan_thread_func(void* arg) {
     scan_thread_ctx* ctx = (scan_thread_ctx*)arg;
     daemon_state* state = ctx->state;
@@ -459,6 +487,9 @@ void daemon_run_scan(daemon_state* state, const char* path) {
     /* If a scan is already running, don't start another */
     if (atomic_load(&state->scanning)) return;
 
+    strncpy(state->last_scan_path, path, sizeof(state->last_scan_path) - 1);
+    state->last_scan_path[sizeof(state->last_scan_path) - 1] = '\0';
+
     scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
     if (!ctx) return;
     ctx->state = state;
@@ -469,6 +500,18 @@ void daemon_run_scan(daemon_state* state, const char* path) {
         free(ctx->path);
         free(ctx);
     }
+}
+
+void daemon_start_rescan_timer(daemon_state* state) {
+    if (!state || state->rescan_interval_seconds <= 0) return;
+    atomic_store(&state->rescan_timer_running, true);
+    pthread_create(&state->rescan_timer_thread, NULL, rescan_timer_func, state);
+}
+
+void daemon_stop_rescan_timer(daemon_state* state) {
+    if (!state || !atomic_load(&state->rescan_timer_running)) return;
+    atomic_store(&state->rescan_timer_running, false);
+    pthread_join(state->rescan_timer_thread, NULL);
 }
 
 scan_status daemon_scan_status(daemon_state* state) {

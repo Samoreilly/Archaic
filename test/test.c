@@ -12,6 +12,7 @@
 #include "../ipc/client.h"
 #include "../ipc/protocol.h"
 #include "../ipc/server.h"
+#include "../src/config.h"
 #include "../src/io/fileloader.h"
 #include "../src/lru.h"
 #include "../src/portable-barrier.h"
@@ -684,6 +685,193 @@ static bool test_ipc_e2e(daemon_state* daemon, const char* scan_root) {
     return pass;
 }
 
+static bool test_archaicignore_dir(void) {
+    printf("[Test 11] .archaicignore dir pattern\n");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/archaic_test_%d", (int) getpid());
+    mkdir(tmpdir, 0755);
+
+    char ignore_path[512];
+    snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", tmpdir);
+    FILE* f = fopen(ignore_path, "w");
+    fprintf(f, "node_modules\nbuild\n");
+    fclose(f);
+
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    int loaded = config_load_archaicignore(&cfg, tmpdir);
+    bool pass = true;
+
+    printf("  Loaded %d patterns\n", loaded);
+    if (loaded < 2) {
+        printf("  Expected >= 2 patterns, got %d\n", loaded);
+        pass = false;
+    }
+
+    bool found_node_modules = false;
+    bool found_build = false;
+    for (int i = 0; i < cfg.scanner.ignore_dir_count; i++) {
+        if (strcmp(cfg.scanner.ignore_dirs[i], "node_modules") == 0)
+            found_node_modules = true;
+        if (strcmp(cfg.scanner.ignore_dirs[i], "build") == 0)
+            found_build = true;
+    }
+    if (!found_node_modules || !found_build) {
+        printf("  Missing expected dir patterns\n");
+        pass = false;
+    }
+
+    unlink(ignore_path);
+    rmdir(tmpdir);
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+static bool test_archaicignore_file(void) {
+    printf("[Test 12] .archaicignore file pattern\n");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/archaic_test_f_%d", (int) getpid());
+    mkdir(tmpdir, 0755);
+
+    char ignore_path[512];
+    snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", tmpdir);
+    FILE* f = fopen(ignore_path, "w");
+    fprintf(f, "*.pyc\n*.o\n");
+    fclose(f);
+
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    int loaded = config_load_archaicignore(&cfg, tmpdir);
+    bool pass = true;
+
+    printf("  Loaded %d patterns\n", loaded);
+    if (loaded < 2) {
+        printf("  Expected >= 2 patterns, got %d\n", loaded);
+        pass = false;
+    }
+
+    bool found_pyc = false;
+    bool found_o = false;
+    for (int i = 0; i < cfg.scanner.ignore_file_count; i++) {
+        if (strcmp(cfg.scanner.ignore_files[i], "*.pyc") == 0)
+            found_pyc = true;
+        if (strcmp(cfg.scanner.ignore_files[i], "*.o") == 0)
+            found_o = true;
+    }
+    if (!found_pyc || !found_o) {
+        printf("  Missing expected file patterns\n");
+        pass = false;
+    }
+
+    unlink(ignore_path);
+    rmdir(tmpdir);
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+static bool test_archaicignore_comments(void) {
+    printf("[Test 13] .archaicignore comments and blanks\n");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/archaic_test_c_%d", (int) getpid());
+    mkdir(tmpdir, 0755);
+
+    char ignore_path[512];
+    snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", tmpdir);
+    FILE* f = fopen(ignore_path, "w");
+    fprintf(f, "# This is a comment\n\nnode_modules\n\n  # Another comment\n.dist\n");
+    fclose(f);
+
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    int loaded = config_load_archaicignore(&cfg, tmpdir);
+    bool pass = true;
+
+    printf("  Loaded %d patterns\n", loaded);
+    if (loaded != 2) {
+        printf("  Expected 2 patterns, got %d\n", loaded);
+        pass = false;
+    }
+
+    unlink(ignore_path);
+    rmdir(tmpdir);
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+static bool test_archaicignore_trailing_slash(void) {
+    printf("[Test 14] .archaicignore directory trailing slash\n");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/archaic_test_s_%d", (int) getpid());
+    mkdir(tmpdir, 0755);
+
+    char ignore_path[512];
+    snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", tmpdir);
+    FILE* f = fopen(ignore_path, "w");
+    fprintf(f, "build/\ncache/\n");
+    fclose(f);
+
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    int loaded = config_load_archaicignore(&cfg, tmpdir);
+    bool pass = true;
+
+    bool found_build = false;
+    bool found_cache = false;
+    for (int i = 0; i < cfg.scanner.ignore_dir_count; i++) {
+        if (strcmp(cfg.scanner.ignore_dirs[i], "build") == 0)
+            found_build = true;
+        if (strcmp(cfg.scanner.ignore_dirs[i], "cache") == 0)
+            found_cache = true;
+    }
+    if (!found_build || !found_cache) {
+        printf("  Trailing slash not stripped correctly\n");
+        pass = false;
+    }
+
+    printf("  Loaded %d patterns, build=%d cache=%d\n", loaded, found_build, found_cache);
+    unlink(ignore_path);
+    rmdir(tmpdir);
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+static bool test_archaicignore_merge(void) {
+    printf("[Test 15] .archaicignore merge with config\n");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/archaic_test_m_%d", (int) getpid());
+    mkdir(tmpdir, 0755);
+
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+
+    char ignore_path[512];
+    snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", tmpdir);
+    FILE* f = fopen(ignore_path, "w");
+    fprintf(f, "node_modules\n");
+    fclose(f);
+
+    config_load_archaicignore(&cfg, tmpdir);
+    bool pass = true;
+
+    bool found_git = false;
+    bool found_node_modules = false;
+    for (int i = 0; i < cfg.scanner.ignore_dir_count; i++) {
+        if (strcmp(cfg.scanner.ignore_dirs[i], ".git") == 0)
+            found_git = true;
+        if (strcmp(cfg.scanner.ignore_dirs[i], "node_modules") == 0)
+            found_node_modules = true;
+    }
+    if (!found_git || !found_node_modules) {
+        printf("  Merge failed: .git=%d node_modules=%d\n", found_git, found_node_modules);
+        pass = false;
+    }
+
+    unlink(ignore_path);
+    rmdir(tmpdir);
+    printf("  Result: %s\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 void test_main(void) {
     printf("\n========================================\n");
     printf("  Full Pipeline Integration Tests\n");
@@ -726,6 +914,12 @@ void test_main(void) {
     RUN_TEST(test_concurrent_queries(daemon, base_path));
     RUN_TEST(test_lock_integrity());
     RUN_TEST(test_ipc_e2e(daemon, base_path));
+
+    RUN_TEST(test_archaicignore_dir());
+    RUN_TEST(test_archaicignore_file());
+    RUN_TEST(test_archaicignore_comments());
+    RUN_TEST(test_archaicignore_trailing_slash());
+    RUN_TEST(test_archaicignore_merge());
 
     printf("\n========================================\n");
     printf("  Results: %d/%d tests passed\n", passed, total);

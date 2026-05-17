@@ -608,6 +608,13 @@ daemon_state* daemon_init(void) {
 
     state->case_insensitive = cfg.storage.case_insensitive;
 
+    state->bookmark_count =
+        cfg.bookmarks.count < CONFIG_MAX_BOOKMARKS ? cfg.bookmarks.count : CONFIG_MAX_BOOKMARKS;
+    for (int i = 0; i < state->bookmark_count; i++) {
+        strncpy(state->bookmarks[i], cfg.bookmarks.paths[i], CONFIG_MAX_STRING - 1);
+        state->bookmarks[i][CONFIG_MAX_STRING - 1] = '\0';
+    }
+
     state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
     atomic_store(&state->config_reload_requested, false);

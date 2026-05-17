@@ -49,12 +49,20 @@ typedef struct {
     int ignore_file_count;
 } config_scanner;
 
+#define CONFIG_MAX_BOOKMARKS 32
+
+typedef struct {
+    char paths[CONFIG_MAX_BOOKMARKS][CONFIG_MAX_STRING];
+    int count;
+} config_bookmarks;
+
 typedef struct {
     config_daemon daemon;
     config_storage storage;
     config_scoring scoring;
     config_fish fish;
     config_scanner scanner;
+    config_bookmarks bookmarks;
 } archaic_config;
 
 /* Load config from file. Returns 0 on success, -1 on error.

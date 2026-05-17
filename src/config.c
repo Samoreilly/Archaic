@@ -90,6 +90,8 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->scanner.ignore_dir_count = 0;
     cfg->scanner.ignore_file_count = 0;
     set_default_ignores(cfg);
+
+    cfg->bookmarks.count = 0;
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -350,6 +352,10 @@ static const field_map scanner_map[] = {
     {"ignore_files", TYPE_SCANNER_ARRAY, FOFFSET(scanner, ignore_files)},
 };
 
+static const field_map bookmarks_map[] = {
+    {"paths", TYPE_STRING_ARRAY, FOFFSET(bookmarks, paths)},
+};
+
 typedef struct {
     const char* name;
     const field_map* map;
@@ -362,6 +368,7 @@ static const section_map sections[] = {
     {"scoring", scoring_map, (int) (sizeof(scoring_map) / sizeof(scoring_map[0]))},
     {"fish", fish_map, (int) (sizeof(fish_map) / sizeof(fish_map[0]))},
     {"scanner", scanner_map, (int) (sizeof(scanner_map) / sizeof(scanner_map[0]))},
+    {"bookmarks", bookmarks_map, (int) (sizeof(bookmarks_map) / sizeof(bookmarks_map[0]))},
 };
 
 static const section_map* find_section(const char* name) {

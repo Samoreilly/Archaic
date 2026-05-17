@@ -43,6 +43,8 @@ typedef struct {
     recent_files recent;
     incremental_state incremental;
     bool case_insensitive;
+    char bookmarks[CONFIG_MAX_BOOKMARKS][CONFIG_MAX_STRING];
+    int bookmark_count;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);

@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <fnmatch.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -11,6 +12,22 @@
 #include "threadmanager.h"
 #include "trie-storage.h"
 #include "trie.h"
+
+static int should_ignore_dir(parallel_scanner* scanner, const char* name) {
+    for (int i = 0; i < scanner->ignore_dir_count; i++) {
+        if (strcmp(name, scanner->ignore_dirs[i]) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int should_ignore_file(parallel_scanner* scanner, const char* name) {
+    for (int i = 0; i < scanner->ignore_file_count; i++) {
+        if (fnmatch(scanner->ignore_files[i], name, 0) == 0)
+            return 1;
+    }
+    return 0;
+}
 
 void scan_queue_init(scan_queue* q) {
     q->queue_head = 0;
@@ -107,8 +124,6 @@ static void* scanner_worker(void* arg) {
         while ((entry = readdir(dir)) && entry_count < 512) {
             if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
-            strncpy(entries[entry_count].name, entry->d_name, 255);
-            entries[entry_count].name[255] = '\0';
 
             bool is_dir = (entry->d_type == DT_DIR);
             if (!is_dir && entry->d_type == DT_UNKNOWN) {
@@ -119,6 +134,14 @@ static void* scanner_worker(void* arg) {
                     is_dir = S_ISDIR(st.st_mode);
                 }
             }
+
+            if (is_dir && should_ignore_dir(scanner, entry->d_name))
+                continue;
+            if (!is_dir && should_ignore_file(scanner, entry->d_name))
+                continue;
+
+            strncpy(entries[entry_count].name, entry->d_name, 255);
+            entries[entry_count].name[255] = '\0';
             entries[entry_count].is_dir = is_dir;
             entry_count++;
         }
@@ -184,6 +207,22 @@ void parallel_scanner_init(parallel_scanner* scanner, t_bucket_store* store, str
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_started, false);
     atomic_store(&scanner->threads_joined, false);
+}
+
+void parallel_scanner_set_ignores(parallel_scanner* scanner, const char** dirs, int dir_count,
+                                  const char** files, int file_count) {
+    scanner->ignore_dir_count = 0;
+    scanner->ignore_file_count = 0;
+    for (int i = 0; i < dir_count && i < SCANNER_MAX_IGNORE; i++) {
+        strncpy(scanner->ignore_dirs[i], dirs[i], SCANNER_MAX_IGNORE_LEN - 1);
+        scanner->ignore_dirs[i][SCANNER_MAX_IGNORE_LEN - 1] = '\0';
+        scanner->ignore_dir_count++;
+    }
+    for (int i = 0; i < file_count && i < SCANNER_MAX_IGNORE; i++) {
+        strncpy(scanner->ignore_files[i], files[i], SCANNER_MAX_IGNORE_LEN - 1);
+        scanner->ignore_files[i][SCANNER_MAX_IGNORE_LEN - 1] = '\0';
+        scanner->ignore_file_count++;
+    }
 }
 
 void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {

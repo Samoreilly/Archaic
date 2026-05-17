@@ -25,3 +25,7 @@ commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "
 
 [bash]
 commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch"]
+
+[scanner]
+ignore_dirs = [".git", ".svn", ".hg", "node_modules", ".next", "dist", "build", "target", "__pycache__", ".venv", "venv", ".tox", ".cache", ".cargo", "vendor", ".idea", ".vscode", ".eclipse"]
+ignore_files = ["*.pyc", "*.pyo", "*.o", "*.so", "*.dylib", "*.class", "*.exe", "*.dll", "*.log", ".DS_Store", "Thumbs.db"]

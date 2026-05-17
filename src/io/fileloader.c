@@ -12,6 +12,7 @@
 #include "../trie-storage.h"
 #include "../lru.h"
 #include "../cache.h"
+#include "../config.h"
 #include "../../ipc/server.h"
 #include "../log.h"
 
@@ -335,6 +336,10 @@ daemon_state* daemon_init(void) {
         return NULL;
     }
 
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    config_load_default(&cfg);
+
     state->store = (t_bucket_store*) calloc(1, sizeof(t_bucket_store));
     if (!state->store) {
         free(state);
@@ -354,17 +359,27 @@ daemon_state* daemon_init(void) {
     state->store->parent = state->parent;
 
     state->store->max_buckets = BUCKETS;
-    state->store->max_nodes_per_bucket = 100000;
+    state->store->max_nodes_per_bucket = cfg.storage.max_nodes_per_bucket;
     atomic_store(&state->store->total_nodes, 0);
     atomic_store(&state->store->estimated_memory_bytes, 0);
 
-    parallel_scanner_init(&state->scanner, state->store, state->parent, 10, 4);
+    parallel_scanner_init(&state->scanner, state->store, state->parent, cfg.daemon.max_depth,
+                          cfg.daemon.scan_threads);
+
+    const char* ignore_dirs[64];
+    for (int i = 0; i < cfg.scanner.ignore_dir_count && i < 64; i++)
+        ignore_dirs[i] = cfg.scanner.ignore_dirs[i];
+    const char* ignore_files[64];
+    for (int i = 0; i < cfg.scanner.ignore_file_count && i < 64; i++)
+        ignore_files[i] = cfg.scanner.ignore_files[i];
+    parallel_scanner_set_ignores(&state->scanner, ignore_dirs, cfg.scanner.ignore_dir_count,
+                                 ignore_files, cfg.scanner.ignore_file_count);
 
     metrics_init(&state->metrics);
 
-    state->cache = cache_create(CACHE_DEFAULT_MAX_ENTRIES, CACHE_DEFAULT_TTL_SECONDS);
+    state->cache = cache_create(cfg.storage.cache_max_entries, cfg.storage.cache_ttl_seconds);
 
-    state->rescan_interval_seconds = 300; /* default 5 min */
+    state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
     state->last_scan_path[0] = '\0';
 

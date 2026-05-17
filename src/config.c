@@ -6,6 +6,58 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ── Ignore helpers ──────────────────────────────────────────────────────── */
+
+static void add_ignore_dir(archaic_config* cfg, const char* dir) {
+    if (cfg->scanner.ignore_dir_count < CONFIG_MAX_IGNORE) {
+        strncpy(cfg->scanner.ignore_dirs[cfg->scanner.ignore_dir_count], dir,
+                CONFIG_MAX_IGNORE_LEN - 1);
+        cfg->scanner.ignore_dirs[cfg->scanner.ignore_dir_count][CONFIG_MAX_IGNORE_LEN - 1] = '\0';
+        cfg->scanner.ignore_dir_count++;
+    }
+}
+
+static void add_ignore_file(archaic_config* cfg, const char* file) {
+    if (cfg->scanner.ignore_file_count < CONFIG_MAX_IGNORE) {
+        strncpy(cfg->scanner.ignore_files[cfg->scanner.ignore_file_count], file,
+                CONFIG_MAX_IGNORE_LEN - 1);
+        cfg->scanner.ignore_files[cfg->scanner.ignore_file_count][CONFIG_MAX_IGNORE_LEN - 1] = '\0';
+        cfg->scanner.ignore_file_count++;
+    }
+}
+
+static void set_default_ignores(archaic_config* cfg) {
+    add_ignore_dir(cfg, ".git");
+    add_ignore_dir(cfg, ".svn");
+    add_ignore_dir(cfg, ".hg");
+    add_ignore_dir(cfg, "node_modules");
+    add_ignore_dir(cfg, ".next");
+    add_ignore_dir(cfg, "dist");
+    add_ignore_dir(cfg, "build");
+    add_ignore_dir(cfg, "target");
+    add_ignore_dir(cfg, "__pycache__");
+    add_ignore_dir(cfg, ".venv");
+    add_ignore_dir(cfg, "venv");
+    add_ignore_dir(cfg, ".tox");
+    add_ignore_dir(cfg, ".cache");
+    add_ignore_dir(cfg, ".cargo");
+    add_ignore_dir(cfg, "vendor");
+    add_ignore_dir(cfg, ".idea");
+    add_ignore_dir(cfg, ".vscode");
+    add_ignore_dir(cfg, ".eclipse");
+    add_ignore_file(cfg, "*.pyc");
+    add_ignore_file(cfg, "*.pyo");
+    add_ignore_file(cfg, "*.o");
+    add_ignore_file(cfg, "*.so");
+    add_ignore_file(cfg, "*.dylib");
+    add_ignore_file(cfg, "*.class");
+    add_ignore_file(cfg, "*.exe");
+    add_ignore_file(cfg, "*.dll");
+    add_ignore_file(cfg, "*.log");
+    add_ignore_file(cfg, ".DS_Store");
+    add_ignore_file(cfg, "Thumbs.db");
+}
+
 /* ── Defaults ────────────────────────────────────────────────────────────── */
 
 void config_init_defaults(archaic_config* cfg) {
@@ -14,7 +66,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->daemon.scan_threads = 4;
     cfg->daemon.max_depth = 10;
     cfg->daemon.rescan_interval_seconds = 300;
-    cfg->daemon.log_level = 1; /* default: INFO */
+    cfg->daemon.log_level = 1;
     strncpy(cfg->daemon.scan_path, "/home/sam/samdev", sizeof(cfg->daemon.scan_path) - 1);
     strncpy(cfg->daemon.socket_path, "/tmp/archaic-daemon.sock",
             sizeof(cfg->daemon.socket_path) - 1);
@@ -30,6 +82,10 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->scoring.weight_type = 0.10;
 
     cfg->fish.command_count = 0;
+
+    cfg->scanner.ignore_dir_count = 0;
+    cfg->scanner.ignore_file_count = 0;
+    set_default_ignores(cfg);
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -120,7 +176,7 @@ static int parse_double(const char* s, double* out) {
 
 /* ── Section / key dispatch ──────────────────────────────────────────────── */
 
-typedef enum { TYPE_STRING, TYPE_INT, TYPE_DOUBLE, TYPE_BOOL, TYPE_STRING_ARRAY } value_type;
+typedef enum { TYPE_STRING, TYPE_INT, TYPE_DOUBLE, TYPE_BOOL, TYPE_STRING_ARRAY, TYPE_SCANNER_ARRAY } value_type;
 
 typedef struct {
     const char* key;
@@ -199,6 +255,49 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
             }
             return 0;
         }
+        case TYPE_SCANNER_ARRAY: {
+            config_scanner* sc = (config_scanner*) (base + (size_t) map[i].offset);
+            char* p = trim(value);
+            if (*p != '[')
+                return -1;
+            p++;
+            char* end = strchr(p, ']');
+            if (!end)
+                return -1;
+            *end = '\0';
+
+            while (*p && sc->ignore_dir_count < CONFIG_MAX_IGNORE &&
+                   sc->ignore_file_count < CONFIG_MAX_IGNORE) {
+                p = trim(p);
+                if (*p == ',') {
+                    p++;
+                    continue;
+                }
+                if (*p == '"') {
+                    char* item = parse_string(p);
+                    if (!item)
+                        return -1;
+                    if (map[i].key[7] == 'd') {
+                        strncpy(sc->ignore_dirs[sc->ignore_dir_count], item,
+                                CONFIG_MAX_IGNORE_LEN - 1);
+                        sc->ignore_dirs[sc->ignore_dir_count][CONFIG_MAX_IGNORE_LEN - 1] = '\0';
+                        sc->ignore_dir_count++;
+                    } else {
+                        strncpy(sc->ignore_files[sc->ignore_file_count], item,
+                                CONFIG_MAX_IGNORE_LEN - 1);
+                        sc->ignore_files[sc->ignore_file_count][CONFIG_MAX_IGNORE_LEN - 1] = '\0';
+                        sc->ignore_file_count++;
+                    }
+                    p = strchr(p, '"');
+                    if (p)
+                        p++;
+                } else {
+                    while (*p && *p != ',')
+                        p++;
+                }
+            }
+            return 0;
+        }
         }
     }
     return 0; /* unknown key: silently ignore */
@@ -231,6 +330,11 @@ static const field_map fish_map[] = {
     {"commands", TYPE_STRING_ARRAY, FOFFSET(fish, commands)},
 };
 
+static const field_map scanner_map[] = {
+    {"ignore_dirs", TYPE_SCANNER_ARRAY, FOFFSET(scanner, ignore_dirs)},
+    {"ignore_files", TYPE_SCANNER_ARRAY, FOFFSET(scanner, ignore_files)},
+};
+
 typedef struct {
     const char* name;
     const field_map* map;
@@ -242,6 +346,7 @@ static const section_map sections[] = {
     {"storage", storage_map, (int) (sizeof(storage_map) / sizeof(storage_map[0]))},
     {"scoring", scoring_map, (int) (sizeof(scoring_map) / sizeof(scoring_map[0]))},
     {"fish", fish_map, (int) (sizeof(fish_map) / sizeof(fish_map[0]))},
+    {"scanner", scanner_map, (int) (sizeof(scanner_map) / sizeof(scanner_map[0]))},
 };
 
 static const section_map* find_section(const char* name) {

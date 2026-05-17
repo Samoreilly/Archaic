@@ -6,6 +6,8 @@
 #define CONFIG_MAX_STRING 4096
 #define CONFIG_MAX_COMMANDS 32
 #define CONFIG_MAX_COMMAND_LEN 64
+#define CONFIG_MAX_IGNORE 64
+#define CONFIG_MAX_IGNORE_LEN 128
 
 typedef struct {
     char scan_path[CONFIG_MAX_STRING];
@@ -36,10 +38,18 @@ typedef struct {
 } config_fish;
 
 typedef struct {
+    char ignore_dirs[CONFIG_MAX_IGNORE][CONFIG_MAX_IGNORE_LEN];
+    int ignore_dir_count;
+    char ignore_files[CONFIG_MAX_IGNORE][CONFIG_MAX_IGNORE_LEN];
+    int ignore_file_count;
+} config_scanner;
+
+typedef struct {
     config_daemon daemon;
     config_storage storage;
     config_scoring scoring;
     config_fish fish;
+    config_scanner scanner;
 } archaic_config;
 
 /* Load config from file. Returns 0 on success, -1 on error.

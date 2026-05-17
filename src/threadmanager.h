@@ -15,6 +15,8 @@ typedef struct {
 
 #define SCANNER_MAX_THREADS 8
 #define SCANNER_QUEUE_SIZE 1024
+#define SCANNER_MAX_IGNORE 64
+#define SCANNER_MAX_IGNORE_LEN 128
 
 typedef struct {
     char* path;
@@ -42,4 +44,9 @@ typedef struct {
     struct t_bucket_store* lfu;
     struct node* parent;
     int max_depth;
+
+    char ignore_dirs[SCANNER_MAX_IGNORE][SCANNER_MAX_IGNORE_LEN];
+    int ignore_dir_count;
+    char ignore_files[SCANNER_MAX_IGNORE][SCANNER_MAX_IGNORE_LEN];
+    int ignore_file_count;
 } parallel_scanner;

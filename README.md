@@ -102,6 +102,10 @@ weight_type = 0.10
 
 [fish]
 commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch"]
+
+[scanner]
+ignore_dirs = [".git", "node_modules", "build", "dist", "__pycache__", ".venv"]
+ignore_files = ["*.pyc", "*.o", "*.log", ".DS_Store"]
 ```
 
 ### Configuration Options
@@ -123,6 +127,8 @@ commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "
 | `scoring` | `weight_type` | `0.10` | File type preference weight |
 | `fish` | `commands` | *(see above)* | Commands that trigger completions (Fish) |
 | `bash` | `commands` | *(see above)* | Commands that trigger completions (Bash) |
+| `scanner` | `ignore_dirs` | *(see above)* | Directories to skip during scan |
+| `scanner` | `ignore_files` | *(see above)* | File patterns to skip during scan |
 
 ## CLI Commands
 

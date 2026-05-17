@@ -163,3 +163,21 @@ int ipc_client_shutdown(ipc_client* client) {
     if (hdr.msg_type != IPC_MSG_OK) return -1;
     return 0;
 }
+
+int ipc_client_ping(ipc_client* client, uint64_t* out_uptime_ms) {
+    ipc_header hdr;
+    ipc_pong_resp resp;
+    if (send_request(client, IPC_MSG_PING, NULL, 0) < 0) return -1;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0) return -1;
+    if (hdr.msg_type != IPC_MSG_PONG) return -1;
+    if (out_uptime_ms) *out_uptime_ms = resp.uptime_ms;
+    return 0;
+}
+
+int ipc_client_metrics(ipc_client* client, ipc_metrics_resp* out) {
+    ipc_header hdr;
+    if (send_request(client, IPC_MSG_METRICS, NULL, 0) < 0) return -1;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0) return -1;
+    if (hdr.msg_type != IPC_MSG_METRICS_RESP) return -1;
+    return 0;
+}

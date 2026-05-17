@@ -3,10 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <pthread.h>
 #include <errno.h>
+#include "../src/threadpool.h"
+#include "../src/metrics.h"
 
 struct ipc_server {
     daemon_state* daemon;
@@ -14,7 +17,14 @@ struct ipc_server {
     pthread_t worker;
     int running;
     char sock_path[256];
+    threadpool* pool;
+    struct timespec start_time;
 };
+
+typedef struct {
+    ipc_server* srv;
+    int fd;
+} client_ctx;
 
 static int read_exact(int fd, void* buf, size_t len) {
     size_t total = 0;
@@ -156,6 +166,39 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
     write_exact(fd, &resp, sizeof(resp));
 }
 
+static void handle_ping(ipc_server* srv, int fd, uint32_t req_id) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint64_t uptime_ms = (uint64_t)(now.tv_sec - srv->start_time.tv_sec) * 1000ULL
+                       + (uint64_t)(now.tv_nsec - srv->start_time.tv_nsec) / 1000000ULL;
+
+    ipc_header hdr;
+    ipc_pong_resp resp;
+    resp.uptime_ms = uptime_ms;
+
+    ipc_write_header(&hdr, IPC_MSG_PONG, sizeof(resp), req_id);
+    write_exact(fd, &hdr, sizeof(hdr));
+    write_exact(fd, &resp, sizeof(resp));
+}
+
+static void handle_metrics(ipc_server* srv, int fd, uint32_t req_id) {
+    metrics_snapshot snap = metrics_snapshot_get(&srv->daemon->metrics);
+
+    ipc_header hdr;
+    ipc_metrics_resp resp;
+    resp.queries_total = snap.queries_total;
+    resp.completions_total = snap.completions_total;
+    resp.scans_total = snap.scans_total;
+    resp.errors_total = snap.errors_total;
+    resp.cache_hits = snap.cache_hits;
+    resp.cache_misses = snap.cache_misses;
+    resp.query_latency_avg_ms = snap.query_latency_avg_ms;
+
+    ipc_write_header(&hdr, IPC_MSG_METRICS_RESP, sizeof(resp), req_id);
+    write_exact(fd, &hdr, sizeof(hdr));
+    write_exact(fd, &resp, sizeof(resp));
+}
+
 static void handle_client(ipc_server* srv, int fd) {
     ipc_header hdr;
 
@@ -165,7 +208,14 @@ static void handle_client(ipc_server* srv, int fd) {
         }
 
         if (!ipc_validate_header(&hdr)) {
-            send_error(fd, 0, -1, "invalid message header");
+            if ((hdr.magic >> 16) == IPC_MAGIC_PREFIX) {
+                char msg[64];
+                snprintf(msg, sizeof(msg), "unsupported protocol version %u (server supports 1-%u)",
+                         ipc_header_version(&hdr), IPC_PROTOCOL_VERSION);
+                send_error(fd, 0, -5, msg);
+            } else {
+                send_error(fd, 0, -1, "invalid message header");
+            }
             break;
         }
 
@@ -226,6 +276,14 @@ static void handle_client(ipc_server* srv, int fd) {
             close(fd);
             return;
         }
+        case IPC_MSG_PING: {
+            handle_ping(srv, fd, hdr.request_id);
+            break;
+        }
+        case IPC_MSG_METRICS: {
+            handle_metrics(srv, fd, hdr.request_id);
+            break;
+        }
         default:
             send_error(fd, hdr.request_id, -4, "unknown message type");
             break;
@@ -233,6 +291,12 @@ static void handle_client(ipc_server* srv, int fd) {
     }
 
     close(fd);
+}
+
+static void handle_client_threaded(void* arg) {
+    client_ctx* ctx = (client_ctx*)arg;
+    handle_client(ctx->srv, ctx->fd);
+    free(ctx);
 }
 
 static void* server_loop(void* arg) {
@@ -244,7 +308,10 @@ static void* server_loop(void* arg) {
             if (errno == EINTR) continue;
             break;
         }
-        handle_client(srv, fd);
+        client_ctx* ctx = malloc(sizeof(client_ctx));
+        ctx->srv = srv;
+        ctx->fd = fd;
+        threadpool_submit(srv->pool, handle_client_threaded, ctx);
     }
 
     return NULL;
@@ -258,10 +325,19 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     srv->running = 1;
     strncpy(srv->sock_path, sock_path, sizeof(srv->sock_path) - 1);
 
+    srv->pool = threadpool_init(8);
+    if (!srv->pool) {
+        free(srv);
+        return NULL;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &srv->start_time);
+
     unlink(sock_path);
 
     srv->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (srv->listen_fd < 0) {
+        threadpool_shutdown(srv->pool);
         free(srv);
         return NULL;
     }
@@ -272,12 +348,14 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
 
     if (bind(srv->listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
         free(srv);
         return NULL;
     }
 
     if (listen(srv->listen_fd, 8) < 0) {
+        threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
         unlink(sock_path);
         free(srv);
@@ -285,6 +363,7 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     }
 
     if (pthread_create(&srv->worker, NULL, server_loop, srv) != 0) {
+        threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
         unlink(sock_path);
         free(srv);
@@ -311,6 +390,12 @@ void ipc_server_stop(ipc_server* srv) {
     }
 
     pthread_join(srv->worker, NULL);
+
+    if (srv->pool) {
+        threadpool_shutdown(srv->pool);
+        srv->pool = NULL;
+    }
+
     close(srv->listen_fd);
     unlink(srv->sock_path);
     free(srv);

@@ -2,6 +2,7 @@
 
 #include "protocol.h"
 #include "../src/io/fileloader.h"
+#include "../src/threadpool.h"
 
 typedef struct ipc_server ipc_server;
 

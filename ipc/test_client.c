@@ -14,6 +14,8 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  query <cwd> <input>\n");
         fprintf(stderr, "  complete <prefix> [limit]\n");
         fprintf(stderr, "  suggest <prefix>\n");
+        fprintf(stderr, "  ping\n");
+        fprintf(stderr, "  metrics\n");
         fprintf(stderr, "  shutdown\n");
         return 1;
     }
@@ -120,6 +122,28 @@ int main(int argc, char* argv[]) {
             printf("Daemon shutdown requested\n");
         } else {
             fprintf(stderr, "Shutdown failed\n");
+        }
+    } else if (strcmp(argv[1], "ping") == 0) {
+        uint64_t uptime_ms = 0;
+        rc = ipc_client_ping(client, &uptime_ms);
+        if (rc == 0) {
+            printf("PONG: uptime=%lu ms\n", (unsigned long)uptime_ms);
+        } else {
+            fprintf(stderr, "Ping failed\n");
+        }
+    } else if (strcmp(argv[1], "metrics") == 0) {
+        ipc_metrics_resp resp;
+        rc = ipc_client_metrics(client, &resp);
+        if (rc == 0) {
+            printf("queries_total:       %lu\n", (unsigned long)resp.queries_total);
+            printf("completions_total:   %lu\n", (unsigned long)resp.completions_total);
+            printf("scans_total:         %lu\n", (unsigned long)resp.scans_total);
+            printf("errors_total:        %lu\n", (unsigned long)resp.errors_total);
+            printf("cache_hits:          %lu\n", (unsigned long)resp.cache_hits);
+            printf("cache_misses:        %lu\n", (unsigned long)resp.cache_misses);
+            printf("query_latency_avg_ms: %.3f\n", resp.query_latency_avg_ms);
+        } else {
+            fprintf(stderr, "Metrics failed\n");
         }
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);

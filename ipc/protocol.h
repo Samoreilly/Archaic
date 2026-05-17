@@ -5,7 +5,15 @@
 
 #define IPC_SOCK_PATH "/tmp/archaic-daemon.sock"
 #define IPC_MAX_PAYLOAD 262144
-#define IPC_MAGIC 0x41524348
+
+/*
+    Protocol versioning: magic = 0x4152VVVV where VVVV is the version.
+    Upper 16 bits (0x4152) identify the protocol family.
+    Lower 16 bits carry the protocol version for backward-compatible negotiation.
+*/
+#define IPC_MAGIC_PREFIX 0x4152
+#define IPC_PROTOCOL_VERSION 1
+#define IPC_MAGIC ((IPC_MAGIC_PREFIX << 16) | IPC_PROTOCOL_VERSION)
 
 /*
     Message types
@@ -17,12 +25,16 @@ typedef enum {
     IPC_MSG_SHUTDOWN = 4,
     IPC_MSG_SUGGEST = 5,
     IPC_MSG_SAVE = 6,
+    IPC_MSG_PING = 7,
+    IPC_MSG_METRICS = 8,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
     IPC_MSG_COMPLETIONS = 102,
     IPC_MSG_VALIDATION = 103,
     IPC_MSG_SUGGESTION = 104,
+    IPC_MSG_PONG = 105,
+    IPC_MSG_METRICS_RESP = 106,
 } ipc_msg_type;
 
 /*
@@ -91,6 +103,20 @@ typedef struct {
     int32_t status;
 } __attribute__((packed)) ipc_ok_resp;
 
+typedef struct {
+    uint64_t uptime_ms;
+} __attribute__((packed)) ipc_pong_resp;
+
+typedef struct {
+    uint64_t queries_total;
+    uint64_t completions_total;
+    uint64_t scans_total;
+    uint64_t errors_total;
+    uint64_t cache_hits;
+    uint64_t cache_misses;
+    double query_latency_avg_ms;
+} __attribute__((packed)) ipc_metrics_resp;
+
 /*
     Serialization helpers
 */
@@ -105,6 +131,14 @@ static inline void ipc_write_header(ipc_header* hdr, uint32_t type, uint32_t len
     hdr->request_id = req_id;
 }
 
+static inline uint16_t ipc_header_version(const ipc_header* hdr) {
+    return (uint16_t)(hdr->magic & 0xFFFF);
+}
+
 static inline int ipc_validate_header(const ipc_header* hdr) {
-    return hdr->magic == IPC_MAGIC && hdr->payload_len < IPC_MAX_PAYLOAD;
+    if ((hdr->magic >> 16) != IPC_MAGIC_PREFIX) return 0;
+    uint16_t ver = ipc_header_version(hdr);
+    if (ver < 1 || ver > IPC_PROTOCOL_VERSION) return 0;
+    if (hdr->payload_len >= IPC_MAX_PAYLOAD) return 0;
+    return 1;
 }

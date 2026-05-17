@@ -46,3 +46,13 @@ int ipc_client_suggest(ipc_client* client, const char* prefix,
     Send shutdown request. Returns 0 on success.
 */
 int ipc_client_shutdown(ipc_client* client);
+
+/*
+    Send a ping request. Returns 0 on success, fills uptime_ms.
+*/
+int ipc_client_ping(ipc_client* client, uint64_t* out_uptime_ms);
+
+/*
+    Request daemon metrics. Returns 0 on success.
+*/
+int ipc_client_metrics(ipc_client* client, ipc_metrics_resp* out);

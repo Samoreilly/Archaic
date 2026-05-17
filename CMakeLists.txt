@@ -11,10 +11,13 @@ add_executable(
     src/trie-storage.c
     src/lru.c
     src/io/fileloader.c
+    src/scanner.c
     test/test.c
     test/perf.c
     ipc/server.c
     ipc/client.c
+    src/threadpool.c
+    src/metrics.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)

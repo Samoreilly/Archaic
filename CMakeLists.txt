@@ -19,6 +19,7 @@ add_executable(
     src/threadpool.c
     src/metrics.c
     src/config.c
+    src/cache.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)
@@ -34,3 +35,13 @@ add_executable(
 target_include_directories(archaic-cli PRIVATE ipc ${CMAKE_SOURCE_DIR})
 target_link_libraries(archaic-cli PRIVATE m pthread)
 target_compile_options(archaic-cli PRIVATE -Wall -Wpedantic -Wextra)
+
+add_executable(
+    archaic-helper
+    src/helper.c
+    src/config.c
+)
+
+target_include_directories(archaic-helper PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(archaic-helper PRIVATE m pthread)
+target_compile_options(archaic-helper PRIVATE -Wall -Wpedantic -Wextra)

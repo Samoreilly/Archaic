@@ -10,11 +10,9 @@
 #include "../metrics.h"
 #include "../trie.h"
 #include "../trie-storage.h"
+#include "../cache.h"
 
 struct ipc_server;
-
-void load_trie();
-void save_trie(Trie* trie);
 
 typedef struct {
     bool scanning;
@@ -27,10 +25,14 @@ typedef struct {
     parallel_scanner scanner;
     struct ipc_server* ipc;
     metrics_t metrics;
+    query_cache* cache;
     pthread_t scan_thread;
     atomic_bool scanning;
     atomic_size_t scan_bucket_count;
 } daemon_state;
+
+int load_trie(daemon_state* state, const char* path);
+int save_trie(daemon_state* state, const char* path);
 
 void daemon_save_state(daemon_state* state, const char* path);
 

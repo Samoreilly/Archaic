@@ -10,6 +10,8 @@ set -g archaic_sock_path /tmp/archaic-daemon.sock
 set -g __archaic_daemon_healthy 1
 set -g __archaic_version_checked 0
 set -g __archaic_helper_pid ""
+set -g __archaic_last_query_time 0
+set -g __archaic_debounce_ms 80
 
 # ── Resolve binary paths ─────────────────────────────────────────────────────
 set -l plugin_path (status filename)
@@ -20,7 +22,7 @@ set -l repo_root (dirname (dirname "$plugin_path"))
 set -g archaic_cli_path "$repo_root/build/archaic-cli"
 set -g archaic_helper_path "$repo_root/build/archaic-helper"
 
-# ── Default command list ─────────────────────────────────────────────────────
+# ── Default command list ──────────────────────────────────────────────────────
 set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch
 
 # ── Load config (socket path + command list) ─────────────────────────────────
@@ -53,7 +55,7 @@ if test -n "$config_file"
     end
 end
 
-# ── Helper lifecycle ─────────────────────────────────────────────────────────
+# ── Helper lifecycle ──────────────────────────────────────────────────────────
 function __archaic_ensure_helper -d "Start archaic-helper if not running"
     # Already running?
     if test -n "$__archaic_helper_pid"
@@ -69,13 +71,25 @@ function __archaic_ensure_helper -d "Start archaic-helper if not running"
         return
     end
 
-    # Start helper as background process with socket path
-    $archaic_helper_path "$archaic_sock_path" </dev/null >/dev/null 2>&1 &
-    set -g __archaic_helper_pid $last_pid
+    # Start helper with retry (3 attempts, exponential backoff)
+    set -l max_retries 3
+    set -l retry_delay 0.1
+    for i in (seq 1 $max_retries)
+        $archaic_helper_path "$archaic_sock_path" </dev/null >/dev/null 2>&1 &
+        set -g __archaic_helper_pid $last_pid
+        sleep $retry_delay
+        if kill -0 $__archaic_helper_pid 2>/dev/null
+            return
+        end
+        set retry_delay (math "$retry_delay * 2")
+        echo "archaic: helper start attempt $i failed, retrying..." >&2
+    end
+    echo "archaic: helper failed to start after $max_retries attempts" >&2
+    set -g __archaic_helper_pid ""
 end
 
-# ── Daemon health check ──────────────────────────────────────────────────────
-function __archaic_check_daemon -d "Check if daemon socket exists"
+# ── Daemon health check ───────────────────────────────────────────────────────
+function __archaic_check_daemon -d "Check if daemon socket exists and responds"
     if test "$__archaic_daemon_healthy" -eq 0
         return 1
     end
@@ -86,7 +100,25 @@ function __archaic_check_daemon -d "Check if daemon socket exists"
     return 1
 end
 
-# ── Version check (first use only) ───────────────────────────────────────────
+# ── Stale socket cleanup ──────────────────────────────────────────────────────
+function __archaic_cleanup_socket -d "Remove stale socket file if daemon is not running"
+    if test -e "$archaic_sock_path" -a ! -S "$archaic_sock_path"
+        # File exists but is not a socket - stale, remove it
+        rm -f "$archaic_sock_path" 2>/dev/null
+        return
+    end
+    if test -S "$archaic_sock_path"
+        # Socket exists - try ping to verify daemon is alive
+        set -l ping_result (command $archaic_cli_path ping 2>/dev/null)
+        if test $status -ne 0
+            # Daemon not responding - clean up stale socket
+            rm -f "$archaic_sock_path" 2>/dev/null
+            set -g __archaic_daemon_healthy 0
+        end
+    end
+end
+
+# ── Version check (first use only) ────────────────────────────────────────────
 function __archaic_check_version -d "Verify CLI/helper version compatibility"
     if test "$__archaic_version_checked" -eq 1
         return
@@ -95,14 +127,26 @@ function __archaic_check_version -d "Verify CLI/helper version compatibility"
     # Quick ping to verify daemon responds
     set -l ping_output (command $archaic_cli_path ping 2>/dev/null)
     if test $status -ne 0
+        # Daemon might be unreachable - try cleanup
+        __archaic_cleanup_socket
         return
     end
 
     set -g __archaic_version_checked 1
 end
 
-# ── Core completion function ─────────────────────────────────────────────────
+# ── Core completion function ──────────────────────────────────────────────────
 function __archaic_do_complete -d "Query archaic daemon for completions"
+    # Debounce: skip if last query was too recent
+    set -l now (date +%s%3N 2>/dev/null; or date +%s)
+    if test -n "$__archaic_last_query_time"
+        set -l elapsed (math "$now - $__archaic_last_query_time")
+        if test $elapsed -lt $__archaic_debounce_ms 2>/dev/null
+            return
+        end
+    end
+    set -g __archaic_last_query_time "$now"
+
     set -l prefix (commandline -ct)
 
     # Detect command being completed
@@ -164,7 +208,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     # Query: try helper first (persistent), fall back to CLI
     set -l results ""
     if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set results (echo "complete $resolved 20" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+        set results (echo "complete $resolved 20 $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
     end
 
     if test -z "$results"
@@ -194,9 +238,14 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                 set display_path "$norm_prefix$display_path"
             end
 
+            # Color-coded completions
             if test "$type" = "D"
-                echo -e "$display_path\t(dir)"
+                set_color --bold blue
+                echo -n "$display_path"
+                set_color normal
+                echo -e "\t(dir)"
             else
+                set_color normal
                 echo -e "$display_path\t(file)"
             end
             set found 1
@@ -231,10 +280,14 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                     set display_path (string replace "$parent_dir/" "" "$full_path")
                 end
 
+                # Fuzzy results in cyan
+                set_color cyan
+                echo -n "$display_path"
+                set_color normal
                 if test "$type" = "D"
-                    echo -e "$display_path\t(dir fuzzy)"
+                    echo -e "\t(dir fuzzy)"
                 else
-                    echo -e "$display_path\t(file fuzzy)"
+                    echo -e "\t(file fuzzy)"
                 end
                 set found 1
             end
@@ -248,7 +301,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     set -g __archaic_daemon_healthy 1
 end
 
-# ── Register completions for configured commands ─────────────────────────────
+# ── Register completions for configured commands ────────────────────────────────
 for cmd in $__archaic_commands
     complete -e -c $cmd
     complete -c $cmd -f -a "(__archaic_do_complete)"
@@ -257,7 +310,7 @@ end
 # Catch-all for path-like arguments
 complete -c "" -f -a "(__archaic_do_complete)"
 
-# ── Inline autosuggestion via fish_right_prompt ──────────────────────────────
+# ── Inline autosuggestion via fish_right_prompt ────────────────────────────────
 set -g __archaic_suggestion ""
 
 function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
@@ -288,7 +341,7 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     # Query: try helper first, fall back to CLI
     set -l output ""
     if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set output (echo "complete $resolved 1" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+        set output (echo "complete $resolved 1 $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
     end
     if test -z "$output"
         set output (command $archaic_cli_path complete "$resolved" 1 2>/dev/null)
@@ -351,7 +404,7 @@ else
     end
 end
 
-# ── Key bindings to accept the suggestion ────────────────────────────────────
+# ── Key bindings to accept the suggestion ──────────────────────────────────────
 function __archaic_accept_suggestion
     if test -n "$__archaic_suggestion"
         commandline -t (commandline -t)"$__archaic_suggestion"
@@ -384,7 +437,7 @@ else
     end
 end
 
-# ── Debug/status function ────────────────────────────────────────────────────
+# ── Debug/status function ─────────────────────────────────────────────────────
 function __archaic_status -d "Show archaic daemon status"
     if test -S "$archaic_sock_path"
         set -l ping_output (command $archaic_cli_path ping 2>/dev/null)

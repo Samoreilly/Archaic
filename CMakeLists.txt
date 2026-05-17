@@ -1,5 +1,5 @@
+cmake_minimum_required(VERSION 3.22)
 project(archaic)
-cmake_minimum_required(VERSION 4.3)
 set(CMAKE_C_STANDARD 23)
 
 find_package(fmt)

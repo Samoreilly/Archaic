@@ -4,25 +4,42 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 
-//struct t_bucket_store;
-/*
-    Manages thread that handles background insertions
-    Ensures one thread runs at a time
-*/
+struct t_bucket_store;
+struct node;
 
 typedef struct {
-    pthread_t worker; 
+    pthread_t worker;
     atomic_bool stop;
     atomic_bool running;
 } state;
 
-typedef struct {
-    pthread_t worker;
-    char* path;
-    atomic_bool stop;
-    atomic_bool running;
+#define SCANNER_MAX_THREADS 8
+#define SCANNER_QUEUE_SIZE 1024
 
+typedef struct {
+    char* path;
+    int depth;
+} scan_work_item;
+
+typedef struct {
+    scan_work_item queue[SCANNER_QUEUE_SIZE];
+    int queue_head;
+    int queue_tail;
+    int queue_count;
+    pthread_mutex_t queue_lock;
+    pthread_cond_t queue_not_empty;
+} scan_queue;
+
+typedef struct {
+    pthread_t workers[SCANNER_MAX_THREADS];
+    int num_threads;
+    atomic_bool stop;
+    atomic_int active_workers;
+    atomic_bool threads_started;
+    atomic_bool threads_joined;
+
+    scan_queue* queue;
     struct t_bucket_store* lfu;
     struct node* parent;
-
-} file_thread;
+    int max_depth;
+} parallel_scanner;

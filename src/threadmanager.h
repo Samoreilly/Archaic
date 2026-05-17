@@ -59,4 +59,8 @@ typedef struct {
     int ignore_file_count;
     hashset ignore_dir_set;
     hashset ignore_file_exact_set;
+
+    atomic_int dirs_scanned;
+    atomic_int files_scanned;
+    atomic_int last_progress_log;
 } parallel_scanner;

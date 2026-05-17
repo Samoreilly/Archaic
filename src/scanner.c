@@ -6,8 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
+#include "log.h"
 #include "scanner.h"
 #include "threadmanager.h"
 #include "trie-storage.h"
@@ -151,6 +153,18 @@ static void* scanner_worker(void* arg) {
         }
         closedir(dir);
 
+        int dirs = atomic_fetch_add(&scanner->dirs_scanned, 1) + 1;
+        atomic_fetch_add(&scanner->files_scanned, entry_count);
+
+        int last_log = atomic_load(&scanner->last_progress_log);
+        int now = (int) time(NULL);
+        if (now - last_log >= 5) {
+            if (atomic_compare_exchange_strong(&scanner->last_progress_log, &last_log, now)) {
+                int files = atomic_load(&scanner->files_scanned);
+                LOG_INFO("scanner", "progress: %d dirs, %d files indexed", dirs, files);
+            }
+        }
+
         for (int i = 0; i < entry_count; i++) {
             if (atomic_load(&scanner->stop))
                 break;
@@ -211,6 +225,9 @@ void parallel_scanner_init(parallel_scanner* scanner, t_bucket_store* store, str
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_started, false);
     atomic_store(&scanner->threads_joined, false);
+    atomic_store(&scanner->dirs_scanned, 0);
+    atomic_store(&scanner->files_scanned, 0);
+    atomic_store(&scanner->last_progress_log, 0);
 }
 
 void parallel_scanner_set_ignores(parallel_scanner* scanner, const char** dirs, int dir_count,

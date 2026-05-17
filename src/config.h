@@ -13,6 +13,7 @@ typedef struct {
     int scan_threads;
     int max_depth;
     int rescan_interval_seconds;
+    int log_level;  /* 0=debug, 1=info, 2=warn, 3=error */
 } config_daemon;
 
 typedef struct {

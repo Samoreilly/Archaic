@@ -13,6 +13,7 @@
 #include "../lru.h"
 #include "../cache.h"
 #include "../../ipc/server.h"
+#include "../log.h"
 
 /* ── Binary state persistence ──────────────────────────────────────
  * Format:
@@ -371,9 +372,9 @@ daemon_state* daemon_init(void) {
     FILE* sf = fopen(state_path, "rb");
     if (sf) {
         fclose(sf);
-        printf("[daemon] loading state from %s...\n", state_path);
+        LOG_INFO("daemon", "loading state from %s...", state_path);
         if (load_trie(state, state_path) == 0)
-            printf("[daemon] state loaded. %zu buckets restored.\n", state->store->right_index);
+            LOG_INFO("daemon", "state loaded. %zu buckets restored.", state->store->right_index);
     }
 
     return state;
@@ -409,7 +410,7 @@ void daemon_shutdown(daemon_state* state) {
     }
 
     const char* state_path = "/tmp/archaic-state.bin";
-    printf("[daemon] saving state to %s...\n", state_path);
+    LOG_INFO("daemon", "saving state to %s...", state_path);
     save_trie(state, state_path);
 
     if (state->store) {
@@ -450,7 +451,7 @@ static void* rescan_timer_func(void* arg) {
 
         /* Trigger a rescan if not already scanning */
         if (!atomic_load(&state->scanning) && state->last_scan_path[0] != '\0') {
-            printf("[daemon] periodic rescan triggered\n");
+            LOG_INFO("scanner", "periodic rescan triggered");
             daemon_run_scan(state, state->last_scan_path);
         }
     }
@@ -637,6 +638,76 @@ scored_completions* daemon_get_scored_completions(daemon_state* state, const cha
 
     free(snapshot);
     cache_put(state->cache, prefix, out);
+    return out;
+}
+
+completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit) {
+    if (!state || !state->store || !query || query[0] == '\0') {
+        return NULL;
+    }
+
+    completions* out = completions_create(limit > 0 ? limit : 50);
+    if (!out) return NULL;
+
+    const char* qbase = query;
+    for (const char* p = query; *p; p++) {
+        if (*p == '/') qbase = p + 1;
+    }
+    if (qbase[0] == '\0') {
+        completions_free(out);
+        return NULL;
+    }
+
+    store_lock(state->store);
+    size_t bucket_count = state->store->right_index;
+    t_bucket** snapshot = (t_bucket**) malloc(bucket_count * sizeof(t_bucket*));
+    if (!snapshot) {
+        store_unlock(state->store);
+        completions_free(out);
+        return NULL;
+    }
+    for (size_t i = 0; i < bucket_count; i++) {
+        t_bucket* bucket = state->store->buckets[i];
+        if (bucket && bucket->dir_trie) {
+            atomic_fetch_add(&bucket->refcount, 1);
+            snapshot[i] = bucket;
+        } else {
+            snapshot[i] = NULL;
+        }
+    }
+    store_unlock(state->store);
+
+    char** bucket_paths = calloc(limit > 0 ? limit : 50, sizeof(char*));
+    if (!bucket_paths) {
+        free(snapshot);
+        completions_free(out);
+        return NULL;
+    }
+    int bucket_cap = (int)(limit > 0 ? limit : 50);
+
+    for (size_t i = 0; i < bucket_count && out->count < out->capacity; i++) {
+        t_bucket* bucket = snapshot[i];
+        if (!bucket) continue;
+
+        trie_lock(bucket);
+        int n = trie_fuzzy_collect(bucket->dir_trie, qbase, bucket_paths, bucket_cap);
+        trie_unlock(bucket);
+
+        for (int j = 0; j < n && out->count < out->capacity; j++) {
+            if (bucket_paths[j]) {
+                out->paths[out->count++] = bucket_paths[j];
+                bucket_paths[j] = NULL;
+            }
+        }
+
+        bucket_release(bucket);
+    }
+
+    for (int j = 0; j < bucket_cap; j++) {
+        free(bucket_paths[j]);
+    }
+    free(bucket_paths);
+    free(snapshot);
     return out;
 }
 

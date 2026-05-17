@@ -9,6 +9,7 @@
 #include "src/io/fileloader.h"
 #include "ipc/protocol.h"
 #include "src/config.h"
+#include "src/log.h"
 
 static volatile int running = 1;
 
@@ -32,34 +33,36 @@ int main(int argc, char* argv[]) {
         signal(SIGHUP, SIG_IGN);
         signal(SIGPIPE, SIG_IGN);
 
-        printf("[daemon] initializing...\n");
+        log_init((log_level)cfg.daemon.log_level, stderr);
+        LOG_INFO("main", "archaic daemon starting (v%d)", IPC_PROTOCOL_VERSION);
+
         daemon_state* daemon = daemon_init();
         if (!daemon) {
-            fprintf(stderr, "[daemon] init failed\n");
+            LOG_ERR("main", "init failed");
             return 1;
         }
 
-        printf("[daemon] starting IPC on %s\n", sock_path);
+        LOG_INFO("main", "starting IPC on %s", sock_path);
         if (daemon_start_ipc(daemon, sock_path) != 0) {
-            fprintf(stderr, "[daemon] IPC start failed\n");
+            LOG_ERR("main", "IPC start failed");
             daemon_shutdown(daemon);
             return 1;
         }
 
-        printf("[daemon] scanning %s (background)...\n", scan_path);
+        LOG_INFO("scanner", "scanning %s (background)", scan_path);
         daemon_run_scan(daemon, scan_path);
         daemon->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
         daemon_start_rescan_timer(daemon);
-        printf("[daemon] ready for queries. scan running in background.\n");
+        LOG_INFO("main", "ready for queries. scan running in background.");
         fflush(stdout);
 
         while (running) {
             sleep(1);
         }
 
-        printf("[daemon] shutting down...\n");
+        LOG_INFO("main", "shutting down...");
         daemon_shutdown(daemon);
-        printf("[daemon] stopped.\n");
+        LOG_INFO("main", "stopped.");
         return 0;
     }
 

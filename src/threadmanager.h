@@ -4,6 +4,8 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 
+#include "hashset.h"
+
 struct t_bucket_store;
 struct node;
 
@@ -55,4 +57,6 @@ typedef struct {
     int ignore_dir_count;
     char ignore_files[SCANNER_MAX_IGNORE][SCANNER_MAX_IGNORE_LEN];
     int ignore_file_count;
+    hashset ignore_dir_set;
+    hashset ignore_file_exact_set;
 } parallel_scanner;

@@ -16,6 +16,7 @@ add_executable(
     src/lru.c
     src/io/fileloader.c
     src/scanner.c
+    src/hashset.c
     test/test.c
     test/perf.c
     ipc/server.c

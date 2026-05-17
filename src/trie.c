@@ -526,6 +526,7 @@ typedef struct {
     char buffer[2048];
     size_t depth;
     const char* prefix;
+    size_t prefix_len;
     scored_completions* out;
     uint64_t now;
     int max_depth;
@@ -538,7 +539,7 @@ static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
 
     if (node->is_leaf && ctx->depth > 0) {
         ctx->buffer[ctx->depth] = '\0';
-        size_t plen = strlen(ctx->prefix);
+        size_t plen = ctx->prefix_len;
         if (plen + ctx->depth < 4096) {
             char full[4096];
             memcpy(full, ctx->prefix, plen);
@@ -589,6 +590,7 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     scored_dfs_ctx ctx;
     ctx.depth = 0;
     ctx.prefix = prefix;
+    ctx.prefix_len = strlen(prefix);
     ctx.out = out;
     ctx.now = now;
     ctx.max_depth = 0;

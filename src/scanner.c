@@ -14,6 +14,8 @@
 #include "trie.h"
 
 static int should_ignore_dir(parallel_scanner* scanner, const char* name) {
+    if (hashset_contains(&scanner->ignore_dir_set, name))
+        return 1;
     for (int i = 0; i < scanner->ignore_dir_count; i++) {
         if (strcmp(name, scanner->ignore_dirs[i]) == 0)
             return 1;
@@ -22,6 +24,8 @@ static int should_ignore_dir(parallel_scanner* scanner, const char* name) {
 }
 
 static int should_ignore_file(parallel_scanner* scanner, const char* name) {
+    if (hashset_contains(&scanner->ignore_file_exact_set, name))
+        return 1;
     for (int i = 0; i < scanner->ignore_file_count; i++) {
         if (fnmatch(scanner->ignore_files[i], name, 0) == 0)
             return 1;
@@ -213,15 +217,25 @@ void parallel_scanner_set_ignores(parallel_scanner* scanner, const char** dirs, 
                                   const char** files, int file_count) {
     scanner->ignore_dir_count = 0;
     scanner->ignore_file_count = 0;
+
+    hashset_free(&scanner->ignore_dir_set);
+    hashset_free(&scanner->ignore_file_exact_set);
+    hashset_init(&scanner->ignore_dir_set, (size_t) (dir_count > 0 ? dir_count * 2 : 16));
+    hashset_init(&scanner->ignore_file_exact_set, (size_t) (file_count > 0 ? file_count * 2 : 16));
+
     for (int i = 0; i < dir_count && i < SCANNER_MAX_IGNORE; i++) {
         strncpy(scanner->ignore_dirs[i], dirs[i], SCANNER_MAX_IGNORE_LEN - 1);
         scanner->ignore_dirs[i][SCANNER_MAX_IGNORE_LEN - 1] = '\0';
         scanner->ignore_dir_count++;
+        hashset_insert(&scanner->ignore_dir_set, dirs[i]);
     }
     for (int i = 0; i < file_count && i < SCANNER_MAX_IGNORE; i++) {
         strncpy(scanner->ignore_files[i], files[i], SCANNER_MAX_IGNORE_LEN - 1);
         scanner->ignore_files[i][SCANNER_MAX_IGNORE_LEN - 1] = '\0';
         scanner->ignore_file_count++;
+        if (!strchr(files[i], '*') && !strchr(files[i], '?') && !strchr(files[i], '[')) {
+            hashset_insert(&scanner->ignore_file_exact_set, files[i]);
+        }
     }
 }
 

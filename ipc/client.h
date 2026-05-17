@@ -58,3 +58,5 @@ int ipc_client_ping(ipc_client* client, uint64_t* out_uptime_ms);
 int ipc_client_metrics(ipc_client* client, ipc_metrics_resp* out);
 
 int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out);
+
+ipc_client* ipc_client_connect_default(void);

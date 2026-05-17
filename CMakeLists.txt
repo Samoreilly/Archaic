@@ -28,8 +28,9 @@ add_executable(
     archaic-cli
     ipc/test_client.c
     ipc/client.c
+    src/config.c
 )
 
-target_include_directories(archaic-cli PRIVATE ipc)
+target_include_directories(archaic-cli PRIVATE ipc ${CMAKE_SOURCE_DIR})
 target_link_libraries(archaic-cli PRIVATE m pthread)
 target_compile_options(archaic-cli PRIVATE -Wall -Wpedantic -Wextra)

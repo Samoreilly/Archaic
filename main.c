@@ -8,6 +8,7 @@
 #include "test/test.h"
 #include "src/io/fileloader.h"
 #include "ipc/protocol.h"
+#include "src/config.h"
 
 static volatile int running = 1;
 
@@ -18,8 +19,13 @@ static void handle_signal(int sig) {
 
 int main(int argc, char* argv[]) {
     if (argc > 1 && strcmp(argv[1], "--daemon") == 0) {
-        const char* scan_path = argc > 2 ? argv[2] : "/home/sam/samdev";
-        const char* sock_path = argc > 3 ? argv[3] : IPC_SOCK_PATH;
+        archaic_config cfg;
+        config_init_defaults(&cfg);
+        config_load_default(&cfg);
+
+        /* CLI args override config */
+        const char* scan_path = argc > 2 ? argv[2] : cfg.daemon.scan_path;
+        const char* sock_path = argc > 3 ? argv[3] : cfg.daemon.socket_path;
 
         signal(SIGINT, handle_signal);
         signal(SIGTERM, handle_signal);

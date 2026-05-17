@@ -189,3 +189,12 @@ int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out) {
     if (hdr.msg_type != IPC_MSG_SCAN_STATUS_RESP) return -1;
     return 0;
 }
+
+#include "../src/config.h"
+
+ipc_client* ipc_client_connect_default(void) {
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    config_load_default(&cfg);
+    return ipc_client_connect(cfg.daemon.socket_path);
+}

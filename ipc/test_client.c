@@ -21,9 +21,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    ipc_client* client = ipc_client_connect(IPC_SOCK_PATH);
+    ipc_client* client = ipc_client_connect_default();
     if (!client) {
-        fprintf(stderr, "Failed to connect to daemon at %s\n", IPC_SOCK_PATH);
+        fprintf(stderr, "Failed to connect to daemon\n");
         return 1;
     }
 

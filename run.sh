@@ -6,6 +6,54 @@ SOCK_PATH="/tmp/archaic-daemon.sock"
 FISH_CONF_DIR="$HOME/.config/fish/conf.d"
 FISH_PLUGIN="$SCRIPT_DIR/fish/archaic.fish"
 
+# Extract a simple key = "value" or key = value from a TOML section
+toml_get() {
+    local file="$1" section="$2" key="$3"
+    local in_section=0
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(echo "$line" | xargs 2>/dev/null || echo "$line")"
+        [ -z "$line" ] && continue
+
+        if [[ "$line" == "[$section]" ]]; then
+            in_section=1
+            continue
+        elif [[ "$line" == "["* ]]; then
+            in_section=0
+            continue
+        fi
+
+        if [ "$in_section" -eq 1 ]; then
+            local k="${line%%=*}"
+            local v="${line#*=}"
+            k="$(echo "$k" | xargs 2>/dev/null || echo "$k")"
+            v="$(echo "$v" | xargs 2>/dev/null || echo "$v")"
+            v="${v%\"}"
+            v="${v#\"}"
+            if [ "$k" = "$key" ]; then
+                echo "$v"
+                return
+            fi
+        fi
+    done < "$file"
+}
+
+# Resolve config file and extract daemon socket_path
+resolve_sock_path() {
+    local config_paths=("${ARCHAIC_CONFIG:-}" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml")
+    local config_file=""
+    for p in "${config_paths[@]}"; do
+        [ -n "$p" ] && [ -f "$p" ] && config_file="$p" && break
+    done
+
+    if [ -n "$config_file" ]; then
+        local sock
+        sock="$(toml_get "$config_file" daemon socket_path)"
+        [ -n "$sock" ] && echo "$sock" && return
+    fi
+    echo "/tmp/archaic-daemon.sock"
+}
+
 usage() {
     echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|restart} [scan_path]"
     echo ""
@@ -20,28 +68,42 @@ usage() {
 }
 
 is_running() {
-    [ -S "$SOCK_PATH" ] && kill -0 "$(cat "${SOCK_PATH}.pid" 2>/dev/null)" 2>/dev/null
+    local sock="${1:-$(resolve_sock_path)}"
+    [ -S "$sock" ] && kill -0 "$(cat "${sock}.pid" 2>/dev/null)" 2>/dev/null
 }
 
 start_daemon() {
-    local scan_path="${1:-/home/sam/samdev}"
+    local config_paths=("${ARCHAIC_CONFIG:-}" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml")
+    local config_file=""
+    for p in "${config_paths[@]}"; do
+        [ -n "$p" ] && [ -f "$p" ] && config_file="$p" && break
+    done
 
-    if is_running; then
-        echo "Daemon already running (socket: $SOCK_PATH)"
+    local scan_path="${1:-}"
+    if [ -z "$scan_path" ] && [ -n "$config_file" ]; then
+        scan_path="$(toml_get "$config_file" daemon scan_path)"
+    fi
+    scan_path="${scan_path:-/home/sam/samdev}"
+
+    local sock_path
+    sock_path="$(resolve_sock_path)"
+
+    if is_running "$sock_path"; then
+        echo "Daemon already running (socket: $sock_path)"
         return 0
     fi
 
-    rm -f "$SOCK_PATH"
+    rm -f "$sock_path"
 
     echo "Starting archaic daemon, scanning: $scan_path"
-    echo "Socket: $SOCK_PATH"
+    echo "Socket: $sock_path"
 
-    "$SCRIPT_DIR/build/archaic" --daemon "$scan_path" "$SOCK_PATH" &
-    echo $! > "${SOCK_PATH}.pid"
+    "$SCRIPT_DIR/build/archaic" --daemon "$scan_path" "$sock_path" &
+    echo $! > "${sock_path}.pid"
 
     sleep 1
 
-    if is_running; then
+    if is_running "$sock_path"; then
         echo "Daemon started (PID: $!)"
     else
         echo "Failed to start daemon"
@@ -50,9 +112,12 @@ start_daemon() {
 }
 
 stop_daemon() {
-    if ! is_running; then
+    local sock_path
+    sock_path="$(resolve_sock_path)"
+
+    if ! is_running "$sock_path"; then
         echo "Daemon not running"
-        rm -f "$SOCK_PATH" "${SOCK_PATH}.pid"
+        rm -f "$sock_path" "${sock_path}.pid"
         return 0
     fi
 
@@ -60,21 +125,24 @@ stop_daemon() {
     "$SCRIPT_DIR/build/archaic-cli" shutdown 2>/dev/null || true
     sleep 2
 
-    if is_running; then
+    if is_running "$sock_path"; then
         echo "Daemon did not stop gracefully, killing..."
-        kill "$(cat "${SOCK_PATH}.pid" 2>/dev/null)" 2>/dev/null || true
+        kill "$(cat "${sock_path}.pid" 2>/dev/null)" 2>/dev/null || true
         sleep 1
     fi
 
-    rm -f "$SOCK_PATH" "${SOCK_PATH}.pid"
+    rm -f "$sock_path" "${sock_path}.pid"
     echo "Daemon stopped"
 }
 
 status_daemon() {
-    if is_running; then
+    local sock_path
+    sock_path="$(resolve_sock_path)"
+
+    if is_running "$sock_path"; then
         local pid
-        pid="$(cat "${SOCK_PATH}.pid" 2>/dev/null || echo "unknown")"
-        echo "Daemon is running (PID: $pid, socket: $SOCK_PATH)"
+        pid="$(cat "${sock_path}.pid" 2>/dev/null || echo "unknown")"
+        echo "Daemon is running (PID: $pid, socket: $sock_path)"
     else
         echo "Daemon is not running"
     fi

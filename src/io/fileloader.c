@@ -503,6 +503,8 @@ daemon_state* daemon_init(void) {
 
     incremental_init(&state->incremental);
 
+    state->case_insensitive = cfg.storage.case_insensitive;
+
     state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
     atomic_store(&state->config_reload_requested, false);

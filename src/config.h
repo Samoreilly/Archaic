@@ -26,6 +26,7 @@ typedef struct {
     uint32_t cache_ttl_seconds;
     bool colored_output;
     uint32_t recent_files_capacity;
+    bool case_insensitive;
 } config_storage;
 
 typedef struct {

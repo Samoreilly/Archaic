@@ -42,6 +42,7 @@ typedef struct {
     atomic_bool config_reload_requested;
     recent_files recent;
     incremental_state incremental;
+    bool case_insensitive;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);

@@ -9,9 +9,25 @@
 #include "src/config.h"
 #include "src/io/fileloader.h"
 #include "src/log.h"
+#include "src/systemd_notify.h"
 #include "test/test.h"
 
 static volatile int running = 1;
+
+static void* watchdog_thread_func(void* arg) {
+    daemon_state* daemon = (daemon_state*)arg;
+    while (running) {
+        if (!atomic_load(&daemon->scanner_healthy)) {
+            sd_notify(0, "STATUS=error\nWATCHDOG=1");
+        } else if (atomic_load(&daemon->scanning)) {
+            sd_notify(0, "STATUS=scanning\nWATCHDOG=1");
+        } else {
+            sd_notify(0, "STATUS=idle\nWATCHDOG=1");
+        }
+        sleep(15);
+    }
+    return NULL;
+}
 
 static void handle_signal(int sig) {
     (void) sig;
@@ -53,6 +69,11 @@ int main(int argc, char* argv[]) {
         daemon_run_scan(daemon, scan_path);
         daemon->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
         daemon_start_rescan_timer(daemon);
+
+        sd_notify(0, "READY=1");
+        pthread_t watchdog_thread;
+        pthread_create(&watchdog_thread, NULL, watchdog_thread_func, daemon);
+
         LOG_INFO("main", "ready for queries. scan running in background.");
         fflush(stdout);
 
@@ -60,6 +81,7 @@ int main(int argc, char* argv[]) {
             sleep(1);
         }
 
+        pthread_join(watchdog_thread, NULL);
         LOG_INFO("main", "shutting down...");
         daemon_shutdown(daemon);
         LOG_INFO("main", "stopped.");

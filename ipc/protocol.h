@@ -121,9 +121,18 @@ typedef struct {
     double query_latency_avg_ms;
 } __attribute__((packed)) ipc_metrics_resp;
 
+#define MAX_PROJECTS 100
+
+typedef struct {
+    char path[512];
+    char language[32];
+} ipc_project_info;
+
 typedef struct {
     int32_t scanning;
     uint64_t buckets_so_far;
+    uint32_t project_count;
+    ipc_project_info projects[MAX_PROJECTS];
 } __attribute__((packed)) ipc_scan_status_resp;
 
 /*

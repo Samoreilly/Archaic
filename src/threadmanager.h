@@ -17,6 +17,13 @@ typedef struct {
 #define SCANNER_QUEUE_SIZE 1024
 #define SCANNER_MAX_IGNORE 64
 #define SCANNER_MAX_IGNORE_LEN 128
+#define MAX_PROJECTS 100
+
+typedef struct {
+    char path[512];
+    char language[32];
+} project_info;
+
 
 typedef struct {
     char* path;

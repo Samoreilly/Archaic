@@ -103,8 +103,8 @@ static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_que
 
 static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_complete_req* req) {
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions* sc =
-        daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now);
+    scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now);
+    const scored_completions* sc = sr.data;
 
     ipc_header hdr;
     ipc_completions_resp resp;
@@ -133,7 +133,7 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
             resp.freqs[i] = sc->entries[i].freq;
             resp.is_dirs[i] = sc->entries[i].is_dir ? 1 : 0;
         }
-        scored_completions_free(sc);
+        daemon_release_scored(srv->daemon, sr);
     }
 
     ipc_write_header(&hdr, IPC_MSG_COMPLETIONS, sizeof(resp), req_id);
@@ -143,7 +143,8 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
 
 static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_suggest_req* req) {
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions* sc = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now);
+    scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now);
+    const scored_completions* sc = sr.data;
 
     ipc_header hdr;
     ipc_suggestion_resp resp;
@@ -162,7 +163,7 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
         resp.score = sc->entries[0].score;
         resp.freq = sc->entries[0].freq;
         resp.is_dir = sc->entries[0].is_dir ? 1 : 0;
-        scored_completions_free(sc);
+        daemon_release_scored(srv->daemon, sr);
     }
 
     ipc_write_header(&hdr, IPC_MSG_SUGGESTION, sizeof(resp), req_id);

@@ -1,0 +1,4 @@
+{
+  "trie_insertion_ops_sec": 5000000,
+  "trie_search_hit_ops_sec": 8000000
+}

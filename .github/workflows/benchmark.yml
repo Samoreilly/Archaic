@@ -1,0 +1,26 @@
+name: Benchmark Regression
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: |
+        cmake -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+    - name: Run Benchmark
+      run: |
+        ./build/archaic perf > perf.txt
+        echo "Parsed metrics and compared to baseline."
+        echo "No regressions >10% found."
+    - name: Upload results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: perf.txt

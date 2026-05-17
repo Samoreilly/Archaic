@@ -363,8 +363,12 @@ daemon_state* daemon_init(void) {
     atomic_store(&state->store->total_nodes, 0);
     atomic_store(&state->store->estimated_memory_bytes, 0);
 
-    parallel_scanner_init(&state->scanner, state->store, state->parent, cfg.daemon.max_depth,
-                          cfg.daemon.scan_threads);
+     parallel_scanner_init(&state->scanner, state->store, state->parent, cfg.daemon.max_depth,
+                           cfg.daemon.scan_threads);
+     atomic_store(&state->scanner_healthy, true);
+     atomic_store(&state->scanning, false);
+     atomic_store(&state->scan_bucket_count, 0);
+
 
     const char* ignore_dirs[64];
     for (int i = 0; i < cfg.scanner.ignore_dir_count && i < 64; i++)
@@ -605,22 +609,26 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
     return out;
 }
 
-scored_completions* daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now) {
+scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now) {
+    scored_result empty = {NULL, false};
     if (!state || !state->store || !prefix) {
-        return NULL;
+        return empty;
     }
 
-    scored_completions* cached = cache_get(state->cache, prefix);
+    const scored_completions* cached = cache_get(state->cache, prefix);
     if (cached) {
         metrics_record_cache_hit(&state->metrics);
-        return cached;
+        scored_result result;
+        result.data = cached;
+        result.from_cache = true;
+        return result;
     }
     metrics_record_cache_miss(&state->metrics);
 
     metrics_record_completion(&state->metrics);
 
     scored_completions* out = scored_completions_create(limit > 0 ? limit : 50);
-    if (!out) return NULL;
+    if (!out) return empty;
 
     store_lock(state->store);
     size_t count = state->store->right_index;
@@ -628,7 +636,7 @@ scored_completions* daemon_get_scored_completions(daemon_state* state, const cha
     if (!snapshot) {
         store_unlock(state->store);
         scored_completions_free(out);
-        return NULL;
+        return empty;
     }
     for (size_t i = 0; i < count; i++) {
         t_bucket* bucket = state->store->buckets[i];
@@ -653,7 +661,20 @@ scored_completions* daemon_get_scored_completions(daemon_state* state, const cha
 
     free(snapshot);
     cache_put(state->cache, prefix, out);
-    return out;
+    scored_result result;
+    result.data = out;
+    result.from_cache = false;
+    return result;
+}
+
+void daemon_release_scored(daemon_state* state, scored_result result) {
+    if (!state || !result.data)
+        return;
+    if (result.from_cache) {
+        cache_release(state->cache, result.data);
+    } else {
+        scored_completions_free((scored_completions*) result.data);
+    }
 }
 
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit) {

@@ -4,7 +4,7 @@
 #include <string.h>
 #include <time.h>
 
-/* djb2 hash */
+/* ── djb2 hash ────────────────────────────────────────────────────── */
 static uint64_t hash_key(const char* str) {
     uint64_t hash = 5381;
     int c;
@@ -13,61 +13,103 @@ static uint64_t hash_key(const char* str) {
     return hash;
 }
 
-/* Doubly-linked list node for LRU ordering */
-typedef struct cache_lru_node {
-    struct cache_lru_node* prev;
-    struct cache_lru_node* next;
-} cache_lru_node;
-
-/* Hash table entry */
+/* ── Per-entry refcount for borrowed references ────────────────────── */
 typedef struct cache_entry {
     char key[CACHE_MAX_KEY_LEN];
-    scored_completions* value;
+    scored_completions* value;   /* cache-owned, heap-allocated */
     uint64_t timestamp;
     bool occupied;
     bool deleted;
-    cache_lru_node lru;
+    atomic_int refs;              /* borrowed reference count */
+    struct cache_entry* lru_prev;
+    struct cache_entry* lru_next;
 } cache_entry;
 
-struct query_cache {
+/* ── Shard: independent lock + hash table segment ─────────────────── */
+typedef struct {
     cache_entry* table;
     size_t capacity;
     size_t count;
-    int ttl_seconds;
-    cache_lru_node lru_head;
-    cache_lru_node lru_tail;
+    cache_entry lru_head;         /* sentinel nodes for LRU list */
+    cache_entry lru_tail;
     pthread_mutex_t lock;
+    uint64_t hits;
+    uint64_t misses;
+    uint64_t evictions;
+} cache_shard;
+
+/* ── Top-level cache ──────────────────────────────────────────────── */
+struct query_cache {
+    cache_shard shards[CACHE_NUM_SHARDS];
+    size_t entries_per_shard;
+    int ttl_seconds;
 };
 
-static void lru_init(query_cache* cache) {
-    cache->lru_head.prev = NULL;
-    cache->lru_head.next = &cache->lru_tail;
-    cache->lru_tail.prev = &cache->lru_head;
-    cache->lru_tail.next = NULL;
+static size_t shard_for_key(const char* key) {
+    return hash_key(key) % CACHE_NUM_SHARDS;
 }
 
-static void lru_detach(cache_lru_node* node) {
-    node->prev->next = node->next;
-    node->next->prev = node->prev;
+/* ── Shard-local helpers ───────────────────────────────────────────── */
+
+static void shard_lru_init(cache_shard* s) {
+    s->lru_head.lru_prev = NULL;
+    s->lru_head.lru_next = &s->lru_tail;
+    s->lru_tail.lru_prev = &s->lru_head;
+    s->lru_tail.lru_next = NULL;
 }
 
-static void lru_push_front(query_cache* cache, cache_lru_node* node) {
-    node->next = cache->lru_head.next;
-    node->prev = &cache->lru_head;
-    cache->lru_head.next->prev = node;
-    cache->lru_head.next = node;
+static void shard_lru_detach(cache_entry* node) {
+    node->lru_prev->lru_next = node->lru_next;
+    node->lru_next->lru_prev = node->lru_prev;
 }
 
-static void lru_move_to_front(query_cache* cache, cache_lru_node* node) {
-    lru_detach(node);
-    lru_push_front(cache, node);
+static void shard_lru_push_front(cache_shard* s, cache_entry* node) {
+    node->lru_next = s->lru_head.lru_next;
+    node->lru_prev = &s->lru_head;
+    s->lru_head.lru_next->lru_prev = node;
+    s->lru_head.lru_next = node;
 }
 
-static cache_entry* lru_back(query_cache* cache) {
-    cache_lru_node* node = cache->lru_tail.prev;
-    if (node == &cache->lru_head)
+static void shard_lru_move_to_front(cache_shard* s, cache_entry* node) {
+    shard_lru_detach(node);
+    shard_lru_push_front(s, node);
+}
+
+static cache_entry* shard_lru_back(cache_shard* s) {
+    cache_entry* node = s->lru_tail.lru_prev;
+    if (node == &s->lru_head)
         return NULL;
-    return (cache_entry*) ((char*) node - offsetof(cache_entry, lru));
+    return node;
+}
+
+static void shard_free_entry_value(cache_entry* entry) {
+    if (entry->value) {
+        scored_completions_free(entry->value);
+        entry->value = NULL;
+    }
+}
+
+static uint64_t now_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec;
+}
+
+static cache_entry* shard_find(cache_shard* s, const char* key) {
+    uint64_t h = hash_key(key);
+    size_t idx = h % s->capacity;
+
+    for (size_t i = 0; i < s->capacity; i++) {
+        size_t pos = (idx + i) % s->capacity;
+        cache_entry* entry = &s->table[pos];
+        if (!entry->occupied)
+            return NULL;
+        if (entry->deleted)
+            continue;
+        if (strcmp(entry->key, key) == 0)
+            return entry;
+    }
+    return NULL;
 }
 
 static scored_completions* deep_copy_scored(const scored_completions* src) {
@@ -85,18 +127,7 @@ static scored_completions* deep_copy_scored(const scored_completions* src) {
     return dst;
 }
 
-static void free_entry_value(cache_entry* entry) {
-    if (entry->value) {
-        scored_completions_free(entry->value);
-        entry->value = NULL;
-    }
-}
-
-static uint64_t now_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t) ts.tv_sec;
-}
+/* ── Public API ────────────────────────────────────────────────────── */
 
 query_cache* cache_create(size_t max_entries, int ttl_seconds) {
     if (max_entries == 0)
@@ -108,17 +139,29 @@ query_cache* cache_create(size_t max_entries, int ttl_seconds) {
     if (!cache)
         return NULL;
 
-    cache->table = calloc(max_entries, sizeof(cache_entry));
-    if (!cache->table) {
-        free(cache);
-        return NULL;
+    cache->entries_per_shard = (max_entries + CACHE_NUM_SHARDS - 1) / CACHE_NUM_SHARDS;
+    cache->ttl_seconds = ttl_seconds;
+
+    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
+        cache_shard* s = &cache->shards[i];
+        s->capacity = cache->entries_per_shard;
+        s->table = calloc(s->capacity, sizeof(cache_entry));
+        if (!s->table) {
+            for (int j = 0; j < i; j++) {
+                pthread_mutex_destroy(&cache->shards[j].lock);
+                free(cache->shards[j].table);
+            }
+            free(cache);
+            return NULL;
+        }
+        s->count = 0;
+        s->hits = 0;
+        s->misses = 0;
+        s->evictions = 0;
+        shard_lru_init(s);
+        pthread_mutex_init(&s->lock, NULL);
     }
 
-    cache->capacity = max_entries;
-    cache->count = 0;
-    cache->ttl_seconds = ttl_seconds;
-    lru_init(cache);
-    pthread_mutex_init(&cache->lock, NULL);
     return cache;
 }
 
@@ -126,96 +169,120 @@ void cache_destroy(query_cache* cache) {
     if (!cache)
         return;
     cache_clear(cache);
-    free(cache->table);
-    pthread_mutex_destroy(&cache->lock);
+    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
+        cache_shard* s = &cache->shards[i];
+        pthread_mutex_destroy(&s->lock);
+        free(s->table);
+    }
     free(cache);
 }
 
-static cache_entry* cache_find(query_cache* cache, const char* key) {
-    uint64_t h = hash_key(key);
-    size_t idx = h % cache->capacity;
-
-    for (size_t i = 0; i < cache->capacity; i++) {
-        size_t pos = (idx + i) % cache->capacity;
-        cache_entry* entry = &cache->table[pos];
-        if (!entry->occupied)
-            return NULL;
-        if (entry->deleted)
-            continue;
-        if (strcmp(entry->key, key) == 0)
-            return entry;
-    }
-    return NULL;
-}
-
-scored_completions* cache_get(query_cache* cache, const char* prefix) {
+const scored_completions* cache_get(query_cache* cache, const char* prefix) {
     if (!cache || !prefix)
         return NULL;
 
-    pthread_mutex_lock(&cache->lock);
+    size_t si = shard_for_key(prefix);
+    cache_shard* s = &cache->shards[si];
 
-    cache_entry* entry = cache_find(cache, prefix);
+    pthread_mutex_lock(&s->lock);
+
+    cache_entry* entry = shard_find(s, prefix);
     if (!entry) {
-        pthread_mutex_unlock(&cache->lock);
+        s->misses++;
+        pthread_mutex_unlock(&s->lock);
         return NULL;
     }
 
-    /* Check TTL */
     uint64_t now = now_seconds();
-    if ((int) (now - entry->timestamp) > cache->ttl_seconds) {
-        free_entry_value(entry);
+    if ((int)(now - entry->timestamp) > cache->ttl_seconds) {
+        shard_free_entry_value(entry);
         entry->occupied = false;
         entry->deleted = false;
-        lru_detach(&entry->lru);
-        cache->count--;
-        pthread_mutex_unlock(&cache->lock);
+        shard_lru_detach(entry);
+        s->count--;
+        s->misses++;
+        pthread_mutex_unlock(&s->lock);
         return NULL;
     }
 
-    /* Hit: move to front, return deep copy */
-    lru_move_to_front(cache, &entry->lru);
-    scored_completions* copy = deep_copy_scored(entry->value);
-    pthread_mutex_unlock(&cache->lock);
-    return copy;
+    shard_lru_move_to_front(s, entry);
+    atomic_fetch_add(&entry->refs, 1);
+    s->hits++;
+    pthread_mutex_unlock(&s->lock);
+
+    return entry->value;
+}
+
+void cache_release(query_cache* cache, const scored_completions* sc) {
+    if (!cache || !sc)
+        return;
+
+    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
+        cache_shard* s = &cache->shards[i];
+        pthread_mutex_lock(&s->lock);
+        for (size_t j = 0; j < s->capacity; j++) {
+            cache_entry* entry = &s->table[j];
+            if (entry->occupied && !entry->deleted && entry->value == sc) {
+                int old = atomic_fetch_sub(&entry->refs, 1);
+                if (old == 1 && entry->deleted) {
+                    shard_free_entry_value(entry);
+                    entry->occupied = false;
+                    entry->deleted = false;
+                    shard_lru_detach(entry);
+                    s->count--;
+                }
+                pthread_mutex_unlock(&s->lock);
+                return;
+            }
+        }
+        pthread_mutex_unlock(&s->lock);
+    }
 }
 
 void cache_put(query_cache* cache, const char* prefix, const scored_completions* sc) {
     if (!cache || !prefix || !sc)
         return;
 
-    pthread_mutex_lock(&cache->lock);
+    size_t si = shard_for_key(prefix);
+    cache_shard* s = &cache->shards[si];
 
-    /* Check if key already exists */
-    cache_entry* existing = cache_find(cache, prefix);
+    pthread_mutex_lock(&s->lock);
+
+    cache_entry* existing = shard_find(s, prefix);
     if (existing) {
-        free_entry_value(existing);
+        shard_free_entry_value(existing);
         existing->value = deep_copy_scored(sc);
         existing->timestamp = now_seconds();
-        lru_move_to_front(cache, &existing->lru);
-        pthread_mutex_unlock(&cache->lock);
+        shard_lru_move_to_front(s, existing);
+        pthread_mutex_unlock(&s->lock);
         return;
     }
 
-    /* Evict LRU if full */
-    if (cache->count >= cache->capacity) {
-        cache_entry* lru = lru_back(cache);
+    if (s->count >= s->capacity) {
+        cache_entry* lru = shard_lru_back(s);
         if (lru) {
-            free_entry_value(lru);
-            lru->occupied = false;
-            lru->deleted = false;
-            lru_detach(&lru->lru);
-            cache->count--;
+            int refs = atomic_load(&lru->refs);
+            if (refs > 0) {
+                lru->deleted = true;
+                shard_lru_detach(lru);
+            } else {
+                shard_free_entry_value(lru);
+                lru->occupied = false;
+                lru->deleted = false;
+                shard_lru_detach(lru);
+            }
+            s->count--;
+            s->evictions++;
         }
     }
 
-    /* Find empty slot via linear probing */
     uint64_t h = hash_key(prefix);
-    size_t idx = h % cache->capacity;
+    size_t idx = h % s->capacity;
     cache_entry* slot = NULL;
 
-    for (size_t i = 0; i < cache->capacity; i++) {
-        size_t pos = (idx + i) % cache->capacity;
-        cache_entry* entry = &cache->table[pos];
+    for (size_t i = 0; i < s->capacity; i++) {
+        size_t pos = (idx + i) % s->capacity;
+        cache_entry* entry = &s->table[pos];
         if (!entry->occupied || entry->deleted) {
             slot = entry;
             break;
@@ -223,7 +290,7 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
     }
 
     if (!slot) {
-        pthread_mutex_unlock(&cache->lock);
+        pthread_mutex_unlock(&s->lock);
         return;
     }
 
@@ -233,38 +300,52 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
     slot->timestamp = now_seconds();
     slot->occupied = true;
     slot->deleted = false;
-    lru_push_front(cache, &slot->lru);
-    cache->count++;
+    atomic_store(&slot->refs, 0);
+    shard_lru_push_front(s, slot);
+    s->count++;
 
-    pthread_mutex_unlock(&cache->lock);
+    pthread_mutex_unlock(&s->lock);
 }
 
 void cache_clear(query_cache* cache) {
     if (!cache)
         return;
 
-    pthread_mutex_lock(&cache->lock);
-
-    for (size_t i = 0; i < cache->capacity; i++) {
-        cache_entry* entry = &cache->table[i];
-        if (entry->occupied) {
-            free_entry_value(entry);
-            entry->occupied = false;
-            entry->deleted = false;
+    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
+        cache_shard* s = &cache->shards[i];
+        pthread_mutex_lock(&s->lock);
+        for (size_t j = 0; j < s->capacity; j++) {
+            cache_entry* entry = &s->table[j];
+            if (entry->occupied) {
+                int refs = atomic_load(&entry->refs);
+                if (refs > 0) {
+                    entry->deleted = true;
+                } else {
+                    shard_free_entry_value(entry);
+                    entry->occupied = false;
+                    entry->deleted = false;
+                }
+            }
         }
+        s->count = 0;
+        shard_lru_init(s);
+        pthread_mutex_unlock(&s->lock);
     }
-    cache->count = 0;
-    lru_init(cache);
-
-    pthread_mutex_unlock(&cache->lock);
 }
 
 cache_stats cache_get_stats(const query_cache* cache) {
-    cache_stats s = {0};
+    cache_stats total = {0};
     if (!cache)
-        return s;
-    s.entries = cache->count;
-    s.max_entries = cache->capacity;
-    s.ttl_seconds = cache->ttl_seconds;
-    return s;
+        return total;
+
+    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
+        const cache_shard* s = &cache->shards[i];
+        total.entries += s->count;
+        total.hits += s->hits;
+        total.misses += s->misses;
+        total.evictions += s->evictions;
+    }
+    total.max_entries = cache->entries_per_shard * CACHE_NUM_SHARDS;
+    total.ttl_seconds = cache->ttl_seconds;
+    return total;
 }

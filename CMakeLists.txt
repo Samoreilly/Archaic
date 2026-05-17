@@ -3,6 +3,10 @@ project(archaic)
 set(CMAKE_C_STANDARD 23)
 
 find_package(fmt)
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(SYSTEMD libsystemd)
+endif()
 
 add_executable(
     archaic
@@ -25,6 +29,12 @@ add_executable(
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)
 target_compile_options(archaic PRIVATE -Wall -Wpedantic -Wextra)
+
+if(SYSTEMD_FOUND)
+    target_compile_definitions(archaic PRIVATE HAVE_SYSTEMD)
+    target_link_libraries(archaic PRIVATE ${SYSTEMD_LIBRARIES})
+    target_include_directories(archaic PRIVATE ${SYSTEMD_INCLUDE_DIRS})
+endif()
 
 add_executable(
     archaic-cli

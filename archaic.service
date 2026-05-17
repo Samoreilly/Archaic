@@ -4,12 +4,14 @@ Documentation=https://github.com/Samoreilly/Archaic
 After=local-fs.target
 
 [Service]
-Type=simple
+Type=notify
 ExecStart=/usr/bin/archaic --daemon /home/%I/projects /tmp/archaic-daemon.sock
 ExecReload=/usr/bin/archaic-cli scan /home/%I/projects
 ExecStop=/usr/bin/archaic-cli shutdown
 Restart=on-failure
 RestartSec=5
+WatchdogSec=30
+NotifyAccess=all
 User=%i
 
 # Security hardening

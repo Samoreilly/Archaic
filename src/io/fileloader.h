@@ -18,6 +18,8 @@ struct ipc_server;
 typedef struct {
     bool scanning;
     size_t buckets_so_far;
+    size_t project_count;
+    project_info projects[MAX_PROJECTS];
 } scan_status;
 
 typedef struct {
@@ -29,6 +31,7 @@ typedef struct {
     query_cache* cache;
     pthread_t scan_thread;
     atomic_bool scanning;
+    atomic_bool scanner_healthy;
     atomic_size_t scan_bucket_count;
     char last_scan_path[CONFIG_MAX_STRING];
     int rescan_interval_seconds;
@@ -53,7 +56,13 @@ path_validation daemon_process_query(daemon_state* state, const char* cwd, const
 
 completions* daemon_get_completions(daemon_state* state, const char* prefix, size_t limit);
 
-scored_completions* daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now);
+typedef struct {
+    const scored_completions* data;
+    bool from_cache;
+} scored_result;
+
+scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now);
+void daemon_release_scored(daemon_state* state, scored_result result);
 
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit);
 

@@ -227,8 +227,8 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                 if test -z "$prefix"
                     set display_path (basename "$full_path")
                 else if not string match -q '/*' -- "$prefix"
-                    set display_path (string replace "$norm_resolved" "" "$full_path")
-                    set display_path "$norm_prefix$display_path"
+                    set -l parent_dir (dirname "$norm_resolved")
+                    set display_path (string replace "$parent_dir/" "" "$full_path")
                 end
 
                 if test "$type" = "D"
@@ -360,9 +360,29 @@ function __archaic_accept_suggestion
     end
 end
 
+# Alt+Right (works immediately)
 bind \e\[1\;3C __archaic_accept_suggestion
-bind --mode insert \cr __archaic_accept_suggestion
-bind --mode default \cr __archaic_accept_suggestion
+
+# Ctrl+R: must use fish_user_key_bindings to override Fish's default history search
+# (conf.d scripts load before default key bindings, so direct bind gets overridden)
+function __archaic_user_key_bindings
+    bind --mode insert \cr __archaic_accept_suggestion
+    bind --mode default \cr __archaic_accept_suggestion
+end
+
+# Register to run after Fish's default key bindings are loaded
+if functions -q fish_user_key_bindings
+    # User already has fish_user_key_bindings - wrap it
+    functions --copy fish_user_key_bindings __archaic_orig_user_key_bindings
+    function fish_user_key_bindings
+        __archaic_orig_user_key_bindings
+        __archaic_user_key_bindings
+    end
+else
+    function fish_user_key_bindings
+        __archaic_user_key_bindings
+    end
+end
 
 # ── Debug/status function ────────────────────────────────────────────────────
 function __archaic_status -d "Show archaic daemon status"

@@ -29,7 +29,7 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "ipc/protocol.h"
+#include "../ipc/protocol.h"
 
 /* ------------------------------------------------------------------ */
 /* Signal handling                                                     */

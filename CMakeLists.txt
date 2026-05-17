@@ -89,6 +89,14 @@ install(FILES archaic.service
     DESTINATION lib/systemd/system
 )
 
+# Install man pages
+install(FILES man/archaic.1 man/archaic-cli.1
+    DESTINATION share/man/man1
+)
+install(FILES man/archaic.conf.5
+    DESTINATION share/man/man5
+)
+
 # ── Uninstall target ──────────────────────────────────────────────────────────
 if(NOT TARGET uninstall)
     configure_file(

@@ -1,0 +1,121 @@
+.TH ARCHAIC.CONF 5 "December 2024" "Archaic 1.0" "File Formats"
+.SH NAME
+archaic.conf \- configuration file for Archaic autocomplete daemon
+.SH SYNOPSIS
+.I ~/.config/archaic/config.toml
+.SH DESCRIPTION
+The Archaic configuration file uses TOML format and controls all aspects
+of the daemon's behavior, from scanning parameters to scoring weights.
+.SH SECTIONS
+.SS [daemon]
+Core daemon configuration.
+.TP
+.B scan_path = "\fIpath\fR"
+Root directory to index (required).
+.TP
+.B socket_path = "\fIpath\fR"
+Unix socket location (default: /tmp/archaic-daemon.sock).
+.TP
+.B scan_threads = \fIn\fR
+Number of parallel scanner threads (default: 4).
+.TP
+.B max_depth = \fIn\fR
+Maximum directory traversal depth (default: 10).
+.TP
+.B rescan_interval_seconds = \fIn\fR
+Auto-rescan interval, 0 to disable (default: 300).
+.SS [storage]
+Memory and storage configuration.
+.TP
+.B max_buckets = \fIn\fR
+Hash bucket count for path store (default: 65536).
+.TP
+.B max_nodes_per_bucket = \fIn\fR
+Max entries per bucket (default: 100000).
+.TP
+.B cache_max_entries = \fIn\fR
+Query cache size (default: 1024).
+.TP
+.B cache_ttl_seconds = \fIn\fR
+Query cache time-to-live (default: 2).
+.TP
+.B colored_output = \fIbool\fR
+Enable colored output in completions (default: true).
+.TP
+.B case_insensitive = \fIbool\fR
+Enable case-insensitive matching (default: false).
+.TP
+.B recent_files_capacity = \fIn\fR
+Max recent files to track (default: 50, max: 100).
+.SS [scoring]
+Completion ranking weights (should sum to 1.0).
+.TP
+.B weight_frequency = \fIn\fR
+Usage frequency weight (default: 0.40).
+.TP
+.B weight_recency = \fIn\fR
+Last-access recency weight (default: 0.30).
+.TP
+.B weight_depth = \fIn\fR
+Path depth preference weight (default: 0.15).
+.TP
+.B weight_type = \fIn\fR
+File type preference weight (default: 0.10).
+.TP
+.B weight_cwd_proximity = \fIn\fR
+Current directory proximity weight (default: 0.05).
+.SS [scanner]
+Filesystem scanning options.
+.TP
+.B ignore_dirs = [\fI"dir1"\fR, \fI"dir2"\fR, ...]
+Directory patterns to skip (supports wildcards).
+.TP
+.B ignore_files = [\fI"*.ext"\fR, ...]
+File patterns to skip (supports wildcards).
+.SS [bookmarks]
+Pinned directory shortcuts.
+.TP
+.B paths = [\fI"/path/one"\fR, \fI"/path/two"\fR, ...]
+Bookmarked directories for quick access (max 32).
+.SS [fish], [bash], [zsh]
+Shell-specific settings.
+.TP
+.B commands = [\fI"cmd1"\fR, \fI"cmd2"\fR, ...]
+Commands that trigger completions.
+.SH EXAMPLE
+.nf
+[daemon]
+scan_path = "/home/user/projects"
+scan_threads = 4
+max_depth = 10
+
+[storage]
+colored_output = true
+case_insensitive = false
+recent_files_capacity = 50
+
+[scoring]
+weight_frequency = 0.40
+weight_recency = 0.30
+
+[scanner]
+ignore_dirs = [".git", "node_modules", "__pycache__"]
+ignore_files = ["*.pyc", "*.log"]
+
+[bookmarks]
+paths = ["/home/user/projects", "/home/user/documents"]
+.fi
+.SH FILES
+.TP
+.I ~/.config/archaic/config.toml
+User configuration file.
+.TP
+.I /etc/archaic/config.toml
+System-wide configuration.
+.TP
+.I .archaicignore
+Per-directory ignore patterns.
+.SH SEE ALSO
+.BR archaic (1),
+.BR archaic-cli (1),
+.BR archaic-helper (1)

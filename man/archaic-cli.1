@@ -1,0 +1,112 @@
+.TH ARCHAIC-CLI 1 "December 2024" "Archaic 1.0" "User Commands"
+.SH NAME
+archaic-cli \- command-line interface for the Archaic autocomplete daemon
+.SH SYNOPSIS
+.B archaic-cli
+.RI [ COMMAND ]
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B archaic-cli
+is the command-line interface for interacting with the Archaic autocomplete daemon.
+It provides commands to control the daemon, query completions, and manage state.
+.SH COMMANDS
+.TP
+.B scan \fIpath\fR
+Trigger a filesystem scan starting at the specified path.
+.TP
+.B query \ficwd\fR \fIinput\fR
+Validate a path query. Returns whether the path exists and its type.
+.TP
+.B complete \fiprefix\fR [\fIn\fR]
+Get completions for the given prefix. Optional limit n (default: 20).
+.TP
+.B suggest \fiprefix\fR
+Get the best suggestion for the given prefix.
+.TP
+.B ping
+Check if the daemon is running and responsive.
+.TP
+.B metrics
+Display daemon performance metrics and statistics.
+.TP
+.B scan-status
+Check the current scan progress and status.
+.TP
+.B save \fIpath\fR
+Save daemon state to the specified file path.
+.TP
+.B shutdown
+Stop the daemon gracefully.
+.TP
+.B fuzzy \fIquery\fR [\fIn\fR]
+Get fuzzy completions matching the query pattern.
+.TP
+.B recent [\fIn\fR]
+Get the n most recently accessed files.
+.TP
+.B export-freq \fIpath\fR
+Export path frequency data to a TSV file.
+.TP
+.B import-freq \fIpath\fR
+Import path frequency data from a TSV file.
+.SH OPTIONS
+.TP
+.B \-h, \-\-help
+Display help message and exit.
+.TP
+.B \-v, \-\-version
+Display version information and exit.
+.SH ENVIRONMENT
+.TP
+.B ARCHAIC_CONFIG
+Path to configuration file (default: ~/.config/archaic/config.toml).
+.TP
+.B ARCHAIC_SOCKET
+Path to daemon socket (default: /tmp/archaic-daemon.sock).
+.SH FILES
+.TP
+.I ~/.config/archaic/config.toml
+User configuration file.
+.TP
+.I /etc/archaic/config.toml
+System-wide configuration file.
+.TP
+.I /tmp/archaic-daemon.sock
+Default daemon socket path.
+.SH EXAMPLES
+.PP
+Start a scan:
+.RS
+.nf
+$ archaic-cli scan ~/projects
+.fi
+.RE
+.PP
+Get completions:
+.RS
+.nf
+$ archaic-cli complete ~/pro 10
+.fi
+.RE
+.PP
+Check daemon status:
+.RS
+.nf
+$ archaic-cli ping
+.fi
+.RE
+.PP
+Export learned preferences:
+.RS
+.nf
+$ archaic-cli export-freq ~/archaic-frequencies.tsv
+.fi
+.RE
+.SH SEE ALSO
+.BR archaic (1),
+.BR archaic-helper (1),
+.BR archaic.conf (5)
+.SH AUTHORS
+Sam O'Reilly and contributors.
+.SH BUGS
+Report bugs at: https://github.com/Samoreilly/Archaic/issues

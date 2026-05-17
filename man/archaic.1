@@ -1,0 +1,86 @@
+.TH ARCHAIC 1 "December 2024" "Archaic 1.0" "User Commands"
+.SH NAME
+archaic \- blazing-fast autocomplete daemon
+.SH SYNOPSIS
+.B archaic
+.RI [ options ]
+.SH DESCRIPTION
+.B archaic
+is a high-performance autocomplete daemon that indexes filesystems
+and provides sub-millisecond path completions. It learns from usage
+patterns to rank suggestions intelligently.
+.SH OPTIONS
+.TP
+.B \-c \fIpath\fR, \-\-config \fIpath\fR
+Use the specified configuration file.
+.TP
+.B \-d, \-\-daemon
+Run as a daemon (background process).
+.TP
+.B \-s \fIpath\fR, \-\-socket \fIpath\fR
+Use the specified socket path.
+.TP
+.B \-h, \-\-help
+Display help message and exit.
+.TP
+.B \-v, \-\-version
+Display version information and exit.
+.SH FEATURES
+.IP \(bu 2
+Sub-millisecond query latency via radix tree and LRU cache
+.IP \(bu 2
+Intelligent scoring based on frequency, recency, depth, and type
+.IP \(bu 2
+Multi-threaded parallel filesystem scanning
+.IP \(bu 2
+Periodic auto-rescan to stay in sync with filesystem changes
+.IP \(bu 2
+State persistence across daemon restarts
+.IP \(bu 2
+Fuzzy matching for typo-tolerant completions
+.IP \(bu 2
+Recent files tracking with LRU eviction
+.IP \(bu 2
+Directory-only filtering for cd/mkdir commands
+.IP \(bu 2
+Colored output support (respects NO_COLOR)
+.SH ARCHITECTURE
+Archaic uses a multi-component architecture:
+.IP \(bu 2
+.B Daemon
+: Background process holding the index
+.IP \(bu 2
+.B CLI
+: Command-line interface for control
+.IP \(bu 2
+.B Helper
+: Persistent connection handler for shells
+.IP \(bu 2
+.B Shell Plugins
+: Integration for Fish, Bash, and Zsh
+.SH SIGNALS
+.TP
+.B SIGTERM, SIGINT
+Graceful shutdown.
+.TP
+.B SIGHUP
+Reload configuration.
+.TP
+.B SIGUSR1
+Trigger manual rescan.
+.SH FILES
+.TP
+.I ~/.config/archaic/config.toml
+User configuration file.
+.TP
+.I /tmp/archaic-daemon.sock
+Default Unix domain socket.
+.TP
+.I /tmp/archaic-state.bin
+Default state file location.
+.SH SEE ALSO
+.BR archaic-cli (1),
+.BR archaic-helper (1),
+.BR archaic.conf (5)
+.SH AUTHORS
+Sam O'Reilly and contributors.

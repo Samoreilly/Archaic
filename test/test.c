@@ -1,22 +1,23 @@
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <stdatomic.h>
-#include <time.h>
-#include <errno.h>
-#include <signal.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
-#include "../src/threadmanager.h"
-#include "../src/trie-storage.h"
-#include "../src/trie.h"
-#include "../src/io/fileloader.h"
-#include "../src/lru.h"
 #include "../ipc/client.h"
 #include "../ipc/protocol.h"
 #include "../ipc/server.h"
+#include "../src/io/fileloader.h"
+#include "../src/lru.h"
+#include "../src/portable-barrier.h"
+#include "../src/threadmanager.h"
+#include "../src/trie-storage.h"
+#include "../src/trie.h"
 
 static const char* test_scan_path = NULL;
 
@@ -35,9 +36,11 @@ static char* path_join(const char* a, const char* b) {
     Helper: check if a string is in a completions result
 */
 static bool completions_contains(completions* c, const char* str) {
-    if (!c || !str) return false;
+    if (!c || !str)
+        return false;
     for (size_t i = 0; i < c->count; i++) {
-        if (strcmp(c->paths[i], str) == 0) return true;
+        if (strcmp(c->paths[i], str) == 0)
+            return true;
     }
     return false;
 }
@@ -47,7 +50,8 @@ static void print_completions(completions* c, const char* label) {
     for (size_t i = 0; i < c->count && i < 10; i++) {
         printf("\n    %s", c->paths[i]);
     }
-    if (c->count > 10) printf("\n    ... and %zu more", c->count - 10);
+    if (c->count > 10)
+        printf("\n    ... and %zu more", c->count - 10);
     printf("\n");
 }
 
@@ -287,7 +291,8 @@ static bool test_empty_input(daemon_state* daemon, const char* scan_root) {
     bool pass = no_crash;
     printf("  Result: %s\n", pass ? "PASS" : "FAIL");
 
-    if (c) completions_free(c);
+    if (c)
+        completions_free(c);
     return pass;
 }
 
@@ -377,7 +382,8 @@ static bool test_concurrent_queries(daemon_state* daemon, const char* scan_root)
             break;
         }
         for (int i = 0; i < CONCURRENT_QUERY_THREADS; i++) {
-            if (threads[i] == 0) continue;
+            if (threads[i] == 0)
+                continue;
             if (pthread_kill(threads[i], 0) != 0) {
                 threads[i] = 0;
                 joined++;
@@ -388,7 +394,8 @@ static bool test_concurrent_queries(daemon_state* daemon, const char* scan_root)
                 joined++;
             }
         }
-        if (joined < CONCURRENT_QUERY_THREADS) usleep(10000);
+        if (joined < CONCURRENT_QUERY_THREADS)
+            usleep(10000);
     }
 
     pthread_barrier_destroy(&barrier);
@@ -400,7 +407,8 @@ static bool test_concurrent_queries(daemon_state* daemon, const char* scan_root)
     printf("  Failed: %d queries\n", total_fail);
     printf("  Deadlock: %s\n", deadlock ? "YES" : "no");
 
-    bool pass = !deadlock && total_fail == 0 && total_success == CONCURRENT_QUERY_THREADS * QUERIES_PER_THREAD;
+    bool pass = !deadlock && total_fail == 0 &&
+                total_success == CONCURRENT_QUERY_THREADS * QUERIES_PER_THREAD;
     printf("  Result: %s\n", pass ? "PASS" : "FAIL");
 
     return pass;
@@ -449,7 +457,7 @@ static void* lock_reader(void* arg) {
 
         trie_lock(ctx->bucket);
         Trie* curr = ctx->bucket->dir_trie;
-        for (size_t j = 0; buf[j] != '\0'; ) {
+        for (size_t j = 0; buf[j] != '\0';) {
             RadixChild* child = NULL;
             for (uint8_t k = 0; k < curr->child_count; k++) {
                 if (curr->children[k].edge_char == buf[j]) {
@@ -457,14 +465,16 @@ static void* lock_reader(void* arg) {
                     break;
                 }
             }
-            if (!child) break;
+            if (!child)
+                break;
             Trie* child_node = child->node;
             size_t match = 0;
             while (match < child_node->key_len && buf[j + match] != '\0' &&
                    child_node->key[match] == buf[j + match]) {
                 match++;
             }
-            if (match == 0) break;
+            if (match == 0)
+                break;
             j += match;
             curr = child_node;
         }
@@ -475,8 +485,7 @@ static void* lock_reader(void* arg) {
 }
 
 static bool test_lock_integrity(void) {
-    printf("\n[Test 9] Lock integrity (%d writers + %d readers)\n",
-           LOCK_WRITERS, LOCK_READERS);
+    printf("\n[Test 9] Lock integrity (%d writers + %d readers)\n", LOCK_WRITERS, LOCK_READERS);
 
     t_bucket* bucket = create_bucket("lock_test");
     if (!bucket) {
@@ -516,8 +525,10 @@ static bool test_lock_integrity(void) {
     bool deadlock = false;
     int joined = 0;
     pthread_t all[LOCK_WRITERS + LOCK_READERS];
-    for (int i = 0; i < LOCK_WRITERS; i++) all[i] = writers[i];
-    for (int i = 0; i < LOCK_READERS; i++) all[LOCK_WRITERS + i] = readers[i];
+    for (int i = 0; i < LOCK_WRITERS; i++)
+        all[i] = writers[i];
+    for (int i = 0; i < LOCK_READERS; i++)
+        all[LOCK_WRITERS + i] = readers[i];
 
     while (joined < total) {
         if (time(NULL) - start >= 10) {
@@ -525,7 +536,8 @@ static bool test_lock_integrity(void) {
             break;
         }
         for (int i = 0; i < total; i++) {
-            if (all[i] == 0) continue;
+            if (all[i] == 0)
+                continue;
             if (pthread_kill(all[i], 0) != 0) {
                 all[i] = 0;
                 joined++;
@@ -536,7 +548,8 @@ static bool test_lock_integrity(void) {
                 joined++;
             }
         }
-        if (joined < total) usleep(10000);
+        if (joined < total)
+            usleep(10000);
     }
 
     pthread_barrier_destroy(&barrier);
@@ -552,7 +565,7 @@ static bool test_lock_integrity(void) {
             trie_lock(bucket);
             Trie* curr = bucket->dir_trie;
             bool found = true;
-            for (size_t j = 0; buf[j] != '\0'; ) {
+            for (size_t j = 0; buf[j] != '\0';) {
                 RadixChild* child = NULL;
                 for (uint8_t k = 0; k < curr->child_count; k++) {
                     if (curr->children[k].edge_char == buf[j]) {
@@ -560,20 +573,28 @@ static bool test_lock_integrity(void) {
                         break;
                     }
                 }
-                if (!child) { found = false; break; }
+                if (!child) {
+                    found = false;
+                    break;
+                }
                 Trie* child_node = child->node;
                 size_t match = 0;
                 while (match < child_node->key_len && buf[j + match] != '\0' &&
                        child_node->key[match] == buf[j + match]) {
                     match++;
                 }
-                if (match == 0) { found = false; break; }
+                if (match == 0) {
+                    found = false;
+                    break;
+                }
                 j += match;
                 curr = child_node;
             }
-            if (found && !curr->is_leaf) found = false;
+            if (found && !curr->is_leaf)
+                found = false;
             trie_unlock(bucket);
-            if (!found) missing++;
+            if (!found)
+                missing++;
         }
     }
 
@@ -621,12 +642,14 @@ static bool test_ipc_e2e(daemon_state* daemon, const char* scan_root) {
 
     char* probe_file = path_join(scan_root, "ipc_probe.txt");
     FILE* f = fopen(probe_file, "w");
-    if (f) fclose(f);
+    if (f)
+        fclose(f);
 
     ipc_validation_resp vresp;
     if (ipc_client_query(client, scan_root, "ipc_probe.txt", &vresp) == 0) {
         printf("  Query: exists=%s\n", vresp.exists ? "yes" : "no");
-        if (!vresp.exists) pass = false;
+        if (!vresp.exists)
+            pass = false;
     } else {
         printf("  Query: FAILED\n");
         pass = false;
@@ -635,7 +658,8 @@ static bool test_ipc_e2e(daemon_state* daemon, const char* scan_root) {
     ipc_completions_resp cresp;
     if (ipc_client_complete(client, probe_file, 10, &cresp) == 0) {
         printf("  Completions: count=%u\n", cresp.count);
-        if (cresp.count == 0) pass = false;
+        if (cresp.count == 0)
+            pass = false;
     } else {
         printf("  Completions: FAILED\n");
         pass = false;
@@ -685,10 +709,12 @@ void test_main(void) {
     int total = 0;
     int passed = 0;
 
-    #define RUN_TEST(fn) do { \
-        total++; \
-        if (fn) passed++; \
-    } while(0)
+#define RUN_TEST(fn)                                                                               \
+    do {                                                                                           \
+        total++;                                                                                   \
+        if (fn)                                                                                    \
+            passed++;                                                                              \
+    } while (0)
 
     RUN_TEST(test_scan_population(daemon, base_path));
     RUN_TEST(test_valid_insert(daemon, base_path));

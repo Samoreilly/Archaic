@@ -1,19 +1,20 @@
+#include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <stdatomic.h>
-#include <time.h>
-#include <math.h>
-#include <sys/stat.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
+#include "../src/io/fileloader.h"
+#include "../src/lru.h"
+#include "../src/portable-barrier.h"
 #include "../src/threadmanager.h"
 #include "../src/trie-storage.h"
 #include "../src/trie.h"
-#include "../src/io/fileloader.h"
-#include "../src/lru.h"
 
 #define PERF_ITERATIONS 100000
 #define PERF_WARMUP 1000
@@ -37,14 +38,15 @@ static double timespec_to_ms(struct timespec* ts) {
 }
 
 static int cmp_double(const void* a, const void* b) {
-    double da = *(const double*)a;
-    double db = *(const double*)b;
+    double da = *(const double*) a;
+    double db = *(const double*) b;
     return (da > db) - (da < db);
 }
 
 static perf_metrics compute_metrics(double* samples, long count, double total_ms) {
     perf_metrics m = {0};
-    if (count == 0) return m;
+    if (count == 0)
+        return m;
 
     qsort(samples, count, sizeof(double), cmp_double);
 
@@ -55,11 +57,12 @@ static perf_metrics compute_metrics(double* samples, long count, double total_ms
     m.ops_per_sec = (total_ms > 0) ? (count / (total_ms / 1000.0)) : 0;
 
     double sum = 0;
-    for (long i = 0; i < count; i++) sum += samples[i];
+    for (long i = 0; i < count; i++)
+        sum += samples[i];
     m.mean_ms = sum / count;
-    m.p50_ms = samples[(long)(count * 0.50)];
-    m.p95_ms = samples[(long)(count * 0.95)];
-    m.p99_ms = samples[(long)(count * 0.99)];
+    m.p50_ms = samples[(long) (count * 0.50)];
+    m.p95_ms = samples[(long) (count * 0.95)];
+    m.p99_ms = samples[(long) (count * 0.99)];
 
     double variance = 0;
     for (long i = 0; i < count; i++) {
@@ -86,9 +89,10 @@ static void print_metrics(const char* label, perf_metrics* m) {
 }
 
 static char** generate_path_strings(long count, int max_depth, int name_len) {
-    (void)name_len;
+    (void) name_len;
     char** strings = malloc(count * sizeof(char*));
-    const char* dirs[] = {"src", "lib", "bin", "doc", "test", "build", "include", "config", "data", "scripts"};
+    const char* dirs[] = {"src",   "lib",     "bin",    "doc",  "test",
+                          "build", "include", "config", "data", "scripts"};
     const char* exts[] = {".c", ".h", ".txt", ".md", ".py", ".sh", ".json", ".toml", ".rs", ".go"};
     int nd = sizeof(dirs) / sizeof(dirs[0]);
     int ne = sizeof(exts) / sizeof(exts[0]);
@@ -128,7 +132,8 @@ static char** generate_random_strings(long count, int len) {
 }
 
 static void free_strings(char** strings, long count) {
-    for (long i = 0; i < count; i++) free(strings[i]);
+    for (long i = 0; i < count; i++)
+        free(strings[i]);
     free(strings);
 }
 
@@ -185,8 +190,8 @@ static void perf_trie_insert(void) {
     }
     printf("    Nodes:        %zu\n", node_count);
     printf("    Trie memory:  %.2f MB\n", trie_mem / (1024.0 * 1024.0));
-    printf("    Bytes/node:   %.1f\n", node_count > 0 ? (double)trie_mem / node_count : 0);
-    printf("    Bytes/string: %.1f\n", node_count > 0 ? (double)trie_mem / PERF_ITERATIONS : 0);
+    printf("    Bytes/node:   %.1f\n", node_count > 0 ? (double) trie_mem / node_count : 0);
+    printf("    Bytes/string: %.1f\n", node_count > 0 ? (double) trie_mem / PERF_ITERATIONS : 0);
 
     trie_free_recursive(root);
     free_strings(strings, PERF_ITERATIONS);
@@ -251,7 +256,8 @@ static void perf_completions(void) {
 
     Trie* root = create_trie();
 
-    const char* prefixes[] = {"/home/user/project/src", "/home/user/project/lib", "/home/user/project"};
+    const char* prefixes[] = {"/home/user/project/src", "/home/user/project/lib",
+                              "/home/user/project"};
     int np = sizeof(prefixes) / sizeof(prefixes[0]);
 
     for (int p = 0; p < np; p++) {
@@ -278,7 +284,8 @@ static void perf_completions(void) {
         }
 
         double total = 0;
-        for (long i = 0; i < PERF_ITERATIONS; i++) total += samples[i];
+        for (long i = 0; i < PERF_ITERATIONS; i++)
+            total += samples[i];
 
         completions* probe = completions_create(50);
         completions_collect(root, prefixes[p], probe);
@@ -288,7 +295,8 @@ static void perf_completions(void) {
         perf_metrics m = compute_metrics(samples, PERF_ITERATIONS, total);
 
         char label[256];
-        snprintf(label, sizeof(label), "Collect prefix='%s' (results=%zu)", prefixes[p], result_count);
+        snprintf(label, sizeof(label), "Collect prefix='%s' (results=%zu)", prefixes[p],
+                 result_count);
         print_metrics(label, &m);
 
         free(samples);
@@ -335,8 +343,10 @@ static void perf_bucket_ops(void) {
     }
 
     double find_total = 0, insert_total = 0;
-    for (long i = 0; i < PERF_ITERATIONS; i++) find_total += find_samples[i];
-    for (long i = 0; i < inserts; i++) insert_total += insert_samples[i];
+    for (long i = 0; i < PERF_ITERATIONS; i++)
+        find_total += find_samples[i];
+    for (long i = 0; i < inserts; i++)
+        insert_total += insert_samples[i];
 
     perf_metrics find_m = compute_metrics(find_samples, PERF_ITERATIONS, find_total);
     perf_metrics insert_m = compute_metrics(insert_samples, inserts, insert_total);
@@ -346,7 +356,8 @@ static void perf_bucket_ops(void) {
     printf("    Active buckets: %zu\n", store->right_index);
 
     for (size_t i = 0; i < store->right_index; i++) {
-        if (store->buckets[i]) destroy_bucket(store->buckets[i]);
+        if (store->buckets[i])
+            destroy_bucket(store->buckets[i]);
     }
     pthread_mutex_destroy(&store->store_lock);
     free(parent);
@@ -412,7 +423,8 @@ static void perf_lru_ops(void) {
     print_metrics("move_to_front", &move_m);
     print_metrics("create_or_to_front", &to_front_m);
 
-    for (int i = 0; i < BUCKETS; i++) destroy_bucket(buckets[i]);
+    for (int i = 0; i < BUCKETS; i++)
+        destroy_bucket(buckets[i]);
     pthread_mutex_destroy(&store->store_lock);
     free(parent);
     free(store);
@@ -435,7 +447,7 @@ typedef struct {
 } perf_thread_ctx;
 
 static void* perf_insert_worker(void* arg) {
-    perf_thread_ctx* ctx = (perf_thread_ctx*)arg;
+    perf_thread_ctx* ctx = (perf_thread_ctx*) arg;
     pthread_barrier_wait(ctx->barrier);
 
     struct timespec t0, t1;
@@ -513,7 +525,8 @@ static void perf_concurrent_insert(void) {
         snprintf(label, sizeof(label), "Concurrent insert (%d threads)", nthreads);
         print_metrics(label, &m);
 
-        for (int t = 0; t < nthreads; t++) free(all_samples[t]);
+        for (int t = 0; t < nthreads; t++)
+            free(all_samples[t]);
         free(all_samples);
         free(ctxs);
         free(threads);
@@ -594,7 +607,8 @@ static void perf_memory(void) {
 
     size_t bucket_trie_nodes = 0;
     for (size_t i = 0; i < store->right_index; i++) {
-        if (!store->buckets[i]) continue;
+        if (!store->buckets[i])
+            continue;
         Trie** stack = malloc(500000 * sizeof(Trie*));
         int top = 0;
         stack[top++] = store->buckets[i]->dir_trie;
@@ -612,16 +626,19 @@ static void perf_memory(void) {
 
     printf("\n    RSS baseline:         %ld KB\n", baseline_kb);
     printf("    RSS after load:       %ld KB\n", after_kb);
-    printf("    RSS delta:            %ld KB (%.2f MB)\n", after_kb - baseline_kb, (after_kb - baseline_kb) / 1024.0);
+    printf("    RSS delta:            %ld KB (%.2f MB)\n", after_kb - baseline_kb,
+           (after_kb - baseline_kb) / 1024.0);
     printf("    Trie nodes (50k):     %zu\n", trie_nodes);
     printf("    Bucket trie nodes:    %zu (200 buckets x 100 files)\n", bucket_trie_nodes);
     printf("    Bucket overhead:      %zu bytes (200 buckets)\n", 200 * sizeof(t_bucket));
-    printf("    Store array:          %zu bytes (%d pointers)\n", BUCKETS * sizeof(t_bucket*), BUCKETS);
+    printf("    Store array:          %zu bytes (%d pointers)\n", BUCKETS * sizeof(t_bucket*),
+           BUCKETS);
     printf("    LRU nodes:            %zu bytes (200 nodes)\n", 200 * sizeof(struct node));
 
     trie_free_recursive(root);
     for (size_t i = 0; i < store->right_index; i++) {
-        if (store->buckets[i]) destroy_bucket(store->buckets[i]);
+        if (store->buckets[i])
+            destroy_bucket(store->buckets[i]);
     }
     pthread_mutex_destroy(&store->store_lock);
     free(parent);
@@ -676,11 +693,10 @@ static void perf_string_length_scaling(void) {
             free(stack);
         }
 
-        printf("    len=%-4d insert=%.1fms (%.0f ops/s) search=%.1fms (%.0f ops/s) nodes=%zu mem=%.2fMB\n",
-               len,
-               insert_ms, per_len / (insert_ms / 1000.0),
-               search_ms, per_len / (search_ms / 1000.0),
-               node_count,
+        printf("    len=%-4d insert=%.1fms (%.0f ops/s) search=%.1fms (%.0f ops/s) nodes=%zu "
+               "mem=%.2fMB\n",
+               len, insert_ms, per_len / (insert_ms / 1000.0), search_ms,
+               per_len / (search_ms / 1000.0), node_count,
                node_count * sizeof(Trie) / (1024.0 * 1024.0));
 
         trie_free_recursive(root);
@@ -718,7 +734,8 @@ static void perf_daemon_e2e(const char* scan_path) {
     printf("    Scan time:          %.3f ms\n", scan_ms);
     printf("    Active buckets:     %zu\n", total_buckets);
     printf("    Total entries:      %zu\n", total_entries);
-    printf("    Scan throughput:    %.0f entries/sec\n", scan_ms > 0 ? (total_entries / (scan_ms / 1000.0)) : 0);
+    printf("    Scan throughput:    %.0f entries/sec\n",
+           scan_ms > 0 ? (total_entries / (scan_ms / 1000.0)) : 0);
 
     double* query_samples = malloc(PERF_ITERATIONS * sizeof(double));
     double* completions_samples = malloc(PERF_ITERATIONS * sizeof(double));
@@ -736,7 +753,8 @@ static void perf_daemon_e2e(const char* scan_path) {
             double elapsed = timespec_to_ms(&qt1) - timespec_to_ms(&qt0);
             completions_samples[i] = elapsed;
             total_c += elapsed;
-            if (c) completions_free(c);
+            if (c)
+                completions_free(c);
 
             clock_gettime(CLOCK_MONOTONIC, &qt0);
             path_validation v = daemon_process_query(daemon, scan_path, "nonexistent_xyz");

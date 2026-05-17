@@ -15,7 +15,7 @@ jobs:
         compiler: [gcc, clang]
         exclude:
           - os: macos-latest
-            compiler: clang
+            compiler: gcc
 
     steps:
       - uses: actions/checkout@v4
@@ -89,4 +89,4 @@ jobs:
 
       - name: Check formatting
         run: |
-          clang-format --dry-run --Werror src/*.c src/*.h ipc/*.c ipc/*.h main.c
+          clang-format --dry-run --Werror src/*.c src/*.h ipc/*.c ipc/*.h main.c test/*.c

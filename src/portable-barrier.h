@@ -14,9 +14,9 @@ typedef struct {
     unsigned int generation;
 } portable_barrier_t;
 
-static inline int portable_barrier_init(portable_barrier_t* barrier,
-                                        const void* attr, unsigned int count) {
-    (void)attr;
+static inline int portable_barrier_init(portable_barrier_t* barrier, const void* attr,
+                                        unsigned int count) {
+    (void) attr;
     int rc;
     if ((rc = pthread_mutex_init(&barrier->mutex, NULL)) != 0)
         return rc;

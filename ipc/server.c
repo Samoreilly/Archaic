@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
@@ -49,6 +50,16 @@ static int write_exact(int fd, const void* buf, size_t len) {
     return 0;
 }
 
+static int validate_string_field(const char* str, size_t max_len) {
+    if (!str)
+        return -1;
+    for (size_t i = 0; i < max_len; i++) {
+        if (str[i] == '\0')
+            return 0;
+    }
+    return -1;
+}
+
 static void send_error(int fd, uint32_t req_id, int32_t code, const char* msg) {
     ipc_header hdr;
     ipc_error_resp resp;
@@ -72,16 +83,41 @@ static void send_ok(int fd, uint32_t req_id) {
 }
 
 static void handle_scan(ipc_server* srv, int fd, uint32_t req_id, const ipc_scan_req* req) {
+    if (validate_string_field(req->path, sizeof(req->path)) != 0) {
+        send_error(fd, req_id, -6, "invalid path: not null-terminated");
+        return;
+    }
+    if (strstr(req->path, "..") != NULL) {
+        send_error(fd, req_id, -8, "path traversal not allowed");
+        return;
+    }
     daemon_run_scan(srv->daemon, req->path);
     send_ok(fd, req_id);
 }
 
 static void handle_save(ipc_server* srv, int fd, uint32_t req_id, const ipc_save_req* req) {
+    if (validate_string_field(req->save_path, sizeof(req->save_path)) != 0) {
+        send_error(fd, req_id, -6, "invalid save path: not null-terminated");
+        return;
+    }
     daemon_save_state(srv->daemon, req->save_path);
     send_ok(fd, req_id);
 }
 
 static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_query_req* req) {
+    if (validate_string_field(req->cwd, sizeof(req->cwd)) != 0) {
+        send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
+        return;
+    }
+    if (validate_string_field(req->input, sizeof(req->input)) != 0) {
+        send_error(fd, req_id, -6, "invalid input: not null-terminated");
+        return;
+    }
+    if (strstr(req->cwd, "..") != NULL || strstr(req->input, "..") != NULL) {
+        send_error(fd, req_id, -8, "path traversal not allowed");
+        return;
+    }
+
     path_validation v = daemon_process_query(srv->daemon, req->cwd, req->input);
 
     ipc_header hdr;
@@ -102,6 +138,19 @@ static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_que
 }
 
 static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_complete_req* req) {
+    if (validate_string_field(req->prefix, sizeof(req->prefix)) != 0) {
+        send_error(fd, req_id, -6, "invalid prefix: not null-terminated");
+        return;
+    }
+    if (validate_string_field(req->cwd, sizeof(req->cwd)) != 0) {
+        send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
+        return;
+    }
+    if (strstr(req->prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
+        send_error(fd, req_id, -8, "path traversal not allowed");
+        return;
+    }
+
     uint64_t now = (uint64_t) time(NULL);
     scored_result sr =
         daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now, req->cwd);
@@ -143,6 +192,19 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
 }
 
 static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_suggest_req* req) {
+    if (validate_string_field(req->prefix, sizeof(req->prefix)) != 0) {
+        send_error(fd, req_id, -6, "invalid prefix: not null-terminated");
+        return;
+    }
+    if (validate_string_field(req->cwd, sizeof(req->cwd)) != 0) {
+        send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
+        return;
+    }
+    if (strstr(req->prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
+        send_error(fd, req_id, -8, "path traversal not allowed");
+        return;
+    }
+
     uint64_t now = (uint64_t) time(NULL);
     scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now, req->cwd);
     const scored_completions* sc = sr.data;
@@ -175,8 +237,13 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
 static void handle_ping(ipc_server* srv, int fd, uint32_t req_id) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    uint64_t uptime_ms = (uint64_t) (now.tv_sec - srv->start_time.tv_sec) * 1000ULL +
-                         (uint64_t) (now.tv_nsec - srv->start_time.tv_nsec) / 1000000ULL;
+    int64_t sec_diff = (int64_t) now.tv_sec - (int64_t) srv->start_time.tv_sec;
+    int64_t nsec_diff = (int64_t) now.tv_nsec - (int64_t) srv->start_time.tv_nsec;
+    if (nsec_diff < 0) {
+        sec_diff--;
+        nsec_diff += 1000000000LL;
+    }
+    uint64_t uptime_ms = (uint64_t) sec_diff * 1000ULL + (uint64_t) nsec_diff / 1000000ULL;
 
     ipc_header hdr;
     ipc_pong_resp resp;
@@ -220,6 +287,15 @@ static void handle_scan_status(ipc_server* srv, int fd, uint32_t req_id) {
 
 static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
                                   const ipc_complete_req* req) {
+    if (validate_string_field(req->prefix, sizeof(req->prefix)) != 0) {
+        send_error(fd, req_id, -6, "invalid prefix: not null-terminated");
+        return;
+    }
+    if (strstr(req->prefix, "..") != NULL) {
+        send_error(fd, req_id, -8, "path traversal not allowed");
+        return;
+    }
+
     completions* fc = daemon_get_fuzzy_completions(srv->daemon, req->prefix, req->limit);
 
     ipc_header hdr;
@@ -396,7 +472,16 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     srv->running = 1;
     strncpy(srv->sock_path, sock_path, sizeof(srv->sock_path) - 1);
 
-    srv->pool = threadpool_init(8);
+    int pool_size;
+    {
+        long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+        pool_size = (nproc > 0) ? (int) (nproc * 2) : 8;
+        if (pool_size > 16)
+            pool_size = 16;
+        if (pool_size < 4)
+            pool_size = 4;
+    }
+    srv->pool = threadpool_init(pool_size);
     if (!srv->pool) {
         free(srv);
         return NULL;
@@ -406,8 +491,12 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
 
     unlink(sock_path);
 
+    /* Restrict socket to owner-only before binding */
+    mode_t old_umask = umask(S_IRWXG | S_IRWXO);
+
     srv->listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (srv->listen_fd < 0) {
+        umask(old_umask);
         threadpool_shutdown(srv->pool);
         free(srv);
         return NULL;
@@ -419,11 +508,14 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
 
     if (bind(srv->listen_fd, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
+        umask(old_umask);
         threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
         free(srv);
         return NULL;
     }
+
+    umask(old_umask);
 
     if (listen(srv->listen_fd, 8) < 0) {
         threadpool_shutdown(srv->pool);

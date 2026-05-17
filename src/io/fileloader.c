@@ -42,7 +42,7 @@
  * ────────────────────────────────────────────────────────────────── */
 
 #define STATE_MAGIC 0x41525354U
-#define STATE_VERSION 1U
+#define STATE_VERSION 2U
 
 static size_t count_trie_nodes(const RadixNode* node) {
     if (!node)
@@ -234,8 +234,13 @@ int load_trie(daemon_state* state, const char* path) {
     if (fread(&reserved, sizeof(reserved), 1, f) != 1)
         goto rerr;
 
-    if (magic != STATE_MAGIC || version != STATE_VERSION)
+    if (magic != STATE_MAGIC || version != STATE_VERSION) {
+        if (magic == STATE_MAGIC && version != STATE_VERSION) {
+            LOG_WARN("daemon", "state file version %u != expected %u, discarding old state",
+                     version, STATE_VERSION);
+        }
         goto rerr;
+    }
 
     for (uint32_t b = 0; b < bucket_count; b++) {
         uint32_t dn_len;

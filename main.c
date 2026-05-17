@@ -15,6 +15,23 @@
 
 static volatile int running = 1;
 static volatile int sighup_received = 0;
+static char pid_file_path[4096] = {0};
+
+static void cleanup_pid_file(void) {
+    if (pid_file_path[0] != '\0') {
+        unlink(pid_file_path);
+        pid_file_path[0] = '\0';
+    }
+}
+
+static void write_pid_file(const char* sock_path) {
+    snprintf(pid_file_path, sizeof(pid_file_path), "%s.pid", sock_path);
+    FILE* f = fopen(pid_file_path, "w");
+    if (f) {
+        fprintf(f, "%d\n", getpid());
+        fclose(f);
+    }
+}
 
 static void* watchdog_thread_func(void* arg) {
     daemon_state* daemon = (daemon_state*) arg;
@@ -68,6 +85,13 @@ int main(int argc, char* argv[]) {
         const char* scan_path = argc > 2 ? argv[2] : cfg.daemon.scan_path;
         const char* sock_path = argc > 3 ? argv[3] : cfg.daemon.socket_path;
 
+        /* Auto-detect scanner threads if set to 0 */
+        if (cfg.daemon.scan_threads <= 0) {
+            long nproc = sysconf(_SC_NPROCESSORS_ONLN);
+            cfg.daemon.scan_threads = (nproc > 0 && nproc < SCANNER_MAX_THREADS) ? (int) nproc : 4;
+            LOG_INFO("main", "auto-detected %d scanner threads", cfg.daemon.scan_threads);
+        }
+
         signal(SIGINT, handle_signal);
         signal(SIGTERM, handle_signal);
         signal(SIGHUP, handle_sighup);
@@ -86,8 +110,12 @@ int main(int argc, char* argv[]) {
         if (daemon_start_ipc(daemon, sock_path) != 0) {
             LOG_ERR("main", "IPC start failed");
             daemon_shutdown(daemon);
+            cleanup_pid_file();
             return 1;
         }
+
+        write_pid_file(sock_path);
+        atexit(cleanup_pid_file);
 
         LOG_INFO("scanner", "scanning %s (background)", scan_path);
         daemon_run_scan(daemon, scan_path);
@@ -115,6 +143,7 @@ int main(int argc, char* argv[]) {
         pthread_join(watchdog_thread, NULL);
         LOG_INFO("main", "shutting down...");
         daemon_shutdown(daemon);
+        cleanup_pid_file();
         LOG_INFO("main", "stopped.");
         return 0;
     }

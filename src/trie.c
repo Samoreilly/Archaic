@@ -1,5 +1,6 @@
 #include "trie.h"
 #include <ctype.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,7 +11,7 @@
 
 #include "threadmanager.h"
 
-static RadixChild* find_child(RadixNode* node, char c) {
+static inline RadixChild* find_child(RadixNode* node, char c) {
     int lo = 0, hi = node->child_count - 1;
     while (lo <= hi) {
         int mid = lo + (hi - lo) / 2;
@@ -25,7 +26,7 @@ static RadixChild* find_child(RadixNode* node, char c) {
     return NULL;
 }
 
-static void add_child(RadixNode* node, char c, RadixNode* child) {
+static inline void add_child(RadixNode* node, char c, RadixNode* child) {
     if (node->child_count >= node->child_capacity) {
         size_t new_cap = node->child_capacity * 2;
         RadixChild* new_children = malloc(new_cap * sizeof(RadixChild));
@@ -422,7 +423,7 @@ void scored_completions_free(scored_completions* sc) {
     free(sc);
 }
 
-static int path_depth(const char* path) {
+static inline int path_depth(const char* path) {
     int d = 0;
     for (const char* p = path; *p; p++) {
         if (*p == '/')
@@ -431,31 +432,40 @@ static int path_depth(const char* path) {
     return d;
 }
 
+static inline double clampd(double val, double lo, double hi) {
+    if (val < lo)
+        return lo;
+    if (val > hi)
+        return hi;
+    return val;
+}
+
 static double compute_score(const char* path, uint64_t freq, uint64_t last_access, bool is_dir,
                             uint64_t now, int max_depth, const char* cwd) {
     double score = 0.0;
 
     /* Frequency: normalize to 0-1 range using log scale */
     double freq_norm = (freq > 0) ? (1.0 - 1.0 / (1.0 + (double) freq)) : 0.0;
+    freq_norm = clampd(freq_norm, 0.0, 1.0);
     score += SCORE_WEIGHT_FREQ * freq_norm;
 
-    /* Recency: exponential decay, half-life = 3600 seconds */
+    /* Recency: true exponential decay with 1-hour half-life */
     double recency_norm = 0.0;
-    if (last_access > 0 && now > last_access) {
-        double age = (double) (now - last_access);
-        recency_norm = 1.0 / (1.0 + age / 3600.0);
-    } else if (last_access > 0) {
-        recency_norm = 1.0;
+    if (last_access > 0) {
+        if (now > last_access) {
+            double age = (double) (now - last_access);
+            recency_norm = pow(0.5, age / 3600.0);
+        } else {
+            recency_norm = 1.0;
+        }
     }
+    recency_norm = clampd(recency_norm, 0.0, 1.0);
     score += SCORE_WEIGHT_RECENCY * recency_norm;
 
     /* Depth: shallower paths rank higher */
     int depth = path_depth(path);
     double depth_norm = (max_depth > 0) ? (1.0 - (double) depth / (double) max_depth) : 0.5;
-    if (depth_norm < 0.0)
-        depth_norm = 0.0;
-    if (depth_norm > 1.0)
-        depth_norm = 1.0;
+    depth_norm = clampd(depth_norm, 0.0, 1.0);
     score += SCORE_WEIGHT_DEPTH * depth_norm;
 
     /* Type: files rank above directories */
@@ -472,7 +482,16 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
                     extra_dirs++;
             }
             double cwd_norm = 1.0 / (1.0 + extra_dirs);
-            score += SCORE_WEIGHT_CWD * cwd_norm;
+            score += SCORE_WEIGHT_CWD * clampd(cwd_norm, 0.0, 1.0);
+        }
+    }
+
+    /* Recent file bonus: slight boost for paths accessed in the last 24 hours */
+    if (last_access > 0 && now > last_access) {
+        double age_hours = (double) (now - last_access) / 3600.0;
+        if (age_hours < 24.0) {
+            double recent_bonus = (24.0 - age_hours) / 24.0 * 0.05;
+            score += recent_bonus;
         }
     }
 

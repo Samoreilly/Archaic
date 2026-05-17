@@ -1,20 +1,20 @@
+#include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <signal.h>
 
-#include "test/test.h"
-#include "src/io/fileloader.h"
 #include "ipc/protocol.h"
 #include "src/config.h"
+#include "src/io/fileloader.h"
 #include "src/log.h"
+#include "test/test.h"
 
 static volatile int running = 1;
 
 static void handle_signal(int sig) {
-    (void)sig;
+    (void) sig;
     running = 0;
 }
 
@@ -33,7 +33,7 @@ int main(int argc, char* argv[]) {
         signal(SIGHUP, SIG_IGN);
         signal(SIGPIPE, SIG_IGN);
 
-        log_init((log_level)cfg.daemon.log_level, stderr);
+        log_init((log_level) cfg.daemon.log_level, stderr);
         LOG_INFO("main", "archaic daemon starting (v%d)", IPC_PROTOCOL_VERSION);
 
         daemon_state* daemon = daemon_init();

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "protocol.h"
 #include "../src/io/fileloader.h"
 #include "../src/threadpool.h"
+#include "protocol.h"
 
 typedef struct ipc_server ipc_server;
 

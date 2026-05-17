@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdatomic.h>
 #include "trie.h"
+#include <stdatomic.h>
 
 #define BUCKETS 65536
 #define MIN_DEPTH 8
@@ -20,7 +20,6 @@ typedef struct t_bucket {
     size_t array_index;
 
 } t_bucket;
-
 
 typedef struct t_bucket_store {
     t_bucket* buckets[BUCKETS];
@@ -50,7 +49,8 @@ typedef struct {
     char* full_path;
 } path_validation;
 
-t_bucket* find_bucket(t_bucket_store* lfu, char* original_dir, char* curr_dir, int depth, bool cutoff);
+t_bucket* find_bucket(t_bucket_store* lfu, char* original_dir, char* curr_dir, int depth,
+                      bool cutoff);
 t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir);
 t_bucket* create_bucket(char* dir_name);
 void destroy_bucket(t_bucket* bucket);

@@ -3,9 +3,8 @@
 #include "trie-storage.h"
 #include <stdbool.h>
 
-
 typedef struct node {
-    
+
     t_bucket* bucket;
     struct node* next;
     struct node* prev;

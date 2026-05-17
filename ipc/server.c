@@ -1,16 +1,16 @@
 #include "server.h"
+#include "../src/io/fileloader.h"
+#include "../src/metrics.h"
+#include "../src/threadpool.h"
+#include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <pthread.h>
-#include <errno.h>
-#include "../src/threadpool.h"
-#include "../src/metrics.h"
-#include "../src/io/fileloader.h"
+#include <time.h>
+#include <unistd.h>
 
 struct ipc_server {
     daemon_state* daemon;
@@ -30,8 +30,9 @@ typedef struct {
 static int read_exact(int fd, void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = read(fd, (char*)buf + total, len - total);
-        if (n <= 0) return -1;
+        ssize_t n = read(fd, (char*) buf + total, len - total);
+        if (n <= 0)
+            return -1;
         total += n;
     }
     return 0;
@@ -40,8 +41,9 @@ static int read_exact(int fd, void* buf, size_t len) {
 static int write_exact(int fd, const void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = write(fd, (const char*)buf + total, len - total);
-        if (n <= 0) return -1;
+        ssize_t n = write(fd, (const char*) buf + total, len - total);
+        if (n <= 0)
+            return -1;
         total += n;
     }
     return 0;
@@ -100,8 +102,9 @@ static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_que
 }
 
 static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_complete_req* req) {
-    uint64_t now = (uint64_t)time(NULL);
-    scored_completions* sc = daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now);
+    uint64_t now = (uint64_t) time(NULL);
+    scored_completions* sc =
+        daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now);
 
     ipc_header hdr;
     ipc_completions_resp resp;
@@ -139,7 +142,7 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
 }
 
 static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_suggest_req* req) {
-    uint64_t now = (uint64_t)time(NULL);
+    uint64_t now = (uint64_t) time(NULL);
     scored_completions* sc = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now);
 
     ipc_header hdr;
@@ -170,8 +173,8 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
 static void handle_ping(ipc_server* srv, int fd, uint32_t req_id) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    uint64_t uptime_ms = (uint64_t)(now.tv_sec - srv->start_time.tv_sec) * 1000ULL
-                       + (uint64_t)(now.tv_nsec - srv->start_time.tv_nsec) / 1000000ULL;
+    uint64_t uptime_ms = (uint64_t) (now.tv_sec - srv->start_time.tv_sec) * 1000ULL +
+                         (uint64_t) (now.tv_nsec - srv->start_time.tv_nsec) / 1000000ULL;
 
     ipc_header hdr;
     ipc_pong_resp resp;
@@ -213,7 +216,8 @@ static void handle_scan_status(ipc_server* srv, int fd, uint32_t req_id) {
     write_exact(fd, &resp, sizeof(resp));
 }
 
-static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_complete_req* req) {
+static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
+                                  const ipc_complete_req* req) {
     completions* fc = daemon_get_fuzzy_completions(srv->daemon, req->prefix, req->limit);
 
     ipc_header hdr;
@@ -357,18 +361,19 @@ static void handle_client(ipc_server* srv, int fd) {
 }
 
 static void handle_client_threaded(void* arg) {
-    client_ctx* ctx = (client_ctx*)arg;
+    client_ctx* ctx = (client_ctx*) arg;
     handle_client(ctx->srv, ctx->fd);
     free(ctx);
 }
 
 static void* server_loop(void* arg) {
-    ipc_server* srv = (ipc_server*)arg;
+    ipc_server* srv = (ipc_server*) arg;
 
     while (srv->running) {
         int fd = accept(srv->listen_fd, NULL, NULL);
         if (fd < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR)
+                continue;
             break;
         }
         client_ctx* ctx = malloc(sizeof(client_ctx));
@@ -382,7 +387,8 @@ static void* server_loop(void* arg) {
 
 ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     ipc_server* srv = calloc(1, sizeof(ipc_server));
-    if (!srv) return NULL;
+    if (!srv)
+        return NULL;
 
     srv->daemon = daemon;
     srv->running = 1;
@@ -410,7 +416,7 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
 
-    if (bind(srv->listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    if (bind(srv->listen_fd, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
         threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
         free(srv);
@@ -437,7 +443,8 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
 }
 
 void ipc_server_stop(ipc_server* srv) {
-    if (!srv) return;
+    if (!srv)
+        return;
 
     srv->running = 0;
 
@@ -448,7 +455,7 @@ void ipc_server_stop(ipc_server* srv) {
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, srv->sock_path, sizeof(addr.sun_path) - 1);
-        connect(fd, (struct sockaddr*)&addr, sizeof(addr));
+        connect(fd, (struct sockaddr*) &addr, sizeof(addr));
         close(fd);
     }
 

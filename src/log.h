@@ -1,14 +1,9 @@
 #pragma once
-#include <stdio.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <time.h>
 
-typedef enum {
-    LOG_DEBUG = 0,
-    LOG_INFO  = 1,
-    LOG_WARN  = 2,
-    LOG_ERROR = 3
-} log_level;
+typedef enum { LOG_DEBUG = 0, LOG_INFO = 1, LOG_WARN = 2, LOG_ERROR = 3 } log_level;
 
 void log_init(log_level level, FILE* output);
 void log_set_level(log_level level);

@@ -1,10 +1,10 @@
+#include <dirent.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/stat.h>
-#include <stdatomic.h>
 #include <unistd.h>
 
 #include "scanner.h"
@@ -55,7 +55,7 @@ int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_ca
 }
 
 static void* scanner_worker(void* arg) {
-    parallel_scanner* scanner = (parallel_scanner*)arg;
+    parallel_scanner* scanner = (parallel_scanner*) arg;
 
     while (1) {
         char path[4096];
@@ -105,7 +105,8 @@ static void* scanner_worker(void* arg) {
 
         struct dirent* entry;
         while ((entry = readdir(dir)) && entry_count < 512) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
             strncpy(entries[entry_count].name, entry->d_name, 255);
             entries[entry_count].name[255] = '\0';
 
@@ -124,7 +125,8 @@ static void* scanner_worker(void* arg) {
         closedir(dir);
 
         for (int i = 0; i < entry_count; i++) {
-            if (atomic_load(&scanner->stop)) break;
+            if (atomic_load(&scanner->stop))
+                break;
 
             char child_path[4096];
             snprintf(child_path, sizeof(child_path), "%s/%s", path, entries[i].name);
@@ -169,9 +171,10 @@ static void* scanner_worker(void* arg) {
     return NULL;
 }
 
-void parallel_scanner_init(parallel_scanner* scanner, t_bucket_store* store, struct node* parent, int max_depth, int num_threads) {
+void parallel_scanner_init(parallel_scanner* scanner, t_bucket_store* store, struct node* parent,
+                           int max_depth, int num_threads) {
     memset(scanner, 0, sizeof(parallel_scanner));
-    scanner->queue = (scan_queue*)calloc(1, sizeof(scan_queue));
+    scanner->queue = (scan_queue*) calloc(1, sizeof(scan_queue));
     scan_queue_init(scanner->queue);
     scanner->num_threads = num_threads > SCANNER_MAX_THREADS ? SCANNER_MAX_THREADS : num_threads;
     scanner->max_depth = max_depth;
@@ -191,14 +194,14 @@ void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {
     scan_queue_push(scanner->queue, root_path, 0);
 
     for (int i = 0; i < scanner->num_threads; i++) {
-        pthread_create(&scanner->workers[i], NULL, scanner_worker, (void*)scanner);
+        pthread_create(&scanner->workers[i], NULL, scanner_worker, (void*) scanner);
     }
 }
 
 void parallel_scanner_wait(parallel_scanner* scanner) {
     for (int i = 0; i < scanner->num_threads; i++) {
         pthread_join(scanner->workers[i], NULL);
-        scanner->workers[i] = (pthread_t)0;
+        scanner->workers[i] = (pthread_t) 0;
     }
 }
 
@@ -210,7 +213,7 @@ void parallel_scanner_stop(parallel_scanner* scanner) {
     for (int i = 0; i < scanner->num_threads; i++) {
         if (scanner->workers[i]) {
             pthread_join(scanner->workers[i], NULL);
-            scanner->workers[i] = (pthread_t)0;
+            scanner->workers[i] = (pthread_t) 0;
         }
     }
 }

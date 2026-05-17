@@ -1,8 +1,8 @@
 #pragma once
+#include "trie.h"
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
-#include "trie.h"
 
 #define CACHE_MAX_KEY_LEN 4096
 #define CACHE_DEFAULT_MAX_ENTRIES 1024

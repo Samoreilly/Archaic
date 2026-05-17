@@ -3,7 +3,7 @@
 #include <unistd.h>
 
 static void* worker_loop(void* arg) {
-    threadpool* pool = (threadpool*)arg;
+    threadpool* pool = (threadpool*) arg;
     while (1) {
         pthread_mutex_lock(&pool->queue_lock);
         while (pool->queue_count == 0 && !atomic_load(&pool->shutdown)) {
@@ -27,17 +27,25 @@ static void* worker_loop(void* arg) {
 threadpool* threadpool_init(int num_workers) {
     if (num_workers <= 0) {
         long nproc = sysconf(_SC_NPROCESSORS_ONLN);
-        num_workers = (nproc > 0 && nproc < 8) ? (int)nproc : 8;
+        num_workers = (nproc > 0 && nproc < 8) ? (int) nproc : 8;
     }
 
     threadpool* pool = calloc(1, sizeof(threadpool));
-    if (!pool) return NULL;
+    if (!pool)
+        return NULL;
 
-    pool->workers = calloc((size_t)num_workers, sizeof(pthread_t));
-    if (!pool->workers) { free(pool); return NULL; }
+    pool->workers = calloc((size_t) num_workers, sizeof(pthread_t));
+    if (!pool->workers) {
+        free(pool);
+        return NULL;
+    }
 
-    pool->queue = calloc((size_t)THREADPOOL_QUEUE_SIZE, sizeof(threadpool_task));
-    if (!pool->queue) { free(pool->workers); free(pool); return NULL; }
+    pool->queue = calloc((size_t) THREADPOOL_QUEUE_SIZE, sizeof(threadpool_task));
+    if (!pool->queue) {
+        free(pool->workers);
+        free(pool);
+        return NULL;
+    }
 
     pool->num_workers = num_workers;
     pool->queue_head = 0;
@@ -70,7 +78,8 @@ threadpool* threadpool_init(int num_workers) {
 }
 
 int threadpool_submit(threadpool* pool, threadpool_task_fn fn, void* arg) {
-    if (atomic_load(&pool->shutdown)) return -1;
+    if (atomic_load(&pool->shutdown))
+        return -1;
 
     pthread_mutex_lock(&pool->queue_lock);
     while (pool->queue_count == THREADPOOL_QUEUE_SIZE) {

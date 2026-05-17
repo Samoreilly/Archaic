@@ -1,6 +1,6 @@
 #pragma once
-#include <stdint.h>
 #include <stdatomic.h>
+#include <stdint.h>
 
 typedef struct {
     atomic_uint_least64_t queries_total;

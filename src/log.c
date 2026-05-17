@@ -7,10 +7,14 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static const char* level_str(log_level level) {
     switch (level) {
-        case LOG_DEBUG: return "DEBUG";
-        case LOG_INFO:  return "INFO";
-        case LOG_WARN:  return "WARN";
-        case LOG_ERROR: return "ERROR";
+    case LOG_DEBUG:
+        return "DEBUG";
+    case LOG_INFO:
+        return "INFO";
+    case LOG_WARN:
+        return "WARN";
+    case LOG_ERROR:
+        return "ERROR";
     }
     return "UNKNOWN";
 }
@@ -32,7 +36,8 @@ void log_shutdown(void) {
 }
 
 void log_msg(log_level level, const char* component, const char* fmt, ...) {
-    if (level < g_level || !g_output) return;
+    if (level < g_level || !g_output)
+        return;
 
     pthread_mutex_lock(&g_lock);
 

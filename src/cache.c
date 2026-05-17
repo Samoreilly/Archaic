@@ -1,14 +1,14 @@
 #include "cache.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <pthread.h>
 
 /* djb2 hash */
 static uint64_t hash_key(const char* str) {
     uint64_t hash = 5381;
     int c;
-    while ((c = (unsigned char)*str++))
+    while ((c = (unsigned char) *str++))
         hash = ((hash << 5) + hash) + c;
     return hash;
 }
@@ -65,16 +65,20 @@ static void lru_move_to_front(query_cache* cache, cache_lru_node* node) {
 
 static cache_entry* lru_back(query_cache* cache) {
     cache_lru_node* node = cache->lru_tail.prev;
-    if (node == &cache->lru_head) return NULL;
-    return (cache_entry*)((char*)node - offsetof(cache_entry, lru));
+    if (node == &cache->lru_head)
+        return NULL;
+    return (cache_entry*) ((char*) node - offsetof(cache_entry, lru));
 }
 
 static scored_completions* deep_copy_scored(const scored_completions* src) {
-    if (!src) return NULL;
+    if (!src)
+        return NULL;
     scored_completions* dst = scored_completions_create(src->capacity);
-    if (!dst) return NULL;
+    if (!dst)
+        return NULL;
     for (size_t i = 0; i < src->count; i++) {
-        if (dst->count >= dst->capacity) break;
+        if (dst->count >= dst->capacity)
+            break;
         memcpy(&dst->entries[dst->count], &src->entries[i], sizeof(scored_entry));
         dst->count++;
     }
@@ -91,15 +95,18 @@ static void free_entry_value(cache_entry* entry) {
 static uint64_t now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec;
+    return (uint64_t) ts.tv_sec;
 }
 
 query_cache* cache_create(size_t max_entries, int ttl_seconds) {
-    if (max_entries == 0) max_entries = CACHE_DEFAULT_MAX_ENTRIES;
-    if (ttl_seconds <= 0) ttl_seconds = CACHE_DEFAULT_TTL_SECONDS;
+    if (max_entries == 0)
+        max_entries = CACHE_DEFAULT_MAX_ENTRIES;
+    if (ttl_seconds <= 0)
+        ttl_seconds = CACHE_DEFAULT_TTL_SECONDS;
 
     query_cache* cache = calloc(1, sizeof(query_cache));
-    if (!cache) return NULL;
+    if (!cache)
+        return NULL;
 
     cache->table = calloc(max_entries, sizeof(cache_entry));
     if (!cache->table) {
@@ -116,7 +123,8 @@ query_cache* cache_create(size_t max_entries, int ttl_seconds) {
 }
 
 void cache_destroy(query_cache* cache) {
-    if (!cache) return;
+    if (!cache)
+        return;
     cache_clear(cache);
     free(cache->table);
     pthread_mutex_destroy(&cache->lock);
@@ -130,15 +138,19 @@ static cache_entry* cache_find(query_cache* cache, const char* key) {
     for (size_t i = 0; i < cache->capacity; i++) {
         size_t pos = (idx + i) % cache->capacity;
         cache_entry* entry = &cache->table[pos];
-        if (!entry->occupied) return NULL;
-        if (entry->deleted) continue;
-        if (strcmp(entry->key, key) == 0) return entry;
+        if (!entry->occupied)
+            return NULL;
+        if (entry->deleted)
+            continue;
+        if (strcmp(entry->key, key) == 0)
+            return entry;
     }
     return NULL;
 }
 
 scored_completions* cache_get(query_cache* cache, const char* prefix) {
-    if (!cache || !prefix) return NULL;
+    if (!cache || !prefix)
+        return NULL;
 
     pthread_mutex_lock(&cache->lock);
 
@@ -150,7 +162,7 @@ scored_completions* cache_get(query_cache* cache, const char* prefix) {
 
     /* Check TTL */
     uint64_t now = now_seconds();
-    if ((int)(now - entry->timestamp) > cache->ttl_seconds) {
+    if ((int) (now - entry->timestamp) > cache->ttl_seconds) {
         free_entry_value(entry);
         entry->occupied = false;
         entry->deleted = false;
@@ -168,7 +180,8 @@ scored_completions* cache_get(query_cache* cache, const char* prefix) {
 }
 
 void cache_put(query_cache* cache, const char* prefix, const scored_completions* sc) {
-    if (!cache || !prefix || !sc) return;
+    if (!cache || !prefix || !sc)
+        return;
 
     pthread_mutex_lock(&cache->lock);
 
@@ -227,7 +240,8 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
 }
 
 void cache_clear(query_cache* cache) {
-    if (!cache) return;
+    if (!cache)
+        return;
 
     pthread_mutex_lock(&cache->lock);
 
@@ -247,7 +261,8 @@ void cache_clear(query_cache* cache) {
 
 cache_stats cache_get_stats(const query_cache* cache) {
     cache_stats s = {0};
-    if (!cache) return s;
+    if (!cache)
+        return s;
     s.entries = cache->count;
     s.max_entries = cache->capacity;
     s.ttl_seconds = cache->ttl_seconds;

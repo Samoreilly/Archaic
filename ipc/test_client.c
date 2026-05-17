@@ -64,7 +64,7 @@ int main(int argc, char* argv[]) {
             rc = 1;
             goto done;
         }
-        uint32_t limit = argc > 3 ? (uint32_t)atoi(argv[3]) : 10;
+        uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
         ipc_completions_resp resp;
         rc = ipc_client_complete(client, argv[2], limit, &resp);
         if (rc == 0) {
@@ -93,15 +93,15 @@ int main(int argc, char* argv[]) {
             rc = 1;
             goto done;
         }
-        uint32_t limit = argc > 3 ? (uint32_t)atoi(argv[3]) : 10;
+        uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
         ipc_completions_resp resp;
         rc = ipc_client_complete(client, argv[2], limit, &resp);
         if (rc == 0) {
             printf("Found %u completions:\n", resp.count);
             for (uint32_t i = 0; i < resp.count; i++) {
-                printf("  [%d] score=%.4f freq=%lu dir=%s  %s\n",
-                       i, resp.scores[i], (unsigned long)resp.freqs[i],
-                       resp.is_dirs[i] ? "yes" : "no", resp.paths[i]);
+                printf("  [%d] score=%.4f freq=%lu dir=%s  %s\n", i, resp.scores[i],
+                       (unsigned long) resp.freqs[i], resp.is_dirs[i] ? "yes" : "no",
+                       resp.paths[i]);
             }
         } else {
             fprintf(stderr, "Completions failed\n");
@@ -129,7 +129,7 @@ int main(int argc, char* argv[]) {
         uint64_t uptime_ms = 0;
         rc = ipc_client_ping(client, &uptime_ms);
         if (rc == 0) {
-            printf("PONG: uptime=%lu ms\n", (unsigned long)uptime_ms);
+            printf("PONG: uptime=%lu ms\n", (unsigned long) uptime_ms);
         } else {
             fprintf(stderr, "Ping failed\n");
         }
@@ -137,12 +137,12 @@ int main(int argc, char* argv[]) {
         ipc_metrics_resp resp;
         rc = ipc_client_metrics(client, &resp);
         if (rc == 0) {
-            printf("queries_total:       %lu\n", (unsigned long)resp.queries_total);
-            printf("completions_total:   %lu\n", (unsigned long)resp.completions_total);
-            printf("scans_total:         %lu\n", (unsigned long)resp.scans_total);
-            printf("errors_total:        %lu\n", (unsigned long)resp.errors_total);
-            printf("cache_hits:          %lu\n", (unsigned long)resp.cache_hits);
-            printf("cache_misses:        %lu\n", (unsigned long)resp.cache_misses);
+            printf("queries_total:       %lu\n", (unsigned long) resp.queries_total);
+            printf("completions_total:   %lu\n", (unsigned long) resp.completions_total);
+            printf("scans_total:         %lu\n", (unsigned long) resp.scans_total);
+            printf("errors_total:        %lu\n", (unsigned long) resp.errors_total);
+            printf("cache_hits:          %lu\n", (unsigned long) resp.cache_hits);
+            printf("cache_misses:        %lu\n", (unsigned long) resp.cache_misses);
             printf("query_latency_avg_ms: %.3f\n", resp.query_latency_avg_ms);
         } else {
             fprintf(stderr, "Metrics failed\n");
@@ -152,7 +152,7 @@ int main(int argc, char* argv[]) {
         rc = ipc_client_scan_status(client, &resp);
         if (rc == 0) {
             printf("scanning: %s\n", resp.scanning ? "yes" : "no");
-            printf("buckets: %lu\n", (unsigned long)resp.buckets_so_far);
+            printf("buckets: %lu\n", (unsigned long) resp.buckets_so_far);
         } else {
             fprintf(stderr, "Scan status failed\n");
         }
@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
             rc = 1;
             goto done;
         }
-        uint32_t limit = argc > 3 ? (uint32_t)atoi(argv[3]) : 20;
+        uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 20;
         ipc_completions_resp resp;
         rc = ipc_client_fuzzy(client, argv[2], limit, &resp);
         if (rc == 0) {

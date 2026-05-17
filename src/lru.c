@@ -31,12 +31,10 @@ node* create_node(t_bucket_store* lfu, t_bucket* bucket) {
     return nde;
 }
 
-
-
 /*
     If node of bucket exists, move to front otherwise
     create node(bucket) and move to back
-    
+
     This will be used for HOT buckets
     e.g. user enters a file (high chance of it being used again)
 */
@@ -127,9 +125,9 @@ t_bucket* remove_last(t_bucket_store* lfu) {
     If node of bucket exists, move to back otherwise
     create node(bucket) and move to back
 
-    This will only be used when a bucket is not HOT 
+    This will only be used when a bucket is not HOT
     e.g. my background folder/file scanner
-    
+
 */
 t_bucket* create_or_to_back(t_bucket_store* lfu, t_bucket* bucket) {
     node* parent = lfu->parent;
@@ -205,8 +203,6 @@ void to_front(t_bucket_store* lfu, node* new_node) {
     parent->next = new_node;
 }
 
-
-
 /*
    Auxilliary methods
 */
@@ -228,28 +224,3 @@ node* traverse_nodes(t_bucket_store* lfu, t_bucket* bucket) {
 
     return NULL;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

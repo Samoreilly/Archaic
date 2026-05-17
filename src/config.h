@@ -1,7 +1,7 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
 
 #define CONFIG_MAX_STRING 4096
 #define CONFIG_MAX_COMMANDS 32
@@ -13,7 +13,7 @@ typedef struct {
     int scan_threads;
     int max_depth;
     int rescan_interval_seconds;
-    int log_level;  /* 0=debug, 1=info, 2=warn, 3=error */
+    int log_level; /* 0=debug, 1=info, 2=warn, 3=error */
 } config_daemon;
 
 typedef struct {
@@ -46,8 +46,8 @@ typedef struct {
    Missing keys use defaults. */
 int config_load(archaic_config* cfg, const char* path);
 
-/* Load config from search paths: $ARCHAIC_CONFIG, ~/.config/archaic/config.toml, /etc/archaic/config.toml.
-   Returns 0 if any file found and parsed, -1 if none found. */
+/* Load config from search paths: $ARCHAIC_CONFIG, ~/.config/archaic/config.toml,
+   /etc/archaic/config.toml. Returns 0 if any file found and parsed, -1 if none found. */
 int config_load_default(archaic_config* cfg);
 
 /* Initialize config with defaults (no file parsing). */

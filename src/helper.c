@@ -19,17 +19,17 @@
  *   quit / exit                 - Terminate helper
  */
 
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <errno.h>
+#include <unistd.h>
 
-#include "ipc/protocol.h"
 #include "config.h"
+#include "ipc/protocol.h"
 
 /* ------------------------------------------------------------------ */
 /* Signal handling                                                     */
@@ -38,7 +38,7 @@
 static volatile sig_atomic_t running = 1;
 
 static void handle_signal(int sig) {
-    (void)sig;
+    (void) sig;
     running = 0;
 }
 
@@ -70,9 +70,8 @@ static int helper_connect(helper_conn* conn) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, conn->sock_path, sizeof(addr.sun_path) - 1);
 
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        fprintf(stderr, "helper: connect(%s) failed: %s\n",
-                conn->sock_path, strerror(errno));
+    if (connect(fd, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
+        fprintf(stderr, "helper: connect(%s) failed: %s\n", conn->sock_path, strerror(errno));
         close(fd);
         return -1;
     }
@@ -90,7 +89,8 @@ static void helper_disconnect(helper_conn* conn) {
 }
 
 static int helper_ensure_connected(helper_conn* conn) {
-    if (conn->fd >= 0) return 0;
+    if (conn->fd >= 0)
+        return 0;
     return helper_connect(conn);
 }
 
@@ -101,9 +101,10 @@ static int helper_ensure_connected(helper_conn* conn) {
 static int read_exact(int fd, void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = read(fd, (char*)buf + total, len - total);
-        if (n <= 0) return -1;
-        total += (size_t)n;
+        ssize_t n = read(fd, (char*) buf + total, len - total);
+        if (n <= 0)
+            return -1;
+        total += (size_t) n;
     }
     return 0;
 }
@@ -111,31 +112,36 @@ static int read_exact(int fd, void* buf, size_t len) {
 static int write_exact(int fd, const void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = write(fd, (const char*)buf + total, len - total);
-        if (n <= 0) return -1;
-        total += (size_t)n;
+        ssize_t n = write(fd, (const char*) buf + total, len - total);
+        if (n <= 0)
+            return -1;
+        total += (size_t) n;
     }
     return 0;
 }
 
-static int send_request(helper_conn* conn, uint32_t type,
-                        const void* payload, size_t len) {
+static int send_request(helper_conn* conn, uint32_t type, const void* payload, size_t len) {
     ipc_header hdr;
-    ipc_write_header(&hdr, type, (uint32_t)len, conn->req_id++);
-    if (write_exact(conn->fd, &hdr, sizeof(hdr)) < 0) return -1;
+    ipc_write_header(&hdr, type, (uint32_t) len, conn->req_id++);
+    if (write_exact(conn->fd, &hdr, sizeof(hdr)) < 0)
+        return -1;
     if (payload && len > 0) {
-        if (write_exact(conn->fd, payload, len) < 0) return -1;
+        if (write_exact(conn->fd, payload, len) < 0)
+            return -1;
     }
     return 0;
 }
 
-static int recv_response(helper_conn* conn, ipc_header* hdr,
-                         void* payload, size_t max_len) {
-    if (read_exact(conn->fd, hdr, sizeof(*hdr)) < 0) return -1;
-    if (!ipc_validate_header(hdr)) return -1;
-    if (hdr->payload_len > max_len) return -1;
+static int recv_response(helper_conn* conn, ipc_header* hdr, void* payload, size_t max_len) {
+    if (read_exact(conn->fd, hdr, sizeof(*hdr)) < 0)
+        return -1;
+    if (!ipc_validate_header(hdr))
+        return -1;
+    if (hdr->payload_len > max_len)
+        return -1;
     if (hdr->payload_len > 0) {
-        if (read_exact(conn->fd, payload, hdr->payload_len) < 0) return -1;
+        if (read_exact(conn->fd, payload, hdr->payload_len) < 0)
+            return -1;
     }
     return 0;
 }
@@ -145,7 +151,8 @@ static int recv_response(helper_conn* conn, ipc_header* hdr,
 /* ------------------------------------------------------------------ */
 
 static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
@@ -178,7 +185,8 @@ static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit) {
 }
 
 static int cmd_suggest(helper_conn* conn, const char* prefix) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     ipc_suggest_req req;
     memset(&req, 0, sizeof(req));
@@ -208,7 +216,8 @@ static int cmd_suggest(helper_conn* conn, const char* prefix) {
 }
 
 static int cmd_query(helper_conn* conn, const char* cwd, const char* input) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     ipc_query_req req;
     memset(&req, 0, sizeof(req));
@@ -239,7 +248,8 @@ static int cmd_query(helper_conn* conn, const char* cwd, const char* input) {
 }
 
 static int cmd_ping(helper_conn* conn) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     if (send_request(conn, IPC_MSG_PING, NULL, 0) < 0) {
         helper_disconnect(conn);
@@ -254,7 +264,7 @@ static int cmd_ping(helper_conn* conn) {
     }
 
     if (hdr.msg_type == IPC_MSG_PONG) {
-        printf("%lu\n", (unsigned long)resp.uptime_ms);
+        printf("%lu\n", (unsigned long) resp.uptime_ms);
     } else if (hdr.msg_type == IPC_MSG_ERROR) {
         ipc_error_resp err;
         memcpy(&err, &resp, sizeof(err));
@@ -265,7 +275,8 @@ static int cmd_ping(helper_conn* conn) {
 }
 
 static int cmd_metrics(helper_conn* conn) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     if (send_request(conn, IPC_MSG_METRICS, NULL, 0) < 0) {
         helper_disconnect(conn);
@@ -280,12 +291,12 @@ static int cmd_metrics(helper_conn* conn) {
     }
 
     if (hdr.msg_type == IPC_MSG_METRICS_RESP) {
-        printf("queries_total=%lu\n", (unsigned long)resp.queries_total);
-        printf("completions_total=%lu\n", (unsigned long)resp.completions_total);
-        printf("scans_total=%lu\n", (unsigned long)resp.scans_total);
-        printf("errors_total=%lu\n", (unsigned long)resp.errors_total);
-        printf("cache_hits=%lu\n", (unsigned long)resp.cache_hits);
-        printf("cache_misses=%lu\n", (unsigned long)resp.cache_misses);
+        printf("queries_total=%lu\n", (unsigned long) resp.queries_total);
+        printf("completions_total=%lu\n", (unsigned long) resp.completions_total);
+        printf("scans_total=%lu\n", (unsigned long) resp.scans_total);
+        printf("errors_total=%lu\n", (unsigned long) resp.errors_total);
+        printf("cache_hits=%lu\n", (unsigned long) resp.cache_hits);
+        printf("cache_misses=%lu\n", (unsigned long) resp.cache_misses);
         printf("query_latency_avg_ms=%.2f\n", resp.query_latency_avg_ms);
     } else if (hdr.msg_type == IPC_MSG_ERROR) {
         ipc_error_resp err;
@@ -297,7 +308,8 @@ static int cmd_metrics(helper_conn* conn) {
 }
 
 static int cmd_scan_status(helper_conn* conn) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     if (send_request(conn, IPC_MSG_SCAN_STATUS, NULL, 0) < 0) {
         helper_disconnect(conn);
@@ -312,8 +324,8 @@ static int cmd_scan_status(helper_conn* conn) {
     }
 
     if (hdr.msg_type == IPC_MSG_SCAN_STATUS_RESP) {
-        printf("scanning %d buckets_so_far=%lu\n",
-               resp.scanning, (unsigned long)resp.buckets_so_far);
+        printf("scanning %d buckets_so_far=%lu\n", resp.scanning,
+               (unsigned long) resp.buckets_so_far);
     } else if (hdr.msg_type == IPC_MSG_ERROR) {
         ipc_error_resp err;
         memcpy(&err, &resp, sizeof(err));
@@ -324,7 +336,8 @@ static int cmd_scan_status(helper_conn* conn) {
 }
 
 static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
-    if (helper_ensure_connected(conn) < 0) return -1;
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
 
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
@@ -385,11 +398,13 @@ int main(int argc, char* argv[]) {
     while (running && fgets(line, sizeof(line), stdin)) {
         /* Strip trailing newline */
         line[strcspn(line, "\r\n")] = '\0';
-        if (line[0] == '\0') continue;
+        if (line[0] == '\0')
+            continue;
 
         /* Parse command name */
         char cmd[64] = {0};
-        if (sscanf(line, "%63s", cmd) < 1) continue;
+        if (sscanf(line, "%63s", cmd) < 1)
+            continue;
 
         int rc = -1;
 
@@ -412,9 +427,12 @@ int main(int argc, char* argv[]) {
             if (sscanf(line, "%*s %4095s", cwd) == 1) {
                 /* Find the input after "query <cwd> " */
                 const char* p = line + 5; /* skip "query" */
-                while (*p == ' ') p++;
-                while (*p && *p != ' ') p++; /* skip cwd */
-                while (*p == ' ') p++;
+                while (*p == ' ')
+                    p++;
+                while (*p && *p != ' ')
+                    p++; /* skip cwd */
+                while (*p == ' ')
+                    p++;
                 if (*p) {
                     strncpy(input, p, sizeof(input) - 1);
                 }

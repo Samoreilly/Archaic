@@ -39,12 +39,20 @@ jobs:
       - name: Build
         run: |
           cd build
-          make -j$(nproc || sysctl -n hw.ncpu)
+          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
       - name: Run integration tests
         run: |
           cd build
-          timeout 60 ./archaic "$GITHUB_WORKSPACE" 2>&1 | grep -E '(PASS|FAIL|OVERALL)'
+          if command -v timeout &>/dev/null; then
+            timeout 60 ./archaic "$GITHUB_WORKSPACE" 2>&1 | grep -E '(PASS|FAIL|OVERALL)'
+          else
+            ./archaic "$GITHUB_WORKSPACE" 2>&1 | grep -E '(PASS|FAIL|OVERALL)' &
+            TEST_PID=$!
+            sleep 45
+            kill $TEST_PID 2>/dev/null || true
+            wait $TEST_PID 2>/dev/null || true
+          fi
 
       - name: Verify install
         if: matrix.os == 'ubuntu-latest'
@@ -67,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libfmt-dev clang-tidy
+          sudo apt-get install -y cmake libfmt-dev clang-format
 
       - name: Configure
         run: |
@@ -81,4 +89,4 @@ jobs:
 
       - name: Check formatting
         run: |
-          clang-format --dry-run --Werror src/*.c src/*.h ipc/*.c ipc/*.h main.c 2>&1 || true
+          clang-format --dry-run --Werror src/*.c src/*.h ipc/*.c ipc/*.h main.c

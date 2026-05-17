@@ -1,7 +1,7 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #define IPC_SOCK_PATH "/tmp/archaic-daemon.sock"
 #define IPC_MAX_PAYLOAD 262144
@@ -141,13 +141,16 @@ static inline void ipc_write_header(ipc_header* hdr, uint32_t type, uint32_t len
 }
 
 static inline uint16_t ipc_header_version(const ipc_header* hdr) {
-    return (uint16_t)(hdr->magic & 0xFFFF);
+    return (uint16_t) (hdr->magic & 0xFFFF);
 }
 
 static inline int ipc_validate_header(const ipc_header* hdr) {
-    if ((hdr->magic >> 16) != IPC_MAGIC_PREFIX) return 0;
+    if ((hdr->magic >> 16) != IPC_MAGIC_PREFIX)
+        return 0;
     uint16_t ver = ipc_header_version(hdr);
-    if (ver < 1 || ver > IPC_PROTOCOL_VERSION) return 0;
-    if (hdr->payload_len >= IPC_MAX_PAYLOAD) return 0;
+    if (ver < 1 || ver > IPC_PROTOCOL_VERSION)
+        return 0;
+    if (hdr->payload_len >= IPC_MAX_PAYLOAD)
+        return 0;
     return 1;
 }

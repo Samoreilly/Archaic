@@ -60,10 +60,10 @@ typedef struct {
 /*
    Scoring weights (sum to 1.0)
 */
-#define SCORE_WEIGHT_FREQ     0.40
-#define SCORE_WEIGHT_RECENCY  0.30
-#define SCORE_WEIGHT_DEPTH    0.20
-#define SCORE_WEIGHT_TYPE     0.10
+#define SCORE_WEIGHT_FREQ 0.40
+#define SCORE_WEIGHT_RECENCY 0.30
+#define SCORE_WEIGHT_DEPTH 0.20
+#define SCORE_WEIGHT_TYPE 0.10
 
 completions* completions_create(size_t capacity);
 void completions_free(completions* c);
@@ -71,6 +71,7 @@ void completions_collect(Trie* root, const char* prefix, completions* out);
 
 scored_completions* scored_completions_create(size_t capacity);
 void scored_completions_free(scored_completions* sc);
-void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out, uint64_t now);
+void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out,
+                                uint64_t now);
 
 int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity);

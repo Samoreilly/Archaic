@@ -132,6 +132,11 @@ static void* scanner_worker(void* arg) {
             store_lock(scanner->lfu);
             t_bucket* bucket = find_bucket(scanner->lfu, child_path, child_path, 3, false);
             if (bucket) {
+                if (bucket->dir_count >= scanner->lfu->max_nodes_per_bucket) {
+                    trie_unlock(bucket);
+                    store_unlock(scanner->lfu);
+                    continue;
+                }
                 trie_lock(bucket);
                 if (entries[i].is_dir) {
                     size_t path_len = strlen(child_path);
@@ -144,6 +149,7 @@ static void* scanner_worker(void* arg) {
                     insert(bucket->dir_trie, child_path);
                 }
                 bucket->dir_count++;
+                atomic_fetch_add(&scanner->lfu->total_nodes, 1);
                 trie_unlock(bucket);
             }
             store_unlock(scanner->lfu);

@@ -29,6 +29,12 @@ typedef struct t_bucket_store {
 
     pthread_mutex_t store_lock;
 
+    /* Safety limits */
+    size_t max_buckets;
+    size_t max_nodes_per_bucket;
+    atomic_size_t total_nodes;
+    atomic_size_t estimated_memory_bytes;
+
     struct node* parent;
     struct node* by_id[BUCKETS];
     size_t lru_size;
@@ -89,3 +95,5 @@ static inline void store_unlock(t_bucket_store* store) {
 
 void remove_char(char* str, int s_index);
 void add_char(char* str, char c, int s_index);
+
+void update_memory_estimate(t_bucket_store* store);

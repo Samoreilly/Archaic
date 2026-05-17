@@ -330,3 +330,12 @@ void free_path_validation(path_validation* result) {
     result->is_dir = false;
     result->is_file = false;
 }
+
+void update_memory_estimate(t_bucket_store* store) {
+    if (!store) return;
+    size_t est = 0;
+    est += store->right_index * sizeof(t_bucket);
+    est += store->right_index * sizeof(t_bucket*);
+    est += atomic_load(&store->total_nodes) * 200;
+    atomic_store(&store->estimated_memory_bytes, est);
+}

@@ -312,9 +312,15 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
     store_lock(store);
     t_bucket* bucket = find_bucket(store, validation.full_path, validation.full_path, 3, false);
     if (bucket) {
+        if (bucket->dir_count >= store->max_nodes_per_bucket) {
+            trie_unlock(bucket);
+            store_unlock(store);
+            return validation;
+        }
         trie_lock(bucket);
         insert(bucket->dir_trie, validation.full_path);
         bucket->dir_count++;
+        atomic_fetch_add(&store->total_nodes, 1);
         trie_unlock(bucket);
     }
     store_unlock(store);
@@ -345,6 +351,11 @@ daemon_state* daemon_init(void) {
 
     state->parent->is_parent = true;
     state->store->parent = state->parent;
+
+    state->store->max_buckets = BUCKETS;
+    state->store->max_nodes_per_bucket = 100000;
+    atomic_store(&state->store->total_nodes, 0);
+    atomic_store(&state->store->estimated_memory_bytes, 0);
 
     parallel_scanner_init(&state->scanner, state->store, state->parent, 10, 4);
 
@@ -435,6 +446,7 @@ static void* scan_thread_func(void* arg) {
     atomic_store(&state->scan_bucket_count, state->store->right_index);
     atomic_store(&state->scanning, false);
 
+    update_memory_estimate(state->store);
     if (state->cache) cache_clear(state->cache);
 
     free((char*)path);

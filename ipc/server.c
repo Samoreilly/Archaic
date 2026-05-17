@@ -240,6 +240,38 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
     write_exact(fd, &resp, sizeof(resp));
 }
 
+static void handle_recent(ipc_server* srv, int fd, uint32_t req_id, const ipc_recent_req* req) {
+    ipc_header hdr;
+    ipc_recent_resp resp;
+    resp.count = 0;
+    memset(resp.paths, 0, sizeof(resp.paths));
+    memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
+
+    uint32_t limit = req->limit > 0 && req->limit <= 50 ? req->limit : 50;
+    char* paths[50];
+    for (int i = 0; i < 50; i++) {
+        paths[i] = malloc(4096);
+    }
+    bool is_dirs[50];
+
+    int count = daemon_get_recent_files(srv->daemon, paths, is_dirs, (int) limit);
+
+    resp.count = count < 50 ? (uint32_t) count : 50;
+    for (uint32_t i = 0; i < resp.count; i++) {
+        strncpy(resp.paths[i], paths[i], sizeof(resp.paths[i]) - 1);
+        resp.paths[i][sizeof(resp.paths[i]) - 1] = '\0';
+        resp.is_dirs[i] = is_dirs[i] ? 1 : 0;
+    }
+
+    for (int i = 0; i < 50; i++) {
+        free(paths[i]);
+    }
+
+    ipc_write_header(&hdr, IPC_MSG_RECENT_RESP, sizeof(resp), req_id);
+    write_exact(fd, &hdr, sizeof(hdr));
+    write_exact(fd, &resp, sizeof(resp));
+}
+
 static void handle_ping(ipc_server* srv, int fd, uint32_t req_id) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -433,6 +465,15 @@ static void handle_client(ipc_server* srv, int fd) {
                 break;
             }
             handle_fuzzy_complete(srv, fd, hdr.request_id, &req);
+            break;
+        }
+        case IPC_MSG_RECENT: {
+            ipc_recent_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid recent payload");
+                break;
+            }
+            handle_recent(srv, fd, hdr.request_id, &req);
             break;
         }
         default:

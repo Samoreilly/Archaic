@@ -3,6 +3,7 @@
 #include "../cache.h"
 #include "../config.h"
 #include "../metrics.h"
+#include "../recent-files.h"
 #include "../scanner.h"
 #include "../threadmanager.h"
 #include "../trie-storage.h"
@@ -38,6 +39,7 @@ typedef struct {
     pthread_t rescan_timer_thread;
     atomic_bool rescan_timer_running;
     atomic_bool config_reload_requested;
+    recent_files recent;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);
@@ -67,5 +69,9 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
 void daemon_release_scored(daemon_state* state, scored_result result);
 
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit);
+
+int daemon_get_recent_files(daemon_state* state, char** paths, bool* is_dirs, int n);
+
+void daemon_touch_recent(daemon_state* state, const char* path, bool is_dir);
 
 int daemon_start_ipc(daemon_state* state, const char* sock_path);

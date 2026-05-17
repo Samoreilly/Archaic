@@ -29,6 +29,7 @@ typedef enum {
     IPC_MSG_METRICS = 8,
     IPC_MSG_SCAN_STATUS = 9,
     IPC_MSG_FUZZY_COMPLETE = 10,
+    IPC_MSG_RECENT = 11,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
@@ -39,6 +40,7 @@ typedef enum {
     IPC_MSG_METRICS_RESP = 106,
     IPC_MSG_SCAN_STATUS_RESP = 107,
     IPC_MSG_FUZZY_COMPLETIONS = 108,
+    IPC_MSG_RECENT_RESP = 109,
 } ipc_msg_type;
 
 /*
@@ -137,6 +139,16 @@ typedef struct {
     uint32_t project_count;
     ipc_project_info projects[MAX_PROJECTS];
 } __attribute__((packed)) ipc_scan_status_resp;
+
+typedef struct {
+    uint32_t limit;
+} __attribute__((packed)) ipc_recent_req;
+
+typedef struct {
+    uint32_t count;
+    char paths[50][4096];
+    uint32_t is_dirs[50];
+} __attribute__((packed)) ipc_recent_resp;
 
 /*
     Serialization helpers

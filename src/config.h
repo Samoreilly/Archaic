@@ -20,10 +20,12 @@ typedef struct {
 } config_daemon;
 
 typedef struct {
-    int max_buckets;
-    int max_nodes_per_bucket;
-    int cache_max_entries;
-    int cache_ttl_seconds;
+    uint32_t max_buckets;
+    uint32_t max_nodes_per_bucket;
+    uint32_t cache_max_entries;
+    uint32_t cache_ttl_seconds;
+    bool colored_output;
+    uint32_t recent_files_capacity;
 } config_storage;
 
 typedef struct {

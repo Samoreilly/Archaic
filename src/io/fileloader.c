@@ -499,6 +499,8 @@ daemon_state* daemon_init(void) {
 
     state->cache = cache_create(cfg.storage.cache_max_entries, cfg.storage.cache_ttl_seconds);
 
+    recent_files_init(&state->recent, (int) cfg.storage.recent_files_capacity);
+
     state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
     atomic_store(&state->config_reload_requested, false);
@@ -903,10 +905,22 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
     for (int j = 0; j < bucket_cap; j++) {
         free(bucket_paths[j]);
     }
-    free(bucket_paths);
     free(bucket_is_dirs);
+    free(bucket_paths);
     free(snapshot);
     return out;
+}
+
+int daemon_get_recent_files(daemon_state* state, char** paths, bool* is_dirs, int n) {
+    if (!state || !paths || !is_dirs || n <= 0)
+        return 0;
+    return recent_files_get(&state->recent, paths, is_dirs, n);
+}
+
+void daemon_touch_recent(daemon_state* state, const char* path, bool is_dir) {
+    if (!state || !path)
+        return;
+    recent_files_touch(&state->recent, path, is_dir);
 }
 
 int daemon_start_ipc(daemon_state* state, const char* sock_path) {

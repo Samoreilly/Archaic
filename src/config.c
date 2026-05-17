@@ -76,6 +76,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->storage.max_nodes_per_bucket = 100000;
     cfg->storage.cache_max_entries = 1024;
     cfg->storage.cache_ttl_seconds = 2;
+    cfg->storage.recent_files_capacity = 50;
 
     cfg->scoring.weight_frequency = 0.40;
     cfg->scoring.weight_recency = 0.30;
@@ -327,6 +328,7 @@ static const field_map storage_map[] = {
     {"max_nodes_per_bucket", TYPE_INT, FOFFSET(storage, max_nodes_per_bucket)},
     {"cache_max_entries", TYPE_INT, FOFFSET(storage, cache_max_entries)},
     {"cache_ttl_seconds", TYPE_INT, FOFFSET(storage, cache_ttl_seconds)},
+    {"recent_files_capacity", TYPE_INT, FOFFSET(storage, recent_files_capacity)},
 };
 
 static const field_map scoring_map[] = {

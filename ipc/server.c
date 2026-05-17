@@ -10,6 +10,7 @@
 #include <errno.h>
 #include "../src/threadpool.h"
 #include "../src/metrics.h"
+#include "../src/io/fileloader.h"
 
 struct ipc_server {
     daemon_state* daemon;
@@ -199,6 +200,19 @@ static void handle_metrics(ipc_server* srv, int fd, uint32_t req_id) {
     write_exact(fd, &resp, sizeof(resp));
 }
 
+static void handle_scan_status(ipc_server* srv, int fd, uint32_t req_id) {
+    scan_status s = daemon_scan_status(srv->daemon);
+
+    ipc_header hdr;
+    ipc_scan_status_resp resp;
+    resp.scanning = s.scanning ? 1 : 0;
+    resp.buckets_so_far = s.buckets_so_far;
+
+    ipc_write_header(&hdr, IPC_MSG_SCAN_STATUS_RESP, sizeof(resp), req_id);
+    write_exact(fd, &hdr, sizeof(hdr));
+    write_exact(fd, &resp, sizeof(resp));
+}
+
 static void handle_client(ipc_server* srv, int fd) {
     ipc_header hdr;
 
@@ -282,6 +296,10 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_METRICS: {
             handle_metrics(srv, fd, hdr.request_id);
+            break;
+        }
+        case IPC_MSG_SCAN_STATUS: {
+            handle_scan_status(srv, fd, hdr.request_id);
             break;
         }
         default:

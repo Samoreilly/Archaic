@@ -27,6 +27,7 @@ typedef enum {
     IPC_MSG_SAVE = 6,
     IPC_MSG_PING = 7,
     IPC_MSG_METRICS = 8,
+    IPC_MSG_SCAN_STATUS = 9,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
@@ -35,6 +36,7 @@ typedef enum {
     IPC_MSG_SUGGESTION = 104,
     IPC_MSG_PONG = 105,
     IPC_MSG_METRICS_RESP = 106,
+    IPC_MSG_SCAN_STATUS_RESP = 107,
 } ipc_msg_type;
 
 /*
@@ -116,6 +118,11 @@ typedef struct {
     uint64_t cache_misses;
     double query_latency_avg_ms;
 } __attribute__((packed)) ipc_metrics_resp;
+
+typedef struct {
+    int32_t scanning;
+    uint64_t buckets_so_far;
+} __attribute__((packed)) ipc_scan_status_resp;
 
 /*
     Serialization helpers

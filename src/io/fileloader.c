@@ -104,6 +104,11 @@ void daemon_shutdown(daemon_state* state) {
         state->ipc = NULL;
     }
 
+    /* Wait for background scan to finish */
+    if (atomic_load(&state->scanning)) {
+        pthread_join(state->scan_thread, NULL);
+    }
+
     parallel_scanner_stop(&state->scanner);
     if (state->scanner.queue) {
         pthread_mutex_destroy(&state->scanner.queue->queue_lock);
@@ -129,17 +134,59 @@ void daemon_shutdown(daemon_state* state) {
     free(state);
 }
 
-void daemon_run_scan(daemon_state* state, const char* path) {
-    if (!state || !path) {
-        return;
-    }
+typedef struct {
+    daemon_state* state;
+    char* path;
+} scan_thread_ctx;
+
+static void* scan_thread_func(void* arg) {
+    scan_thread_ctx* ctx = (scan_thread_ctx*)arg;
+    daemon_state* state = ctx->state;
+    char* path = ctx->path;
+    free(ctx);
+
+    atomic_store(&state->scanning, true);
+    atomic_store(&state->scan_bucket_count, 0);
 
     metrics_record_scan(&state->metrics);
 
-    char* norm = normalise_dir(path);
-    parallel_scanner_start(&state->scanner, norm);
+    parallel_scanner_start(&state->scanner, path);
     parallel_scanner_wait(&state->scanner);
-    free(norm);
+
+    atomic_store(&state->scan_bucket_count, state->store->right_index);
+    atomic_store(&state->scanning, false);
+
+    free((char*)path);
+    return NULL;
+}
+
+void daemon_run_scan(daemon_state* state, const char* path) {
+    if (!state || !path) return;
+
+    /* If a scan is already running, don't start another */
+    if (atomic_load(&state->scanning)) return;
+
+    scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
+    if (!ctx) return;
+    ctx->state = state;
+    ctx->path = strdup(path);
+    if (!ctx->path) { free(ctx); return; }
+
+    if (pthread_create(&state->scan_thread, NULL, scan_thread_func, ctx) != 0) {
+        free(ctx->path);
+        free(ctx);
+    }
+}
+
+scan_status daemon_scan_status(daemon_state* state) {
+    scan_status s = {0};
+    if (!state) return s;
+    s.scanning = atomic_load(&state->scanning);
+    s.buckets_so_far = atomic_load(&state->scan_bucket_count);
+    if (s.scanning && state->store) {
+        s.buckets_so_far = state->store->right_index;
+    }
+    return s;
 }
 
 path_validation daemon_process_query(daemon_state* state, const char* cwd, const char* input) {

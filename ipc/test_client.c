@@ -16,6 +16,7 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  suggest <prefix>\n");
         fprintf(stderr, "  ping\n");
         fprintf(stderr, "  metrics\n");
+        fprintf(stderr, "  scan-status\n");
         fprintf(stderr, "  shutdown\n");
         return 1;
     }
@@ -144,6 +145,15 @@ int main(int argc, char* argv[]) {
             printf("query_latency_avg_ms: %.3f\n", resp.query_latency_avg_ms);
         } else {
             fprintf(stderr, "Metrics failed\n");
+        }
+    } else if (strcmp(argv[1], "scan-status") == 0) {
+        ipc_scan_status_resp resp;
+        rc = ipc_client_scan_status(client, &resp);
+        if (rc == 0) {
+            printf("scanning: %s\n", resp.scanning ? "yes" : "no");
+            printf("buckets: %lu\n", (unsigned long)resp.buckets_so_far);
+        } else {
+            fprintf(stderr, "Scan status failed\n");
         }
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);

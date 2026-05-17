@@ -40,9 +40,9 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        printf("[daemon] scanning %s...\n", scan_path);
+        printf("[daemon] scanning %s (background)...\n", scan_path);
         daemon_run_scan(daemon, scan_path);
-        printf("[daemon] ready. %zu buckets loaded.\n", daemon->store->right_index);
+        printf("[daemon] ready for queries. scan running in background.\n");
         fflush(stdout);
 
         while (running) {

@@ -674,6 +674,12 @@ void test_main(void) {
     const char* base_path = test_scan_path ? test_scan_path : "/home/sam/samdev";
     printf("\n[Setup] Scanning: %s\n", base_path);
     daemon_run_scan(daemon, base_path);
+
+    /* Wait for scan thread to start, then wait for completion */
+    usleep(1000);
+    while (atomic_load(&daemon->scanning)) {
+        usleep(10000);
+    }
     printf("[Setup] Scan complete\n");
 
     int total = 0;

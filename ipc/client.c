@@ -181,3 +181,11 @@ int ipc_client_metrics(ipc_client* client, ipc_metrics_resp* out) {
     if (hdr.msg_type != IPC_MSG_METRICS_RESP) return -1;
     return 0;
 }
+
+int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out) {
+    ipc_header hdr;
+    if (send_request(client, IPC_MSG_SCAN_STATUS, NULL, 0) < 0) return -1;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0) return -1;
+    if (hdr.msg_type != IPC_MSG_SCAN_STATUS_RESP) return -1;
+    return 0;
+}

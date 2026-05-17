@@ -1,0 +1,23 @@
+[Unit]
+Description=Archaic Terminal Autocomplete Daemon (User)
+Documentation=https://github.com/Samoreilly/Archaic
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/archaic --daemon
+ExecReload=%h/.local/bin/archaic-cli scan
+ExecStop=%h/.local/bin/archaic-cli shutdown
+
+# Auto-restart configuration
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+RestartPreventExitStatus=SIGTERM SIGINT
+
+# Health check
+ExecStartPre=/bin/sleep 1
+
+[Install]
+WantedBy=default.target

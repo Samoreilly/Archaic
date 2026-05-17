@@ -8,10 +8,20 @@ Type=notify
 ExecStart=/usr/bin/archaic --daemon /home/%I/projects /tmp/archaic-daemon.sock
 ExecReload=/usr/bin/archaic-cli scan /home/%I/projects
 ExecStop=/usr/bin/archaic-cli shutdown
-Restart=on-failure
+
+# Auto-restart configuration
+Restart=always
 RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Health monitoring
 WatchdogSec=30
 NotifyAccess=all
+
+# Auto-start after crashes, but back off if failing repeatedly
+RestartPreventExitStatus=SIGTERM SIGINT
+
 User=%i
 
 # Security hardening

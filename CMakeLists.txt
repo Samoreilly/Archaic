@@ -88,6 +88,9 @@ install(FILES config.example.toml
 install(FILES archaic.service
     DESTINATION lib/systemd/system
 )
+install(FILES archaic-user.service
+    DESTINATION lib/systemd/user
+)
 
 # Install man pages
 install(FILES man/archaic.1 man/archaic-cli.1

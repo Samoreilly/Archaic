@@ -69,11 +69,13 @@ typedef struct {
 
 typedef struct {
     char prefix[4096];
+    char cwd[4096];
     uint32_t limit;
 } __attribute__((packed)) ipc_complete_req;
 
 typedef struct {
     char prefix[4096];
+    char cwd[4096];
 } __attribute__((packed)) ipc_suggest_req;
 
 typedef struct {

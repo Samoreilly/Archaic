@@ -12,8 +12,8 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Commands:\n");
         fprintf(stderr, "  scan <path>\n");
         fprintf(stderr, "  query <cwd> <input>\n");
-        fprintf(stderr, "  complete <prefix> [limit]\n");
-        fprintf(stderr, "  suggest <prefix>\n");
+        fprintf(stderr, "  complete <prefix> [limit] [cwd]\n");
+        fprintf(stderr, "  suggest <prefix> [cwd]\n");
         fprintf(stderr, "  ping\n");
         fprintf(stderr, "  metrics\n");
         fprintf(stderr, "  scan-status\n");
@@ -60,13 +60,14 @@ int main(int argc, char* argv[]) {
         }
     } else if (strcmp(argv[1], "complete") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "Usage: %s complete <prefix> [limit]\n", argv[0]);
+            fprintf(stderr, "Usage: %s complete <prefix> [limit] [cwd]\n", argv[0]);
             rc = 1;
             goto done;
         }
         uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
+        const char* cwd = argc > 4 ? argv[4] : "";
         ipc_completions_resp resp;
-        rc = ipc_client_complete(client, argv[2], limit, &resp);
+        rc = ipc_client_complete(client, argv[2], limit, cwd, &resp);
         if (rc == 0) {
             for (uint32_t i = 0; i < resp.count; i++) {
                 printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
@@ -76,12 +77,13 @@ int main(int argc, char* argv[]) {
         }
     } else if (strcmp(argv[1], "suggest") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "Usage: %s suggest <prefix>\n", argv[0]);
+            fprintf(stderr, "Usage: %s suggest <prefix> [cwd]\n", argv[0]);
             rc = 1;
             goto done;
         }
+        const char* suggest_cwd = argc > 3 ? argv[3] : "";
         ipc_suggestion_resp resp;
-        rc = ipc_client_suggest(client, argv[2], &resp);
+        rc = ipc_client_suggest(client, argv[2], suggest_cwd, &resp);
         if (rc == 0 && resp.path[0] != '\0') {
             printf("%s", resp.path);
         } else {
@@ -89,13 +91,14 @@ int main(int argc, char* argv[]) {
         }
     } else if (strcmp(argv[1], "complete-raw") == 0) {
         if (argc < 3) {
-            fprintf(stderr, "Usage: %s complete-raw <prefix> [limit]\n", argv[0]);
+            fprintf(stderr, "Usage: %s complete-raw <prefix> [limit] [cwd]\n", argv[0]);
             rc = 1;
             goto done;
         }
-        uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
+        uint32_t raw_limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
+        const char* raw_cwd = argc > 4 ? argv[4] : "";
         ipc_completions_resp resp;
-        rc = ipc_client_complete(client, argv[2], limit, &resp);
+        rc = ipc_client_complete(client, argv[2], raw_limit, raw_cwd, &resp);
         if (rc == 0) {
             printf("Found %u completions:\n", resp.count);
             for (uint32_t i = 0; i < resp.count; i++) {

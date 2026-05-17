@@ -37,6 +37,7 @@ typedef struct {
     int rescan_interval_seconds;
     pthread_t rescan_timer_thread;
     atomic_bool rescan_timer_running;
+    atomic_bool config_reload_requested;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);
@@ -62,7 +63,7 @@ typedef struct {
 } scored_result;
 
 scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit,
-                                            uint64_t now);
+                                            uint64_t now, const char* cwd);
 void daemon_release_scored(daemon_state* state, scored_result result);
 
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit);

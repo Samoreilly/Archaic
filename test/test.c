@@ -656,7 +656,7 @@ static bool test_ipc_e2e(daemon_state* daemon, const char* scan_root) {
     }
 
     ipc_completions_resp cresp;
-    if (ipc_client_complete(client, probe_file, 10, &cresp) == 0) {
+    if (ipc_client_complete(client, probe_file, 10, "", &cresp) == 0) {
         printf("  Completions: count=%u\n", cresp.count);
         if (cresp.count == 0)
             pass = false;

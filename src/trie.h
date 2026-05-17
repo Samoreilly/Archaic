@@ -62,8 +62,9 @@ typedef struct {
 */
 #define SCORE_WEIGHT_FREQ 0.40
 #define SCORE_WEIGHT_RECENCY 0.30
-#define SCORE_WEIGHT_DEPTH 0.20
+#define SCORE_WEIGHT_DEPTH 0.15
 #define SCORE_WEIGHT_TYPE 0.10
+#define SCORE_WEIGHT_CWD 0.05
 
 completions* completions_create(size_t capacity);
 void completions_free(completions* c);
@@ -72,6 +73,6 @@ void completions_collect(Trie* root, const char* prefix, completions* out);
 scored_completions* scored_completions_create(size_t capacity);
 void scored_completions_free(scored_completions* sc);
 void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out,
-                                uint64_t now);
+                                uint64_t now, const char* cwd);
 
 int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity);

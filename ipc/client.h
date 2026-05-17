@@ -32,14 +32,15 @@ int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
     Request completions for a prefix.
     Returns 0 on success.
 */
-int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit,
+int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, const char* cwd,
                         ipc_completions_resp* out);
 
 /*
     Get the single best suggestion for a prefix.
     Returns 0 on success.
 */
-int ipc_client_suggest(ipc_client* client, const char* prefix, ipc_suggestion_resp* out);
+int ipc_client_suggest(ipc_client* client, const char* prefix, const char* cwd,
+                       ipc_suggestion_resp* out);
 
 /*
     Send shutdown request. Returns 0 on success.

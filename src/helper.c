@@ -9,10 +9,10 @@
  *   archaic-helper [socket_path]
  *
  * Commands (one per line from stdin):
- *   complete <prefix> [limit]   - Path completions
- *   fuzzy <prefix> [limit]      - Fuzzy path completions
- *   suggest <prefix>            - Single best suggestion
- *   query <cwd> <input>         - Path validation
+ *   complete <prefix> [limit] [cwd] - Path completions (CWD boosts nearby paths)
+ *   fuzzy <prefix> [limit]          - Fuzzy path completions
+ *   suggest <prefix> [cwd]         - Single best suggestion
+ *   query <cwd> <input>            - Path validation
  *   ping                        - Daemon liveness check
  *   metrics                     - Daemon statistics
  *   scan-status                 - Scan progress
@@ -150,13 +150,14 @@ static int recv_response(helper_conn* conn, ipc_header* hdr, void* payload, size
 /* Command handlers                                                    */
 /* ------------------------------------------------------------------ */
 
-static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit) {
+static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, const char* cwd) {
     if (helper_ensure_connected(conn) < 0)
         return -1;
 
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
+    strncpy(req.cwd, cwd, sizeof(req.cwd) - 1);
     req.limit = limit;
 
     if (send_request(conn, IPC_MSG_COMPLETE, &req, sizeof(req)) < 0) {
@@ -184,13 +185,14 @@ static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit) {
     return 0;
 }
 
-static int cmd_suggest(helper_conn* conn, const char* prefix) {
+static int cmd_suggest(helper_conn* conn, const char* prefix, const char* cwd) {
     if (helper_ensure_connected(conn) < 0)
         return -1;
 
     ipc_suggest_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
+    strncpy(req.cwd, cwd, sizeof(req.cwd) - 1);
 
     if (send_request(conn, IPC_MSG_SUGGEST, &req, sizeof(req)) < 0) {
         helper_disconnect(conn);
@@ -410,15 +412,17 @@ int main(int argc, char* argv[]) {
 
         if (strcmp(cmd, "complete") == 0) {
             char prefix[4096] = {0};
+            char cwd_path[4096] = {0};
             uint32_t limit = 50;
-            int n = sscanf(line, "%*s %4095s %u", prefix, &limit);
+            int n = sscanf(line, "%*s %4095s %u %4095s", prefix, &limit, cwd_path);
             if (n >= 1) {
-                rc = cmd_complete(&conn, prefix, limit);
+                rc = cmd_complete(&conn, prefix, limit, cwd_path);
             }
         } else if (strcmp(cmd, "suggest") == 0) {
             char prefix[4096] = {0};
-            if (sscanf(line, "%*s %4095s", prefix) == 1) {
-                rc = cmd_suggest(&conn, prefix);
+            char cwd_path[4096] = {0};
+            if (sscanf(line, "%*s %4095s %4095s", prefix, cwd_path) >= 1) {
+                rc = cmd_suggest(&conn, prefix, cwd_path);
             }
         } else if (strcmp(cmd, "query") == 0) {
             char cwd[4096] = {0};

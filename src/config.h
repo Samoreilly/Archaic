@@ -30,6 +30,7 @@ typedef struct {
     double weight_recency;
     double weight_depth;
     double weight_type;
+    double weight_cwd_proximity;
 } config_scoring;
 
 typedef struct {

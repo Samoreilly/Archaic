@@ -487,6 +487,7 @@ daemon_state* daemon_init(void) {
 
     state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
+    atomic_store(&state->config_reload_requested, false);
     state->last_scan_path[0] = '\0';
 
     const char* state_path = "/tmp/archaic-state.bin";
@@ -740,7 +741,7 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
 }
 
 scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit,
-                                            uint64_t now) {
+                                            uint64_t now, const char* cwd) {
     scored_result empty = {NULL, false};
     if (!state || !state->store || !prefix) {
         return empty;
@@ -787,7 +788,7 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
             continue;
 
         trie_lock(bucket);
-        scored_completions_collect(bucket->dir_trie, prefix, out, now);
+        scored_completions_collect(bucket->dir_trie, prefix, out, now, cwd);
         trie_unlock(bucket);
         bucket_release(bucket);
     }

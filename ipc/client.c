@@ -145,11 +145,12 @@ int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
     return 0;
 }
 
-int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit,
+int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, const char* cwd,
                         ipc_completions_resp* out) {
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
+    strncpy(req.cwd, cwd, sizeof(req.cwd) - 1);
     req.limit = limit;
 
     if (send_request(client, IPC_MSG_COMPLETE, &req, sizeof(req)) < 0)
@@ -163,10 +164,12 @@ int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit,
     return 0;
 }
 
-int ipc_client_suggest(ipc_client* client, const char* prefix, ipc_suggestion_resp* out) {
+int ipc_client_suggest(ipc_client* client, const char* prefix, const char* cwd,
+                       ipc_suggestion_resp* out) {
     ipc_suggest_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
+    strncpy(req.cwd, cwd, sizeof(req.cwd) - 1);
 
     if (send_request(client, IPC_MSG_SUGGEST, &req, sizeof(req)) < 0)
         return -1;

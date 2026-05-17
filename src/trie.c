@@ -432,7 +432,7 @@ static int path_depth(const char* path) {
 }
 
 static double compute_score(const char* path, uint64_t freq, uint64_t last_access, bool is_dir,
-                            uint64_t now, int max_depth) {
+                            uint64_t now, int max_depth, const char* cwd) {
     double score = 0.0;
 
     /* Frequency: normalize to 0-1 range using log scale */
@@ -460,6 +460,21 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
 
     /* Type: files rank above directories */
     score += SCORE_WEIGHT_TYPE * (is_dir ? 0.0 : 1.0);
+
+    /* CWD proximity: paths closer to current working directory rank higher */
+    if (cwd && cwd[0] != '\0') {
+        size_t cwd_len = strlen(cwd);
+        size_t path_len = strlen(path);
+        if (path_len >= cwd_len && strncmp(path, cwd, cwd_len) == 0) {
+            int extra_dirs = 0;
+            for (size_t i = cwd_len; i < path_len; i++) {
+                if (path[i] == '/')
+                    extra_dirs++;
+            }
+            double cwd_norm = 1.0 / (1.0 + extra_dirs);
+            score += SCORE_WEIGHT_CWD * cwd_norm;
+        }
+    }
 
     return score;
 }
@@ -514,6 +529,7 @@ typedef struct {
     scored_completions* out;
     uint64_t now;
     int max_depth;
+    const char* cwd;
 } scored_dfs_ctx;
 
 static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
@@ -529,7 +545,7 @@ static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
             memcpy(full + plen, ctx->buffer, ctx->depth + 1);
 
             double score = compute_score(full, node->freq, node->last_access, node->is_dir,
-                                         ctx->now, ctx->max_depth);
+                                         ctx->now, ctx->max_depth, ctx->cwd);
             scored_insert(ctx->out, full, score, node->freq, node->last_access, node->is_dir);
         }
     }
@@ -561,7 +577,7 @@ static int cmp_score_desc(const void* a, const void* b) {
 }
 
 void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out,
-                                uint64_t now) {
+                                uint64_t now, const char* cwd) {
     if (!root || !out)
         return;
 
@@ -576,17 +592,15 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     ctx.out = out;
     ctx.now = now;
     ctx.max_depth = 0;
+    ctx.cwd = cwd;
 
-    /* Estimate max depth from prefix */
     ctx.max_depth = path_depth(prefix) + 10;
 
-    /* Check if the prefix node itself is a leaf */
-    /* Skip if prefix ends with / - user wants contents, not the dir itself */
     size_t prefix_len = strlen(prefix);
     int prefix_is_dir = (prefix_len > 0 && prefix[prefix_len - 1] == '/') ? 1 : 0;
     if (node->is_leaf && matched_in_node == 0 && !prefix_is_dir) {
-        double score =
-            compute_score(prefix, node->freq, node->last_access, node->is_dir, now, ctx.max_depth);
+        double score = compute_score(prefix, node->freq, node->last_access, node->is_dir, now,
+                                     ctx.max_depth, cwd);
         scored_insert(out, prefix, score, node->freq, node->last_access, node->is_dir);
     }
 
@@ -604,7 +618,7 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
                     memcpy(full, prefix, plen);
                     memcpy(full + plen, ctx.buffer, ctx.depth + 1);
                     double score = compute_score(full, node->freq, node->last_access, node->is_dir,
-                                                 now, ctx.max_depth);
+                                                 now, ctx.max_depth, cwd);
                     scored_insert(out, full, score, node->freq, node->last_access, node->is_dir);
                 }
             }
@@ -613,7 +627,6 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
 
     scored_collect_dfs(node, &ctx);
 
-    /* Sort by score descending */
     qsort(out->entries, out->count, sizeof(scored_entry), cmp_score_desc);
 }
 

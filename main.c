@@ -1,5 +1,6 @@
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include "test/test.h"
 
 static volatile int running = 1;
+static volatile int sighup_received = 0;
 
 static void* watchdog_thread_func(void* arg) {
     daemon_state* daemon = (daemon_state*) arg;
@@ -34,6 +36,28 @@ static void handle_signal(int sig) {
     running = 0;
 }
 
+static void handle_sighup(int sig) {
+    (void) sig;
+    sighup_received = 1;
+}
+
+static void apply_config_reload(daemon_state* daemon) {
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    if (config_load_default(&cfg) == 0) {
+        LOG_INFO("main", "config reloaded from disk");
+
+        /* Apply live-reloadable settings */
+        daemon->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
+        log_init((log_level) cfg.daemon.log_level, stderr);
+
+        LOG_INFO("main", "rescan interval: %ds, log level: %d", cfg.daemon.rescan_interval_seconds,
+                 cfg.daemon.log_level);
+    } else {
+        LOG_WARN("main", "no config file found for reload, keeping current settings");
+    }
+}
+
 int main(int argc, char* argv[]) {
     if (argc > 1 && strcmp(argv[1], "--daemon") == 0) {
         archaic_config cfg;
@@ -46,7 +70,7 @@ int main(int argc, char* argv[]) {
 
         signal(SIGINT, handle_signal);
         signal(SIGTERM, handle_signal);
-        signal(SIGHUP, SIG_IGN);
+        signal(SIGHUP, handle_sighup);
         signal(SIGPIPE, SIG_IGN);
 
         log_init((log_level) cfg.daemon.log_level, stderr);
@@ -75,9 +99,16 @@ int main(int argc, char* argv[]) {
         pthread_create(&watchdog_thread, NULL, watchdog_thread_func, daemon);
 
         LOG_INFO("main", "ready for queries. scan running in background.");
+        LOG_INFO("main", "send SIGHUP to reload configuration");
         fflush(stdout);
 
         while (running) {
+            if (sighup_received) {
+                sighup_received = 0;
+                LOG_INFO("main", "SIGHUP received, reloading configuration...");
+                apply_config_reload(daemon);
+                atomic_store(&daemon->config_reload_requested, true);
+            }
             sleep(1);
         }
 

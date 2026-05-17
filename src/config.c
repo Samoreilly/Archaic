@@ -176,7 +176,14 @@ static int parse_double(const char* s, double* out) {
 
 /* ── Section / key dispatch ──────────────────────────────────────────────── */
 
-typedef enum { TYPE_STRING, TYPE_INT, TYPE_DOUBLE, TYPE_BOOL, TYPE_STRING_ARRAY, TYPE_SCANNER_ARRAY } value_type;
+typedef enum {
+    TYPE_STRING,
+    TYPE_INT,
+    TYPE_DOUBLE,
+    TYPE_BOOL,
+    TYPE_STRING_ARRAY,
+    TYPE_SCANNER_ARRAY
+} value_type;
 
 typedef struct {
     const char* key;

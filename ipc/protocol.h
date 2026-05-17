@@ -71,6 +71,7 @@ typedef struct {
     char prefix[4096];
     char cwd[4096];
     uint32_t limit;
+    uint32_t dirs_only;
 } __attribute__((packed)) ipc_complete_req;
 
 typedef struct {

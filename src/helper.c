@@ -192,7 +192,8 @@ static int recv_response(helper_conn* conn, ipc_header* hdr, void* payload, size
 /* Command handlers                                                    */
 /* ------------------------------------------------------------------ */
 
-static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, const char* cwd) {
+static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, const char* cwd,
+                        int dirs_only) {
     if (helper_ensure_connected(conn) < 0)
         return -1;
 
@@ -200,6 +201,7 @@ static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, c
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
     strncpy(req.cwd, cwd, sizeof(req.cwd) - 1);
+    req.dirs_only = dirs_only ? 1 : 0;
     req.limit = limit;
 
     if (send_request(conn, IPC_MSG_COMPLETE, &req, sizeof(req)) < 0) {
@@ -460,10 +462,15 @@ int main(int argc, char* argv[]) {
         if (strcmp(cmd, "complete") == 0) {
             char prefix[4096] = {0};
             char cwd_path[4096] = {0};
+            char dirs_only_str[8] = {0};
             uint32_t limit = 50;
-            int n = sscanf(line, "%*s %4095s %u %4095s", prefix, &limit, cwd_path);
+            int dirs_only = 0;
+            int n =
+                sscanf(line, "%*s %4095s %u %4095s %7s", prefix, &limit, cwd_path, dirs_only_str);
+            if (n >= 4 && (strcmp(dirs_only_str, "1") == 0 || strcmp(dirs_only_str, "true") == 0))
+                dirs_only = 1;
             if (n >= 1) {
-                rc = cmd_complete(&conn, prefix, limit, cwd_path);
+                rc = cmd_complete(&conn, prefix, limit, cwd_path, dirs_only);
             }
         } else if (strcmp(cmd, "suggest") == 0) {
             char prefix[4096] = {0};

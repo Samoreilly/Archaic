@@ -166,8 +166,12 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
 
     if (sc) {
         uint32_t n = sc->count < 50 ? sc->count : 50;
-        resp.count = n;
-        for (uint32_t i = 0; i < n; i++) {
+        uint32_t out_idx = 0;
+        for (uint32_t i = 0; i < n && out_idx < 50; i++) {
+            /* Filter directories if dirs_only flag is set */
+            if (req->dirs_only && !sc->entries[i].is_dir)
+                continue;
+
             const char* p = sc->entries[i].path;
             size_t plen = strlen(p);
             char clean[4096];
@@ -178,11 +182,13 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
                 strncpy(clean, p, sizeof(clean) - 1);
                 clean[sizeof(clean) - 1] = '\0';
             }
-            strncpy(resp.paths[i], clean, sizeof(resp.paths[i]) - 1);
-            resp.scores[i] = sc->entries[i].score;
-            resp.freqs[i] = sc->entries[i].freq;
-            resp.is_dirs[i] = sc->entries[i].is_dir ? 1 : 0;
+            strncpy(resp.paths[out_idx], clean, sizeof(resp.paths[out_idx]) - 1);
+            resp.scores[out_idx] = sc->entries[i].score;
+            resp.freqs[out_idx] = sc->entries[i].freq;
+            resp.is_dirs[out_idx] = sc->entries[i].is_dir ? 1 : 0;
+            out_idx++;
         }
+        resp.count = out_idx;
         daemon_release_scored(srv->daemon, sr);
     }
 

@@ -146,12 +146,13 @@ int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
 }
 
 int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, const char* cwd,
-                        ipc_completions_resp* out) {
+                        int dirs_only, ipc_completions_resp* out) {
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
     strncpy(req.cwd, cwd, sizeof(req.cwd) - 1);
     req.limit = limit;
+    req.dirs_only = dirs_only ? 1 : 0;
 
     if (send_request(client, IPC_MSG_COMPLETE, &req, sizeof(req)) < 0)
         return -1;

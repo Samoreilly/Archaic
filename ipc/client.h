@@ -33,7 +33,7 @@ int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
     Returns 0 on success.
 */
 int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, const char* cwd,
-                        ipc_completions_resp* out);
+                        int dirs_only, ipc_completions_resp* out);
 
 /*
     Get the single best suggestion for a prefix.

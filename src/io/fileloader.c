@@ -412,6 +412,109 @@ void daemon_save_state(daemon_state* state, const char* path) {
     save_trie(state, path);
 }
 
+static void collect_frequencies_dfs(RadixNode* node, char* buffer, size_t depth, FILE* f) {
+    if (!node || !f)
+        return;
+
+    if (node->key && node->key_len > 0) {
+        if (depth + node->key_len < 4096) {
+            memcpy(buffer + depth, node->key, node->key_len);
+            depth += node->key_len;
+        }
+    }
+
+    if (node->is_leaf && depth > 0) {
+        buffer[depth] = '\0';
+        fprintf(f, "%s\t%lu\t%lu\t%d\n", buffer, node->freq, node->last_access, node->is_dir);
+    }
+
+    for (uint8_t i = 0; i < node->child_count; i++) {
+        collect_frequencies_dfs(node->children[i].node, buffer, depth, f);
+    }
+}
+
+int daemon_export_frequencies(daemon_state* state, const char* path) {
+    if (!state || !state->store || !path)
+        return -1;
+
+    FILE* f = fopen(path, "w");
+    if (!f)
+        return -1;
+
+    fprintf(f, "# Archaic frequency export\n");
+    fprintf(f, "# Format: path<tab>freq<tab>last_access<tab>is_dir\n");
+
+    store_lock(state->store);
+    size_t bucket_count = state->store->right_index;
+
+    for (size_t b = 0; b < bucket_count; b++) {
+        t_bucket* bucket = state->store->buckets[b];
+        if (!bucket || !bucket->dir_trie)
+            continue;
+
+        trie_lock(bucket);
+        char buffer[4096];
+        if (bucket->dir_name) {
+            size_t dn_len = strlen(bucket->dir_name);
+            if (dn_len < 4096) {
+                memcpy(buffer, bucket->dir_name, dn_len);
+                collect_frequencies_dfs(bucket->dir_trie, buffer, dn_len, f);
+            }
+        }
+        trie_unlock(bucket);
+    }
+
+    store_unlock(state->store);
+    fclose(f);
+    return 0;
+}
+
+int daemon_import_frequencies(daemon_state* state, const char* path) {
+    if (!state || !state->store || !path)
+        return -1;
+
+    FILE* f = fopen(path, "r");
+    if (!f)
+        return -1;
+
+    char line[8192];
+    int imported = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#' || line[0] == '\n')
+            continue;
+
+        char file_path[4096];
+        uint64_t freq, last_access;
+        int is_dir;
+
+        if (sscanf(line, "%4095[^\t]\t%lu\t%lu\t%d", file_path, &freq, &last_access, &is_dir) >=
+            2) {
+            path_validation val = validate_input_path("", file_path);
+            if (val.exists && val.full_path) {
+                store_lock(state->store);
+                t_bucket* bucket =
+                    find_bucket(state->store, val.full_path, val.full_path, 3, false);
+                if (bucket) {
+                    trie_lock(bucket);
+                    RadixNode* node = search(bucket->dir_trie, NULL, val.full_path);
+                    if (node) {
+                        node->freq = freq;
+                        node->last_access = last_access;
+                    }
+                    trie_unlock(bucket);
+                }
+                store_unlock(state->store);
+                imported++;
+            }
+            free_path_validation(&val);
+        }
+    }
+
+    fclose(f);
+    return imported;
+}
+
 path_validation process_input(t_bucket_store* store, const char* cwd, const char* input) {
     path_validation validation = validate_input_path(cwd, input);
 

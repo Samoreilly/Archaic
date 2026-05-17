@@ -38,6 +38,19 @@ lookups.
 
 ## Quick Start
 
+### One-command install (recommended)
+
+```bash
+git clone https://github.com/Samoreilly/Archaic.git
+cd Archaic
+./install.sh ~/projects
+```
+
+This builds the project, starts the daemon, and installs shell integration for your
+current shell (Fish or Bash) — no further steps required.
+
+### Manual install
+
 ```bash
 # 1. Build
 git clone https://github.com/Samoreilly/Archaic.git

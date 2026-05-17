@@ -68,6 +68,9 @@ usage() {
     echo "  install-bash    Install bash completion script"
     echo "  uninstall-bash  Remove bash completion script"
     echo "  install         Build and install to system paths (requires sudo)"
+    echo ""
+    echo "Quick start (build + install + run in one step):"
+    echo "  ./install.sh [scan_path]"
     exit 1
 }
 

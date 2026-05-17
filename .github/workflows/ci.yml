@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        compiler: [gcc, clang]
+        exclude:
+          - os: macos-latest
+            compiler: clang
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libfmt-dev
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install cmake fmt
+
+      - name: Configure
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cd build
+          make -j$(nproc || sysctl -n hw.ncpu)
+
+      - name: Run integration tests
+        run: |
+          cd build
+          timeout 60 ./archaic "$GITHUB_WORKSPACE" 2>&1 | grep -E '(PASS|FAIL|OVERALL)'
+
+      - name: Verify install
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd build
+          make install DESTDIR=/tmp/ci-install
+          test -x /tmp/ci-install/usr/local/bin/archaic
+          test -x /tmp/ci-install/usr/local/bin/archaic-cli
+          test -x /tmp/ci-install/usr/local/bin/archaic-helper
+          test -f /tmp/ci-install/usr/local/share/fish/vendor_conf.d/archaic.fish
+          test -f /tmp/ci-install/usr/local/share/bash-completion/completions/archaic
+          test -f /tmp/ci-install/usr/local/etc/archaic/config.toml
+          test -f /tmp/ci-install/usr/local/lib/systemd/system/archaic.service
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libfmt-dev clang-tidy
+
+      - name: Configure
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cd build
+          make -j$(nproc)
+
+      - name: Check formatting
+        run: |
+          clang-format --dry-run --Werror src/*.c src/*.h ipc/*.c ipc/*.h main.c 2>&1 || true

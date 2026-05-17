@@ -32,6 +32,38 @@
 #include "config.h"
 
 /* ------------------------------------------------------------------ */
+/* Path abbreviation support                                           */
+/* ------------------------------------------------------------------ */
+
+static char* g_home_dir = NULL;
+static size_t g_home_len = 0;
+
+static void init_home_dir(void) {
+    if (g_home_dir)
+        return;
+    g_home_dir = getenv("HOME");
+    if (g_home_dir)
+        g_home_len = strlen(g_home_dir);
+}
+
+static void abbreviate_path(const char* path, char* out, size_t out_len) {
+    if (!g_home_dir || g_home_len == 0 || strncmp(path, g_home_dir, g_home_len) != 0) {
+        strncpy(out, path, out_len - 1);
+        out[out_len - 1] = '\0';
+        return;
+    }
+    if (path[g_home_len] == '\0') {
+        strncpy(out, "~", out_len - 1);
+        out[out_len - 1] = '\0';
+    } else if (path[g_home_len] == '/') {
+        snprintf(out, out_len, "~%s", path + g_home_len);
+    } else {
+        strncpy(out, path, out_len - 1);
+        out[out_len - 1] = '\0';
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Color output support                                                */
 /* ------------------------------------------------------------------ */
 
@@ -55,21 +87,24 @@ static void check_color_env(void) {
 #define COLOR_RESET "\033[0m"
 
 static void print_colored(const char* type, const char* path) {
+    char abbr_path[4096];
+    abbreviate_path(path, abbr_path, sizeof(abbr_path));
+
     if (!g_color_enabled) {
-        printf("%c %s\n", type[0], path);
+        printf("%c %s\n", type[0], abbr_path);
         return;
     }
 
     int is_dir = (type[0] == 'D');
-    int is_hidden = (path[0] == '.');
+    int is_hidden = (abbr_path[0] == '.');
 
     if (is_dir) {
-        printf("%s%c%s %s%s\n", COLOR_DIR, type[0], COLOR_RESET, path, COLOR_RESET);
+        printf("%s%c%s %s%s\n", COLOR_DIR, type[0], COLOR_RESET, abbr_path, COLOR_RESET);
     } else if (is_hidden) {
-        printf("%s%c%s %s%s%s\n", COLOR_HIDDEN, type[0], COLOR_RESET, COLOR_HIDDEN, path,
+        printf("%s%c%s %s%s%s\n", COLOR_HIDDEN, type[0], COLOR_RESET, COLOR_HIDDEN, abbr_path,
                COLOR_RESET);
     } else {
-        printf("%c %s\n", type[0], path);
+        printf("%c %s\n", type[0], abbr_path);
     }
 }
 
@@ -437,6 +472,7 @@ int main(int argc, char* argv[]) {
     }
 
     check_color_env();
+    init_home_dir();
 
     helper_conn conn;
     helper_conn_init(&conn);

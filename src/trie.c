@@ -10,10 +10,13 @@
 #include "threadmanager.h"
 
 static RadixChild* find_child(RadixNode* node, char c) {
-    for (uint8_t i = 0; i < node->child_count; i++) {
-        if (node->children[i].edge_char == c) {
-            return &node->children[i];
-        }
+    int lo = 0, hi = node->child_count - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        char mc = node->children[mid].edge_char;
+        if (mc == c) return &node->children[mid];
+        if (mc < c) lo = mid + 1;
+        else hi = mid - 1;
     }
     return NULL;
 }
@@ -24,11 +27,34 @@ static void add_child(RadixNode* node, char c, RadixNode* child) {
         RadixChild* new_children = malloc(new_cap * sizeof(RadixChild));
         if (!new_children) return;
         memcpy(new_children, node->children, node->child_count * sizeof(RadixChild));
+        if (node->children != node->inline_storage) {
+            free(node->children);
+        }
         node->children = new_children;
         node->child_capacity = (uint8_t)new_cap;
     }
-    node->children[node->child_count].edge_char = c;
-    node->children[node->child_count].node = child;
+
+    /* Find insertion position to maintain sorted order by edge_char */
+    int lo = 0, hi = node->child_count - 1;
+    int pos = node->child_count;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (node->children[mid].edge_char < c) {
+            lo = mid + 1;
+        } else {
+            pos = mid;
+            hi = mid - 1;
+        }
+    }
+
+    /* Shift elements right to make room */
+    if (pos < node->child_count) {
+        memmove(&node->children[pos + 1], &node->children[pos],
+                (node->child_count - pos) * sizeof(RadixChild));
+    }
+
+    node->children[pos].edge_char = c;
+    node->children[pos].node = child;
     node->child_count++;
 }
 
@@ -397,46 +423,18 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
     return score;
 }
 
-static void heap_sift_up(scored_entry* entries, size_t idx) {
-    while (idx > 0) {
-        size_t parent = (idx - 1) / 2;
-        if (entries[idx].score < entries[parent].score) {
-            scored_entry tmp = entries[idx];
-            entries[idx] = entries[parent];
-            entries[parent] = tmp;
-            idx = parent;
-        } else {
-            break;
-        }
-    }
-}
-
-static void heap_sift_down(scored_entry* entries, size_t count) {
-    size_t idx = 0;
-    while (1) {
-        size_t smallest = idx;
-        size_t left = 2 * idx + 1;
-        size_t right = 2 * idx + 2;
-        if (left < count && entries[left].score < entries[smallest].score) smallest = left;
-        if (right < count && entries[right].score < entries[smallest].score) smallest = right;
-        if (smallest != idx) {
-            scored_entry tmp = entries[idx];
-            entries[idx] = entries[smallest];
-            entries[smallest] = tmp;
-            idx = smallest;
-        } else {
-            break;
-        }
-    }
+static int cmp_path(const void* a, const void* b) {
+    return strcmp(((const scored_entry*)a)->path, ((const scored_entry*)b)->path);
 }
 
 static void scored_insert(scored_completions* sc, const char* path, double score, uint64_t freq, uint64_t last_access, bool is_dir) {
-    /* Check for duplicate - skip if already present */
-    for (size_t i = 0; i < sc->count; i++) {
-        if (strcmp(sc->entries[i].path, path) == 0) {
-            return;
-        }
-    }
+    /* Binary search for duplicate */
+    scored_entry key;
+    memset(&key, 0, sizeof(key));
+    strncpy(key.path, path, sizeof(key.path) - 1);
+    key.path[sizeof(key.path) - 1] = '\0';
+    scored_entry* found = bsearch(&key, sc->entries, sc->count, sizeof(scored_entry), cmp_path);
+    if (found) return;
 
     if (sc->count < sc->capacity) {
         scored_entry* e = &sc->entries[sc->count];
@@ -447,7 +445,13 @@ static void scored_insert(scored_completions* sc, const char* path, double score
         e->last_access = last_access;
         e->is_dir = is_dir;
         sc->count++;
-        heap_sift_up(sc->entries, sc->count - 1);
+        size_t idx = sc->count - 1;
+        while (idx > 0 && cmp_path(&sc->entries[idx - 1], &sc->entries[idx]) > 0) {
+            scored_entry tmp = sc->entries[idx - 1];
+            sc->entries[idx - 1] = sc->entries[idx];
+            sc->entries[idx] = tmp;
+            idx--;
+        }
     } else if (score > sc->entries[0].score) {
         scored_entry* e = &sc->entries[0];
         strncpy(e->path, path, sizeof(e->path) - 1);
@@ -456,7 +460,7 @@ static void scored_insert(scored_completions* sc, const char* path, double score
         e->freq = freq;
         e->last_access = last_access;
         e->is_dir = is_dir;
-        heap_sift_down(sc->entries, sc->count);
+        qsort(sc->entries, sc->count, sizeof(scored_entry), cmp_path);
     }
 }
 

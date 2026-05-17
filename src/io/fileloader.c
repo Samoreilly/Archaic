@@ -428,7 +428,16 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
             return validation;
         }
         trie_lock(bucket);
-        insert(bucket->dir_trie, validation.full_path);
+        if (validation.is_dir) {
+            size_t len = strlen(validation.full_path);
+            char dir_path[4096];
+            memcpy(dir_path, validation.full_path, len);
+            dir_path[len] = '/';
+            dir_path[len + 1] = '\0';
+            insert(bucket->dir_trie, dir_path);
+        } else {
+            insert(bucket->dir_trie, validation.full_path);
+        }
         bucket->dir_count++;
         atomic_fetch_add(&store->total_nodes, 1);
         trie_unlock(bucket);
@@ -860,6 +869,13 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
         completions_free(out);
         return NULL;
     }
+    bool* bucket_is_dirs = calloc(limit > 0 ? limit : 50, sizeof(bool));
+    if (!bucket_is_dirs) {
+        free(bucket_paths);
+        free(snapshot);
+        completions_free(out);
+        return NULL;
+    }
     int bucket_cap = (int) (limit > 0 ? limit : 50);
 
     for (size_t i = 0; i < bucket_count && out->count < out->capacity; i++) {
@@ -868,12 +884,15 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
             continue;
 
         trie_lock(bucket);
-        int n = trie_fuzzy_collect(bucket->dir_trie, qbase, bucket_paths, bucket_cap);
+        int n =
+            trie_fuzzy_collect(bucket->dir_trie, qbase, bucket_paths, bucket_is_dirs, bucket_cap);
         trie_unlock(bucket);
 
         for (int j = 0; j < n && out->count < out->capacity; j++) {
             if (bucket_paths[j]) {
-                out->paths[out->count++] = bucket_paths[j];
+                out->paths[out->count] = bucket_paths[j];
+                out->is_dirs[out->count] = bucket_is_dirs[j];
+                out->count++;
                 bucket_paths[j] = NULL;
             }
         }
@@ -885,6 +904,7 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
         free(bucket_paths[j]);
     }
     free(bucket_paths);
+    free(bucket_is_dirs);
     free(snapshot);
     return out;
 }

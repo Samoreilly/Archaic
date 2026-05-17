@@ -255,6 +255,12 @@ completions* completions_create(size_t capacity) {
         free(c);
         return NULL;
     }
+    c->is_dirs = calloc(capacity, sizeof(bool));
+    if (!c->is_dirs) {
+        free(c->paths);
+        free(c);
+        return NULL;
+    }
     c->capacity = capacity;
     c->count = 0;
     return c;
@@ -267,6 +273,7 @@ void completions_free(completions* c) {
         free(c->paths[i]);
     }
     free(c->paths);
+    free(c->is_dirs);
     free(c);
 }
 
@@ -329,10 +336,12 @@ static void collect_dfs(RadixNode* node, char* buffer, size_t depth, const char*
         size_t plen = strlen(prefix);
         size_t slen = strlen(buffer);
         char* full = malloc(plen + slen + 1);
-        if (full) {
+        if (full && out->count < out->capacity) {
             memcpy(full, prefix, plen);
             memcpy(full + plen, buffer, slen + 1);
-            out->paths[out->count++] = full;
+            out->paths[out->count] = full;
+            out->is_dirs[out->count] = node->is_dir;
+            out->count++;
         }
     }
 
@@ -372,7 +381,9 @@ void completions_collect(Trie* root, const char* prefix, completions* out) {
         char* full = malloc(plen + 1);
         if (full && out->count < out->capacity) {
             memcpy(full, prefix, plen + 1);
-            out->paths[out->count++] = full;
+            out->paths[out->count] = full;
+            out->is_dirs[out->count] = node->is_dir;
+            out->count++;
         }
     }
 
@@ -389,7 +400,9 @@ void completions_collect(Trie* root, const char* prefix, completions* out) {
                 if (full && out->count < out->capacity) {
                     memcpy(full, prefix, plen);
                     memcpy(full + plen, buffer, depth + 1);
-                    out->paths[out->count++] = full;
+                    out->paths[out->count] = full;
+                    out->is_dirs[out->count] = node->is_dir;
+                    out->count++;
                 }
             }
         }
@@ -748,7 +761,7 @@ static int cmp_fuzzy(const void* a, const void* b) {
     return strcmp(ea->path, eb->path);
 }
 
-int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity) {
+int trie_fuzzy_collect(Trie* root, const char* query, char** paths, bool* is_dirs, int capacity) {
     if (!root || !query || query[0] == '\0' || !paths || capacity <= 0)
         return 0;
 
@@ -773,6 +786,8 @@ int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity
             free(entries);
             return i;
         }
+        if (is_dirs)
+            is_dirs[i] = entries[i].is_dir;
     }
 
     free(entries);

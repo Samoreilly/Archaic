@@ -321,7 +321,7 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
                 clean[sizeof(clean) - 1] = '\0';
             }
             strncpy(resp.paths[i], clean, sizeof(resp.paths[i]) - 1);
-            resp.is_dirs[i] = 0;
+            resp.is_dirs[i] = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
         }
         completions_free(fc);
     }

@@ -39,6 +39,7 @@ void trie_free_recursive(Trie* node);
 */
 typedef struct {
     char** paths;
+    bool* is_dirs;
     size_t count;
     size_t capacity;
 } completions;
@@ -75,4 +76,4 @@ void scored_completions_free(scored_completions* sc);
 void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out,
                                 uint64_t now, const char* cwd);
 
-int trie_fuzzy_collect(Trie* root, const char* query, char** paths, int capacity);
+int trie_fuzzy_collect(Trie* root, const char* query, char** paths, bool* is_dirs, int capacity);

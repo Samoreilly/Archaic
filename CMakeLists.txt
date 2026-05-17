@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.22) project(archaic) set(CMAKE_C_STANDARD 23)
                            hashset.c test / test.c test / perf.c ipc / server.c ipc / client.c src /
                            threadpool.c src / metrics.c src / config.c src / cache.c src /
                            log.c src / recent -
-                       files.c)
+                       files.c src / incremental.c)
 
             target_link_libraries(archaic PRIVATE fmt::fmt m pthread) target_compile_options(
                 archaic PRIVATE - Wall - Wpedantic - Wextra)

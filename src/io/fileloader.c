@@ -501,6 +501,8 @@ daemon_state* daemon_init(void) {
 
     recent_files_init(&state->recent, (int) cfg.storage.recent_files_capacity);
 
+    incremental_init(&state->incremental);
+
     state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
     atomic_store(&state->config_reload_requested, false);

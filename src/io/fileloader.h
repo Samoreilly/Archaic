@@ -2,6 +2,7 @@
 
 #include "../cache.h"
 #include "../config.h"
+#include "../incremental.h"
 #include "../metrics.h"
 #include "../recent-files.h"
 #include "../scanner.h"
@@ -40,6 +41,7 @@ typedef struct {
     atomic_bool rescan_timer_running;
     atomic_bool config_reload_requested;
     recent_files recent;
+    incremental_state incremental;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);

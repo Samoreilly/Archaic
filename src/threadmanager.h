@@ -24,7 +24,6 @@ typedef struct {
     char language[32];
 } project_info;
 
-
 typedef struct {
     char* path;
     int depth;

@@ -305,6 +305,12 @@ static void handle_metrics(ipc_server* srv, int fd, uint32_t req_id) {
     resp.cache_misses = snap.cache_misses;
     resp.query_latency_avg_ms = snap.query_latency_avg_ms;
 
+    store_lock(srv->daemon->store);
+    resp.total_dirs_indexed = srv->daemon->store->right_index;
+    uint64_t total_nodes = atomic_load(&srv->daemon->store->total_nodes);
+    store_unlock(srv->daemon->store);
+    resp.total_paths_indexed = total_nodes + resp.total_dirs_indexed;
+
     ipc_write_header(&hdr, IPC_MSG_METRICS_RESP, sizeof(resp), req_id);
     write_exact(fd, &hdr, sizeof(hdr));
     write_exact(fd, &resp, sizeof(resp));

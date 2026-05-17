@@ -29,6 +29,11 @@ typedef struct {
     uint64_t cache_hits;
     uint64_t cache_misses;
     double query_latency_avg_ms;
+    uint64_t total_paths_indexed;
+    uint64_t total_dirs_indexed;
+    uint32_t top_dirs_count;
+    char top_dirs[10][256];
+    uint64_t top_dirs_accesses[10];
 } metrics_snapshot;
 
 metrics_snapshot metrics_snapshot_get(metrics_t* m);

@@ -124,6 +124,8 @@ typedef struct {
     uint64_t cache_hits;
     uint64_t cache_misses;
     double query_latency_avg_ms;
+    uint64_t total_paths_indexed;
+    uint64_t total_dirs_indexed;
 } __attribute__((packed)) ipc_metrics_resp;
 
 #define MAX_PROJECTS 100

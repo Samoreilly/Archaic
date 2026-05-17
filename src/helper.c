@@ -28,8 +28,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "config.h"
 #include "../ipc/protocol.h"
+#include "config.h"
 
 /* ------------------------------------------------------------------ */
 /* Signal handling                                                     */

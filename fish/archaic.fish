@@ -361,7 +361,8 @@ function __archaic_accept_suggestion
 end
 
 bind \e\[1\;3C __archaic_accept_suggestion
-bind \cr __archaic_accept_suggestion
+bind --mode insert \cr __archaic_accept_suggestion
+bind --mode default \cr __archaic_accept_suggestion
 
 # ── Debug/status function ────────────────────────────────────────────────────
 function __archaic_status -d "Show archaic daemon status"

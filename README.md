@@ -240,4 +240,4 @@ Archaic's speed comes from several layered optimizations:
 
 ## License
 
-[License information to be determined.]
+MIT License — see [LICENSE](LICENSE) for details.

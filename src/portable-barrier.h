@@ -4,7 +4,7 @@
 
 #ifdef __APPLE__
 
-/* macOS does not provide pthread_barrier_t. Implement with mutex + condvar. */
+#define PTHREAD_BARRIER_SERIAL_THREAD 1
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -15,8 +15,8 @@ typedef struct {
 } portable_barrier_t;
 
 static inline int portable_barrier_init(portable_barrier_t* barrier,
-                                        const pthread_barrierattr_t* attr, unsigned int count) {
-    (void) attr;
+                                        const void* attr, unsigned int count) {
+    (void)attr;
     int rc;
     if ((rc = pthread_mutex_init(&barrier->mutex, NULL)) != 0)
         return rc;
@@ -59,7 +59,6 @@ static inline int portable_barrier_destroy(portable_barrier_t* barrier) {
 #define pthread_barrier_init portable_barrier_init
 #define pthread_barrier_wait portable_barrier_wait
 #define pthread_barrier_destroy portable_barrier_destroy
-#define PTHREAD_BARRIER_SERIAL_THREAD 1
 
 #else
 

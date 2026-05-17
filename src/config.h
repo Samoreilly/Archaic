@@ -62,3 +62,8 @@ int config_load_default(archaic_config* cfg);
 
 /* Initialize config with defaults (no file parsing). */
 void config_init_defaults(archaic_config* cfg);
+
+/* Load .archaicignore from a directory, merging patterns into the scanner config.
+   Searches upward from start_path for .archaicignore until root or max_depth.
+   Returns the number of patterns loaded. */
+int config_load_archaicignore(archaic_config* cfg, const char* start_path);

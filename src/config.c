@@ -474,3 +474,79 @@ int config_load_default(archaic_config* cfg) {
     config_init_defaults(cfg);
     return -1;
 }
+
+/* ── .archaicignore support ──────────────────────────────────────────────── */
+
+static void add_ignore_dir_if_new(archaic_config* cfg, const char* dir) {
+    for (int i = 0; i < cfg->scanner.ignore_dir_count; i++) {
+        if (strcmp(cfg->scanner.ignore_dirs[i], dir) == 0)
+            return;
+    }
+    add_ignore_dir(cfg, dir);
+}
+
+static void add_ignore_file_if_new(archaic_config* cfg, const char* file) {
+    for (int i = 0; i < cfg->scanner.ignore_file_count; i++) {
+        if (strcmp(cfg->scanner.ignore_files[i], file) == 0)
+            return;
+    }
+    add_ignore_file(cfg, file);
+}
+
+static int load_single_archaicignore(archaic_config* cfg, const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f)
+        return 0;
+
+    int loaded = 0;
+    char line[1024];
+
+    while (fgets(line, sizeof(line), f)) {
+        char* p = line;
+        while (*p && isspace((unsigned char) *p))
+            p++;
+        if (*p == '\0' || *p == '#')
+            continue;
+
+        size_t len = strlen(p);
+        while (len > 0 && isspace((unsigned char) p[len - 1]))
+            p[--len] = '\0';
+        if (len == 0)
+            continue;
+
+        if (p[len - 1] == '/') {
+            p[len - 1] = '\0';
+            add_ignore_dir_if_new(cfg, p);
+        } else {
+            add_ignore_file_if_new(cfg, p);
+        }
+        loaded++;
+    }
+
+    fclose(f);
+    return loaded;
+}
+
+int config_load_archaicignore(archaic_config* cfg, const char* start_path) {
+    if (!cfg || !start_path)
+        return 0;
+
+    int total_loaded = 0;
+    char path[8192];
+    strncpy(path, start_path, sizeof(path) - 1);
+    path[sizeof(path) - 1] = '\0';
+
+    for (int depth = 0; depth < 32; depth++) {
+        char ignore_path[8192];
+        snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", path);
+
+        total_loaded += load_single_archaicignore(cfg, ignore_path);
+
+        char* last_slash = strrchr(path, '/');
+        if (!last_slash || last_slash == path)
+            break;
+        *last_slash = '\0';
+    }
+
+    return total_loaded;
+}

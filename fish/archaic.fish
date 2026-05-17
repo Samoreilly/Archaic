@@ -5,19 +5,107 @@
 #   2. Install plugin: ./run.sh install-fish
 #   3. Restart fish or run: source ~/.config/fish/conf.d/archaic.fish
 
+# ── Global state ──────────────────────────────────────────────────────────────
 set -g archaic_sock_path /tmp/archaic-daemon.sock
+set -g __archaic_daemon_healthy 1
+set -g __archaic_version_checked 0
+set -g __archaic_helper_pid ""
 
-# Resolve CLI path: follow symlinks to find actual location
+# ── Resolve binary paths ─────────────────────────────────────────────────────
 set -l plugin_path (status filename)
 if test -L "$plugin_path"
     set plugin_path (readlink -f "$plugin_path")
 end
-set -g archaic_cli_path (dirname (dirname "$plugin_path"))/build/archaic-cli
+set -l repo_root (dirname (dirname "$plugin_path"))
+set -g archaic_cli_path "$repo_root/build/archaic-cli"
+set -g archaic_helper_path "$repo_root/build/archaic-helper"
 
+# ── Default command list ─────────────────────────────────────────────────────
+set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch
+
+# ── Load config (socket path + command list) ─────────────────────────────────
+set -l config_file ""
+for p in "$ARCHAIC_CONFIG" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml"
+    if test -n "$p" -a -f "$p"
+        set config_file "$p"
+        break
+    end
+end
+
+if test -n "$config_file"
+    # Extract socket path from [daemon] section
+    set -l cfg_sock (grep -A10 '^\[daemon\]' "$config_file" 2>/dev/null | grep 'socket_path' | string replace -r '.*=\s*"([^"]*)"' '$1')
+    if test -n "$cfg_sock"
+        set -g archaic_sock_path "$cfg_sock"
+    end
+
+    # Extract command list from [fish] section
+    set -l cfg_cmds (grep -A10 '^\[fish\]' "$config_file" 2>/dev/null | grep 'commands' | string replace -r '.*=\s*\[(.*)\]' '$1' | string replace -r '"' '' | string split ',')
+    if test (count $cfg_cmds) -gt 0
+        # Trim whitespace from each command
+        set -l trimmed_cmds
+        for c in $cfg_cmds
+            set trimmed_cmds $trimmed_cmds (string trim "$c")
+        end
+        if test (count $trimmed_cmds) -gt 0
+            set -g __archaic_commands $trimmed_cmds
+        end
+    end
+end
+
+# ── Helper lifecycle ─────────────────────────────────────────────────────────
+function __archaic_ensure_helper -d "Start archaic-helper if not running"
+    # Already running?
+    if test -n "$__archaic_helper_pid"
+        if kill -0 $__archaic_helper_pid 2>/dev/null
+            return
+        end
+        # PID stale, clear
+        set -g __archaic_helper_pid ""
+    end
+
+    # Helper binary must exist
+    if not test -x "$archaic_helper_path"
+        return
+    end
+
+    # Start helper as background process with socket path
+    $archaic_helper_path "$archaic_sock_path" </dev/null >/dev/null 2>&1 &
+    set -g __archaic_helper_pid $last_pid
+end
+
+# ── Daemon health check ──────────────────────────────────────────────────────
+function __archaic_check_daemon -d "Check if daemon socket exists"
+    if test "$__archaic_daemon_healthy" -eq 0
+        return 1
+    end
+    if test -S "$archaic_sock_path"
+        return 0
+    end
+    set -g __archaic_daemon_healthy 0
+    return 1
+end
+
+# ── Version check (first use only) ───────────────────────────────────────────
+function __archaic_check_version -d "Verify CLI/helper version compatibility"
+    if test "$__archaic_version_checked" -eq 1
+        return
+    end
+
+    # Quick ping to verify daemon responds
+    set -l ping_output (command $archaic_cli_path ping 2>/dev/null)
+    if test $status -ne 0
+        return
+    end
+
+    set -g __archaic_version_checked 1
+end
+
+# ── Core completion function ─────────────────────────────────────────────────
 function __archaic_do_complete -d "Query archaic daemon for completions"
     set -l prefix (commandline -ct)
-    
-    # Detect the command being completed to apply rules
+
+    # Detect command being completed
     set -l cmd_tokens (commandline -co)
     set -l cmd ""
     if test (count $cmd_tokens) -gt 0
@@ -34,7 +122,15 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         end
     end
 
-    # Handle empty prefix (e.g. "ls <tab>")
+    # Check daemon health
+    if not __archaic_check_daemon
+        return
+    end
+
+    # Version check on first use
+    __archaic_check_version
+
+    # Resolve prefix to absolute path
     set -l resolved ""
     set -l norm_prefix ""
     if test -z "$prefix"
@@ -48,13 +144,12 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             end
         end
 
-        # Resolve relative paths for the daemon query
         set resolved "$prefix"
         if not string match -q '/*' -- "$prefix"
             set -l clean_prefix (string replace -r '^\./' '' "$prefix")
             set resolved (pwd)/"$clean_prefix"
         end
-        # Normalize path: resolve //, /./, and /../
+        # Normalize: resolve //, /./, and /../
         while string match -q '*/../*' -- "$resolved"
             set resolved (string replace -r '/[^/]+/\.\./' '/' "$resolved")
         end
@@ -64,32 +159,41 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         set norm_prefix (string replace -r '/+$' '' "$prefix")
     end
 
-    # Normalize resolved prefix for display conversion
     set -l norm_resolved (string replace -r '/+$' '' "$resolved")
 
-    # Query daemon and parse output: "D /path" or "F /path" (one per line)
+    # Query: try helper first (persistent), fall back to CLI
+    set -l results ""
+    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
+        set results (echo "complete $resolved 20" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+    end
+
+    if test -z "$results"
+        # Helper not available, use CLI (forks but always works)
+        set results (command $archaic_cli_path complete "$resolved" 20 2>/dev/null)
+    end
+
+    # Parse output: "D /path" or "F /path" (one per line)
     set -l found 0
-    for line in (command $archaic_cli_path complete "$resolved" 20 2>/dev/null)
+    for line in $results
         set -l parts (string split " " "$line")
         if test (count $parts) -ge 2
             set -l type $parts[1]
             set -l full_path $parts[2]
-            
+
             # Skip files for directory-only commands
             if test "$dirs_only" -eq 1 -a "$type" != "D"
                 continue
             end
-            
+
             # Convert to relative/basename for display
             set -l display_path "$full_path"
             if test -z "$prefix"
-                # Empty prefix: show just the basename
                 set display_path (basename "$full_path")
             else if not string match -q '/*' -- "$prefix"
                 set display_path (string replace "$norm_resolved" "" "$full_path")
                 set display_path "$norm_prefix$display_path"
             end
-            
+
             if test "$type" = "D"
                 echo -e "$display_path\t(dir)"
             else
@@ -98,53 +202,24 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             set found 1
         end
     end
-    
+
     if test $found -eq 0
+        set -g __archaic_daemon_healthy 0
         return
     end
+    set -g __archaic_daemon_healthy 1
 end
 
-# Replace completions for common commands
-complete -e -c cd
-complete -c cd -f -a "(__archaic_do_complete)"
+# ── Register completions for configured commands ─────────────────────────────
+for cmd in $__archaic_commands
+    complete -e -c $cmd
+    complete -c $cmd -f -a "(__archaic_do_complete)"
+end
 
-complete -e -c ls
-complete -c ls -f -a "(__archaic_do_complete)"
-
-complete -e -c cat
-complete -c cat -f -a "(__archaic_do_complete)"
-
-complete -e -c vim
-complete -c vim -f -a "(__archaic_do_complete)"
-
-complete -e -c nvim
-complete -c nvim -f -a "(__archaic_do_complete)"
-
-complete -e -c less
-complete -c less -f -a "(__archaic_do_complete)"
-
-complete -e -c bat
-complete -c bat -f -a "(__archaic_do_complete)"
-
-complete -e -c rm
-complete -c rm -f -a "(__archaic_do_complete)"
-
-complete -e -c mv
-complete -c mv -f -a "(__archaic_do_complete)"
-
-complete -e -c cp
-complete -c cp -f -a "(__archaic_do_complete)"
-
-complete -e -c mkdir
-complete -c mkdir -f -a "(__archaic_do_complete)"
-
-complete -e -c touch
-complete -c touch -f -a "(__archaic_do_complete)"
-
-# Catch-all for any command with path-like arguments
+# Catch-all for path-like arguments
 complete -c "" -f -a "(__archaic_do_complete)"
 
-# Inline autosuggestion via fish_right_prompt
+# ── Inline autosuggestion via fish_right_prompt ──────────────────────────────
 set -g __archaic_suggestion ""
 
 function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
@@ -153,28 +228,39 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
         set -g __archaic_suggestion ""
         return
     end
-    
+
     # Only suggest for path-like inputs
     if not string match -q '*/*' -- "$prefix"
         set -g __archaic_suggestion ""
         return
     end
-    
+
+    if not __archaic_check_daemon
+        set -g __archaic_suggestion ""
+        return
+    end
+
     # Resolve relative paths
     set -l resolved "$prefix"
     if not string match -q '/*' -- "$prefix"
         set resolved (pwd)/"$prefix"
     end
-    # Normalize: strip trailing slash for comparison
     set -l norm_resolved (string replace -r '/+$' '' "$resolved")
-    
-    # Use complete (not suggest) to get best match inside the directory
-    set -l output (command $archaic_cli_path complete "$resolved" 1 2>/dev/null)
-    if test $status -ne 0
+
+    # Query: try helper first, fall back to CLI
+    set -l output ""
+    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
+        set output (echo "complete $resolved 1" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+    end
+    if test -z "$output"
+        set output (command $archaic_cli_path complete "$resolved" 1 2>/dev/null)
+    end
+
+    if test $status -ne 0 -o -z "$output"
         set -g __archaic_suggestion ""
         return
     end
-    
+
     # Parse: "D /path" or "F /path"
     set -l parts (string split " " "$output")
     if test (count $parts) -lt 2
@@ -182,10 +268,10 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
         return
     end
     set -l suggestion $parts[2]
-    
+
     # Normalize suggestion for comparison
     set -l norm_suggestion (string replace -r '/+$' '' "$suggestion")
-    
+
     # Check if suggestion starts with the resolved path
     if string match -q "$norm_resolved*" -- "$norm_suggestion"
         set -l remainder (string sub -s (math (string length "$norm_resolved") + 1) "$norm_suggestion")
@@ -227,7 +313,7 @@ else
     end
 end
 
-# Key bindings to accept the suggestion
+# ── Key bindings to accept the suggestion ────────────────────────────────────
 function __archaic_accept_suggestion
     if test -n "$__archaic_suggestion"
         commandline -t (commandline -t)"$__archaic_suggestion"
@@ -238,3 +324,27 @@ end
 
 bind \e\[1\;3C __archaic_accept_suggestion
 bind \cr __archaic_accept_suggestion
+
+# ── Debug/status function ────────────────────────────────────────────────────
+function __archaic_status -d "Show archaic daemon status"
+    if test -S "$archaic_sock_path"
+        set -l ping_output (command $archaic_cli_path ping 2>/dev/null)
+        if test $status -eq 0
+            echo "Archaic daemon: running ($ping_output)"
+        else
+            echo "Archaic daemon: socket exists but unresponsive"
+        end
+    else
+        echo "Archaic daemon: not running"
+    end
+    echo "CLI: $archaic_cli_path"
+    echo "Helper: $archaic_helper_path"
+    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
+        echo "Helper PID: $__archaic_helper_pid (running)"
+    else
+        echo "Helper PID: (not running)"
+    end
+    echo "Socket: $archaic_sock_path"
+    echo "Commands: $__archaic_commands"
+    echo "Version checked: $__archaic_version_checked"
+end

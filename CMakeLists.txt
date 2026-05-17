@@ -18,6 +18,7 @@ add_executable(
     ipc/client.c
     src/threadpool.c
     src/metrics.c
+    src/config.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)

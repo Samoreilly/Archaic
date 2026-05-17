@@ -44,6 +44,17 @@
 #define STATE_MAGIC 0x41525354U
 #define STATE_VERSION 2U
 
+/* Simple FNV-1a hash for state file integrity checking */
+static uint32_t fnv1a_hash(const void* data, size_t len) {
+    const uint8_t* bytes = (const uint8_t*) data;
+    uint32_t hash = 2166136261U;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= bytes[i];
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
 static size_t count_trie_nodes(const RadixNode* node) {
     if (!node)
         return 0;

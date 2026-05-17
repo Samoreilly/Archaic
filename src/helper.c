@@ -32,6 +32,48 @@
 #include "config.h"
 
 /* ------------------------------------------------------------------ */
+/* Color output support                                                */
+/* ------------------------------------------------------------------ */
+
+static volatile int g_color_enabled = 1;
+
+static void check_color_env(void) {
+    if (getenv("NO_COLOR")) {
+        g_color_enabled = 0;
+        return;
+    }
+    const char* term = getenv("TERM");
+    if (!term || strcmp(term, "dumb") == 0) {
+        g_color_enabled = 0;
+        return;
+    }
+}
+
+#define COLOR_DIR "\033[1;34m"    /* Bold blue */
+#define COLOR_EXEC "\033[32m"     /* Green */
+#define COLOR_HIDDEN "\033[2;37m" /* Dim white */
+#define COLOR_RESET "\033[0m"
+
+static void print_colored(const char* type, const char* path) {
+    if (!g_color_enabled) {
+        printf("%c %s\n", type[0], path);
+        return;
+    }
+
+    int is_dir = (type[0] == 'D');
+    int is_hidden = (path[0] == '.');
+
+    if (is_dir) {
+        printf("%s%c%s %s%s\n", COLOR_DIR, type[0], COLOR_RESET, path, COLOR_RESET);
+    } else if (is_hidden) {
+        printf("%s%c%s %s%s%s\n", COLOR_HIDDEN, type[0], COLOR_RESET, COLOR_HIDDEN, path,
+               COLOR_RESET);
+    } else {
+        printf("%c %s\n", type[0], path);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Signal handling                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -174,7 +216,8 @@ static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, c
 
     if (hdr.msg_type == IPC_MSG_COMPLETIONS) {
         for (uint32_t i = 0; i < resp.count; i++) {
-            printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+            const char* type = resp.is_dirs[i] ? "D" : "F";
+            print_colored(type, resp.paths[i]);
         }
     } else if (hdr.msg_type == IPC_MSG_ERROR) {
         ipc_error_resp err;
@@ -360,7 +403,8 @@ static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
 
     if (hdr.msg_type == IPC_MSG_FUZZY_COMPLETIONS) {
         for (uint32_t i = 0; i < resp.count; i++) {
-            printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+            const char* type = resp.is_dirs[i] ? "D" : "F";
+            print_colored(type, resp.paths[i]);
         }
     } else if (hdr.msg_type == IPC_MSG_ERROR) {
         ipc_error_resp err;
@@ -387,7 +431,10 @@ int main(int argc, char* argv[]) {
         if (config_load_default(&cfg) == 0 && cfg.daemon.socket_path[0] != '\0') {
             sock_path = cfg.daemon.socket_path;
         }
+        g_color_enabled = cfg.daemon.colored_output;
     }
+
+    check_color_env();
 
     helper_conn conn;
     helper_conn_init(&conn);

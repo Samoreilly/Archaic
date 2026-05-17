@@ -67,6 +67,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->daemon.max_depth = 10;
     cfg->daemon.rescan_interval_seconds = 300;
     cfg->daemon.log_level = 1;
+    cfg->daemon.colored_output = true;
     strncpy(cfg->daemon.scan_path, "/home/sam/samdev", sizeof(cfg->daemon.scan_path) - 1);
     strncpy(cfg->daemon.socket_path, "/tmp/archaic-daemon.sock",
             sizeof(cfg->daemon.socket_path) - 1);
@@ -318,6 +319,7 @@ static const field_map daemon_map[] = {
     {"max_depth", TYPE_INT, FOFFSET(daemon, max_depth)},
     {"rescan_interval_seconds", TYPE_INT, FOFFSET(daemon, rescan_interval_seconds)},
     {"log_level", TYPE_INT, FOFFSET(daemon, log_level)},
+    {"colored_output", TYPE_BOOL, FOFFSET(daemon, colored_output)},
 };
 
 static const field_map storage_map[] = {

@@ -96,6 +96,11 @@ function __archaic_check_daemon -d "Check if daemon socket exists and responds"
     if test -S "$archaic_sock_path"
         return 0
     end
+    # Daemon not running - show notification once
+    if not set -q __archaic_notified_down
+        echo "archaic: daemon not running (completions unavailable). Start with: ./run.sh start" >&2
+        set -g __archaic_notified_down 1
+    end
     set -g __archaic_daemon_healthy 0
     return 1
 end

@@ -10,6 +10,7 @@
  *
  * Commands (one per line from stdin):
  *   complete <prefix> [limit]   - Path completions
+ *   fuzzy <prefix> [limit]      - Fuzzy path completions
  *   suggest <prefix>            - Single best suggestion
  *   query <cwd> <input>         - Path validation
  *   ping                        - Daemon liveness check
@@ -322,6 +323,39 @@ static int cmd_scan_status(helper_conn* conn) {
     return 0;
 }
 
+static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
+    if (helper_ensure_connected(conn) < 0) return -1;
+
+    ipc_complete_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
+    req.limit = limit;
+
+    if (send_request(conn, IPC_MSG_FUZZY_COMPLETE, &req, sizeof(req)) < 0) {
+        helper_disconnect(conn);
+        return -1;
+    }
+
+    ipc_header hdr;
+    ipc_completions_resp resp;
+    if (recv_response(conn, &hdr, &resp, sizeof(resp)) < 0) {
+        helper_disconnect(conn);
+        return -1;
+    }
+
+    if (hdr.msg_type == IPC_MSG_FUZZY_COMPLETIONS) {
+        for (uint32_t i = 0; i < resp.count; i++) {
+            printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+        }
+    } else if (hdr.msg_type == IPC_MSG_ERROR) {
+        ipc_error_resp err;
+        memcpy(&err, &resp, sizeof(err));
+        fprintf(stderr, "helper: fuzzy error: %s\n", err.message);
+        return -1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Main loop                                                           */
 /* ------------------------------------------------------------------ */
@@ -392,6 +426,13 @@ int main(int argc, char* argv[]) {
             rc = cmd_metrics(&conn);
         } else if (strcmp(cmd, "scan-status") == 0) {
             rc = cmd_scan_status(&conn);
+        } else if (strcmp(cmd, "fuzzy") == 0) {
+            char prefix[4096] = {0};
+            uint32_t limit = 50;
+            int n = sscanf(line, "%*s %4095s %u", prefix, &limit);
+            if (n >= 1) {
+                rc = cmd_fuzzy(&conn, prefix, limit);
+            }
         } else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
             break;
         } else {

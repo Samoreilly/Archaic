@@ -1,17 +1,17 @@
 #pragma once
 
-#include <unistd.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdatomic.h>
-#include <pthread.h>
-#include "../threadmanager.h"
-#include "../scanner.h"
-#include "../metrics.h"
-#include "../trie.h"
-#include "../trie-storage.h"
 #include "../cache.h"
 #include "../config.h"
+#include "../metrics.h"
+#include "../scanner.h"
+#include "../threadmanager.h"
+#include "../trie-storage.h"
+#include "../trie.h"
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <unistd.h>
 
 struct ipc_server;
 
@@ -61,7 +61,8 @@ typedef struct {
     bool from_cache;
 } scored_result;
 
-scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit, uint64_t now);
+scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit,
+                                            uint64_t now);
 void daemon_release_scored(daemon_state* state, scored_result result);
 
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit);

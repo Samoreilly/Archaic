@@ -52,7 +52,8 @@ void cache_release(query_cache* cache, const scored_completions* sc);
  */
 void cache_put(query_cache* cache, const char* prefix, const scored_completions* sc);
 
-/* Clear all entries (called when scan completes). */
+void cache_invalidate(query_cache* cache);
+
 void cache_clear(query_cache* cache);
 
 /* ── Stats ─────────────────────────────────────────────────────────── */

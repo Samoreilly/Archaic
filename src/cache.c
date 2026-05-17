@@ -16,11 +16,11 @@ static uint64_t hash_key(const char* str) {
 /* ── Per-entry refcount for borrowed references ────────────────────── */
 typedef struct cache_entry {
     char key[CACHE_MAX_KEY_LEN];
-    scored_completions* value;   /* cache-owned, heap-allocated */
+    scored_completions* value; /* cache-owned, heap-allocated */
     uint64_t timestamp;
     bool occupied;
     bool deleted;
-    atomic_int refs;              /* borrowed reference count */
+    atomic_int refs; /* borrowed reference count */
     struct cache_entry* lru_prev;
     struct cache_entry* lru_next;
 } cache_entry;
@@ -30,7 +30,7 @@ typedef struct {
     cache_entry* table;
     size_t capacity;
     size_t count;
-    cache_entry lru_head;         /* sentinel nodes for LRU list */
+    cache_entry lru_head; /* sentinel nodes for LRU list */
     cache_entry lru_tail;
     pthread_mutex_t lock;
     uint64_t hits;
@@ -194,7 +194,7 @@ const scored_completions* cache_get(query_cache* cache, const char* prefix) {
     }
 
     uint64_t now = now_seconds();
-    if ((int)(now - entry->timestamp) > cache->ttl_seconds) {
+    if ((int) (now - entry->timestamp) > cache->ttl_seconds) {
         shard_free_entry_value(entry);
         entry->occupied = false;
         entry->deleted = false;
@@ -305,6 +305,23 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
     s->count++;
 
     pthread_mutex_unlock(&s->lock);
+}
+
+void cache_invalidate(query_cache* cache) {
+    if (!cache)
+        return;
+
+    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
+        cache_shard* s = &cache->shards[i];
+        pthread_mutex_lock(&s->lock);
+        for (size_t j = 0; j < s->capacity; j++) {
+            cache_entry* entry = &s->table[j];
+            if (entry->occupied && !entry->deleted) {
+                entry->timestamp = 0;
+            }
+        }
+        pthread_mutex_unlock(&s->lock);
+    }
 }
 
 void cache_clear(query_cache* cache) {

@@ -15,7 +15,7 @@
 static volatile int running = 1;
 
 static void* watchdog_thread_func(void* arg) {
-    daemon_state* daemon = (daemon_state*)arg;
+    daemon_state* daemon = (daemon_state*) arg;
     while (running) {
         if (!atomic_load(&daemon->scanner_healthy)) {
             sd_notify(0, "STATUS=error\nWATCHDOG=1");

@@ -19,7 +19,7 @@ static int should_ignore_dir(parallel_scanner* scanner, const char* name) {
     if (hashset_contains(&scanner->ignore_dir_set, name))
         return 1;
     for (int i = 0; i < scanner->ignore_dir_count; i++) {
-        if (strcmp(name, scanner->ignore_dirs[i]) == 0)
+        if (fnmatch(scanner->ignore_dirs[i], name, 0) == 0)
             return 1;
     }
     return 0;

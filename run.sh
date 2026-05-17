@@ -55,7 +55,7 @@ resolve_sock_path() {
 }
 
 usage() {
-    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|restart|rescan} [scan_path]"
+    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|install-bash|uninstall-bash|restart|rescan|install} [scan_path]"
     echo ""
     echo "Commands:"
     echo "  start [path]    Start the daemon scanning the given path (default: /home/sam/samdev)"
@@ -65,6 +65,9 @@ usage() {
     echo "  rescan [path]   Trigger an immediate rescan"
     echo "  install-fish    Install fish shell plugin for tab completion"
     echo "  uninstall-fish  Remove fish shell plugin"
+    echo "  install-bash    Install bash completion script"
+    echo "  uninstall-bash  Remove bash completion script"
+    echo "  install         Build and install to system paths (requires sudo)"
     exit 1
 }
 
@@ -164,6 +167,24 @@ uninstall_fish() {
     echo "Fish plugin removed"
 }
 
+BASH_COMP_DIR="$HOME/.local/share/bash-completion/completions"
+BASH_COMP_SCRIPT="$SCRIPT_DIR/bash/archaic.bash"
+
+install_bash() {
+    if [ ! -d "$BASH_COMP_DIR" ]; then
+        mkdir -p "$BASH_COMP_DIR"
+    fi
+
+    ln -sf "$BASH_COMP_SCRIPT" "$BASH_COMP_DIR/archaic.bash"
+    echo "Bash completion installed: $BASH_COMP_DIR/archaic.bash -> $BASH_COMP_SCRIPT"
+    echo "Restart bash or run: source $BASH_COMP_DIR/archaic.bash"
+}
+
+uninstall_bash() {
+    rm -f "$BASH_COMP_DIR/archaic.bash"
+    echo "Bash completion removed"
+}
+
 case "${1:-}" in
     start)
         start_daemon "${2:-}"
@@ -183,6 +204,17 @@ case "${1:-}" in
         ;;
     uninstall-fish)
         uninstall_fish
+        ;;
+    install-bash)
+        install_bash
+        ;;
+    uninstall-bash)
+        uninstall_bash
+        ;;
+    install)
+        echo "Installing archaic..."
+        cd "$SCRIPT_DIR/build" && sudo make install
+        echo "Installed. Enable with: sudo systemctl enable --now archaic@\$USER"
         ;;
     rescan)
         echo "Triggering rescan..."

@@ -20,6 +20,7 @@ add_executable(
     src/metrics.c
     src/config.c
     src/cache.c
+    src/log.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)
@@ -45,3 +46,44 @@ add_executable(
 target_include_directories(archaic-helper PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(archaic-helper PRIVATE m pthread)
 target_compile_options(archaic-helper PRIVATE -Wall -Wpedantic -Wextra)
+
+# ── Install rules ─────────────────────────────────────────────────────────────
+
+# Install binaries
+install(TARGETS archaic archaic-cli archaic-helper
+    RUNTIME DESTINATION bin
+)
+
+# Install Fish plugin
+install(FILES fish/archaic.fish
+    DESTINATION share/fish/vendor_conf.d
+)
+
+# Install Bash completion
+install(FILES bash/archaic.bash
+    DESTINATION share/bash-completion/completions
+    RENAME archaic
+)
+
+# Install example config
+install(FILES config.example.toml
+    DESTINATION etc/archaic
+    RENAME config.toml
+)
+
+# Install systemd service
+install(FILES archaic.service
+    DESTINATION lib/systemd/system
+)
+
+# ── Uninstall target ──────────────────────────────────────────────────────────
+if(NOT TARGET uninstall)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/cmake/cmake_uninstall.cmake"
+        IMMEDIATE @ONLY
+    )
+    add_custom_target(uninstall
+        COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake/cmake_uninstall.cmake
+    )
+endif()

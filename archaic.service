@@ -1,0 +1,23 @@
+[Unit]
+Description=Archaic Terminal Autocomplete Daemon
+Documentation=https://github.com/Samoreilly/Archaic
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/archaic --daemon /home/%I/projects /tmp/archaic-daemon.sock
+ExecReload=/usr/bin/archaic-cli scan /home/%I/projects
+ExecStop=/usr/bin/archaic-cli shutdown
+Restart=on-failure
+RestartSec=5
+User=%i
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/tmp/archaic-daemon.sock /tmp/archaic-state.bin
+
+[Install]
+WantedBy=multi-user.target

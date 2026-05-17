@@ -1,0 +1,27 @@
+# Archaic configuration file
+# Copy to ~/.config/archaic/config.toml and customize
+
+[daemon]
+scan_path = "/home/user/projects"
+socket_path = "/tmp/archaic-daemon.sock"
+scan_threads = 4
+max_depth = 10
+rescan_interval_seconds = 300
+
+[storage]
+max_buckets = 65536
+max_nodes_per_bucket = 100000
+cache_max_entries = 1024
+cache_ttl_seconds = 2
+
+[scoring]
+weight_frequency = 0.40
+weight_recency = 0.30
+weight_depth = 0.20
+weight_type = 0.10
+
+[fish]
+commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch"]
+
+[bash]
+commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch"]

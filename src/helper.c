@@ -67,7 +67,10 @@ static void abbreviate_path(const char* path, char* out, size_t out_len) {
 /* Color output support                                                */
 /* ------------------------------------------------------------------ */
 
-static volatile int g_color_enabled = 1;
+/* Helper NEVER emits ANSI colors. Shell plugins handle all display coloring.
+ * Fish captures stdout literally in completions, so escape codes appear as
+ * raw text (e.g. ␛[34;1m). Always output plain text from the helper. */
+static volatile int g_color_enabled = 0;
 
 static void check_color_env(void) {
     if (getenv("NO_COLOR")) {

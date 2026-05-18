@@ -110,6 +110,31 @@ install(FILES man/archaic.conf.5
     DESTINATION share/man/man5
 )
 
+# ── Unit test target ──────────────────────────────────────────────────────────
+add_executable(
+    archaic-unit
+    test/unit_tests.c
+    src/trie.c
+    src/trie-storage.c
+    src/lru.c
+    src/io/fileloader.c
+    src/scanner.c
+    src/hashset.c
+    src/threadpool.c
+    src/metrics.c
+    src/config.c
+    src/cache.c
+    src/log.c
+    src/recent-files.c
+    src/incremental.c
+    ipc/server.c
+    ipc/client.c
+)
+
+target_include_directories(archaic-unit PRIVATE ipc ${CMAKE_SOURCE_DIR})
+target_link_libraries(archaic-unit PRIVATE fmt::fmt m pthread)
+target_compile_options(archaic-unit PRIVATE -Wall -Wpedantic -Wextra)
+
 # ── Uninstall target ──────────────────────────────────────────────────────────
 if(NOT TARGET uninstall)
     configure_file(

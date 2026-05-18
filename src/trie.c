@@ -1024,43 +1024,242 @@ typedef struct {
     bool is_dir;
 } fuzzy_entry;
 
-static int fuzzy_score(const char* path, const char* query) {
+/* ── Levenshtein distance with early termination ─────────────────────── */
+
+static int levenshtein_distance(const char* s, const char* t, int max_dist) {
+    int s_len = (int) strlen(s);
+    int t_len = (int) strlen(t);
+
+    if (abs(s_len - t_len) > max_dist)
+        return max_dist + 1;
+
+    int* prev = malloc((size_t) (t_len + 1) * sizeof(int));
+    int* curr = malloc((size_t) (t_len + 1) * sizeof(int));
+    if (!prev || !curr) {
+        free(prev);
+        free(curr);
+        return max_dist + 1;
+    }
+
+    for (int j = 0; j <= t_len; j++)
+        prev[j] = j;
+
+    for (int i = 1; i <= s_len; i++) {
+        curr[0] = i;
+        int row_min = i;
+        for (int j = 1; j <= t_len; j++) {
+            int cost = (s[i - 1] == t[j - 1]) ? 0 : 1;
+            int del = prev[j] + 1;
+            int ins = curr[j - 1] + 1;
+            int sub = prev[j - 1] + cost;
+            curr[j] = del < ins ? (del < sub ? del : sub) : (ins < sub ? ins : sub);
+            if (curr[j] < row_min)
+                row_min = curr[j];
+        }
+        if (row_min > max_dist) {
+            free(prev);
+            free(curr);
+            return max_dist + 1;
+        }
+        int* tmp = prev;
+        prev = curr;
+        curr = tmp;
+    }
+
+    int result = prev[t_len];
+    free(prev);
+    free(curr);
+    return result;
+}
+
+/* ── Path segment tokenization scoring ───────────────────────────────── */
+
+static int segment_token_score(const char* path, const char* query) {
+    int path_len = (int) strlen(path);
+    int query_len = (int) strlen(query);
+    if (query_len == 0 || path_len == 0)
+        return -1;
+
+    /* Extract segments and build acronym from first chars */
+    char acronym[256];
+    int acronym_len = 0;
+
+    /* First char of path is always in acronym */
+    if (acronym_len < (int) sizeof(acronym) - 1)
+        acronym[acronym_len++] = (char) tolower((unsigned char) path[0]);
+
+    for (int i = 1; i < path_len; i++) {
+        if (path[i] == '/' || path[i] == '\\' || path[i] == '_' || path[i] == '-' ||
+            path[i] == '.') {
+            /* Next non-separator char is a segment start */
+            int j = i + 1;
+            while (j < path_len && (path[j] == '/' || path[j] == '\\' || path[j] == '_' ||
+                                    path[j] == '-' || path[j] == '.'))
+                j++;
+            if (j < path_len && acronym_len < (int) sizeof(acronym) - 1)
+                acronym[acronym_len++] = (char) tolower((unsigned char) path[j]);
+        }
+    }
+    acronym[acronym_len] = '\0';
+
+    /* Try exact acronym match */
+    if (acronym_len == query_len) {
+        int match = 1;
+        for (int i = 0; i < query_len; i++) {
+            if (tolower((unsigned char) acronym[i]) != tolower((unsigned char) query[i])) {
+                match = 0;
+                break;
+            }
+        }
+        if (match)
+            return 100 + query_len * 10;
+    }
+
+    /* Try prefix-of-segment matching: query chars match start of each segment */
+    if (query_len <= acronym_len) {
+        int score = 0;
+        int qi = 0;
+        for (int si = 0; si < acronym_len && qi < query_len; si++) {
+            if (tolower((unsigned char) acronym[si]) == tolower((unsigned char) query[qi])) {
+                score += 10 + (si == 0 ? 5 : 0);
+                qi++;
+            }
+        }
+        if (qi == query_len)
+            return score;
+    }
+
+    /* Try matching query as prefix-of-consecutive-segments */
+    int best_segment_score = -1;
+    for (int start = 0; start < path_len; start++) {
+        /* Must start at path beginning or after separator */
+        if (start > 0 && path[start - 1] != '/' && path[start - 1] != '\\' &&
+            path[start - 1] != '_' && path[start - 1] != '-' && path[start - 1] != '.')
+            continue;
+
+        int match_count = 0;
+        int qi = 0;
+        for (int pi = start; pi < path_len && qi < query_len; pi++) {
+            if (tolower((unsigned char) path[pi]) == tolower((unsigned char) query[qi])) {
+                match_count++;
+                qi++;
+                /* Bonus for matching right after a separator */
+                if (pi > 0 && (path[pi - 1] == '/' || path[pi - 1] == '\\' || path[pi - 1] == '_' ||
+                               path[pi - 1] == '-' || path[pi - 1] == '.'))
+                    match_count += 2;
+            }
+        }
+        if (qi == query_len && match_count > best_segment_score)
+            best_segment_score = match_count * 5;
+    }
+
+    return best_segment_score;
+}
+
+/* ── Path-boundary bonus for fuzzy matching ──────────────────────────── */
+
+#define FUZZY_BONUS_PATH_BOUNDARY 6
+#define FUZZY_BONUS_WORD_BOUNDARY 4
+#define FUZZY_BONUS_CAMEL_CASE 3
+#define FUZZY_BONUS_CONSECUTIVE 3
+#define FUZZY_SCORE_MATCH 10
+#define FUZZY_SCORE_GAP_START -3
+#define FUZZY_SCORE_GAP_EXTENSION -1
+
+static int path_char_class(char c) {
+    if (c == '/' || c == '\\')
+        return 0; /* path separator */
+    if (c == '-' || c == '_' || c == '.' || c == ' ')
+        return 1; /* word separator */
+    if (c >= 'A' && c <= 'Z')
+        return 2; /* uppercase */
+    if (c >= 'a' && c <= 'z')
+        return 3; /* lowercase */
+    if (c >= '0' && c <= '9')
+        return 4; /* digit */
+    return 5;     /* other */
+}
+
+static int path_bonus_at(const char* path, int pos) {
+    if (pos == 0)
+        return FUZZY_BONUS_PATH_BOUNDARY;
+    int prev_class = path_char_class(path[pos - 1]);
+    int curr_class = path_char_class(path[pos]);
+    if (prev_class == 0)
+        return FUZZY_BONUS_PATH_BOUNDARY;
+    if (prev_class == 1)
+        return FUZZY_BONUS_WORD_BOUNDARY;
+    if (prev_class == 3 && curr_class == 2)
+        return FUZZY_BONUS_CAMEL_CASE;
+    return 0;
+}
+
+/* ── Enhanced fuzzy scoring combining strategies ──────────────────────── */
+
+static int enhanced_fuzzy_score(const char* path, const char* query) {
     int path_len = (int) strlen(path);
     int query_len = (int) strlen(query);
     if (query_len == 0 || path_len < query_len)
         return -1;
 
+    /* 1. Exact prefix match (highest priority) */
+    if (strncasecmp(path, query, (size_t) query_len) == 0)
+        return 1000 + query_len;
+
+    /* 2. Segment tokenization match */
+    int seg_score = segment_token_score(path, query);
+    if (seg_score > 0)
+        return seg_score + 100; /* High but below exact */
+
+    /* 3. Subsequence match with path-boundary bonuses (improved fzy-style) */
     const char* basename = path;
     for (const char* p = path; *p; p++) {
         if (*p == '/')
             basename = p + 1;
     }
-
-    int matches = 0;
-    int contiguous = 0;
-    int best_contiguous = 0;
     int bn_len = (int) strlen(basename);
 
-    int bi = 0;
+    /* First pass: compute subsequence with boundary bonuses */
+    int score = 0;
     int qi = 0;
-    while (qi < query_len && bi < bn_len) {
+    int prev_match_pos = -1;
+    int consecutive = 0;
+
+    for (int bi = 0; bi < bn_len && qi < query_len; bi++) {
         if (tolower((unsigned char) basename[bi]) == tolower((unsigned char) query[qi])) {
-            matches++;
-            contiguous++;
-            if (contiguous > best_contiguous)
-                best_contiguous = contiguous;
+            int bonus = path_bonus_at(basename, bi);
+            if (prev_match_pos >= 0) {
+                int gap = bi - prev_match_pos - 1;
+                if (gap > 0)
+                    score += FUZZY_SCORE_GAP_START + gap * FUZZY_SCORE_GAP_EXTENSION;
+            }
+            score += FUZZY_SCORE_MATCH + bonus;
+            consecutive++;
+            prev_match_pos = bi;
             qi++;
         } else {
-            contiguous = 0;
+            consecutive = 0;
         }
-        bi++;
     }
 
-    if (matches != query_len)
-        return -1;
+    if (qi == query_len)
+        return score;
 
-    int skipped = bi - matches;
-    return matches * 10 + best_contiguous * 5 - skipped;
+    /* 4. Levenshtein distance on basename only (typo tolerance) */
+    int basename_dist = levenshtein_distance(query, basename, 3);
+    if (basename_dist > 0 && basename_dist <= 3)
+        return (4 - basename_dist) * 5 + 10;
+
+    /* 5. Levenshtein distance on full path */
+    int path_dist = levenshtein_distance(query, path, 3);
+    if (path_dist > 0 && path_dist <= 3)
+        return (4 - path_dist) * 3 + 5;
+
+    return -1;
+}
+
+static int fuzzy_score(const char* path, const char* query) {
+    return enhanced_fuzzy_score(path, query);
 }
 
 static void fuzzy_collect_dfs(RadixNode* node, char* buffer, size_t depth, const char* query,

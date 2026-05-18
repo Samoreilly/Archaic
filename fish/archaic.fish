@@ -37,10 +37,20 @@ set -g archaic_helper_path "$repo_root/build/archaic-helper"
 # can appear as raw visible text in some terminal/pager configurations, including
 # kitty. Setting pager color variables to empty strings tells Fish to skip set_color
 # calls entirely, producing zero ANSI escape codes in completion output.
-# Restore previous values with: set -g fish_pager_color_completion <your-color>
+# This affects ALL Fish completions, not just archaic's. To restore colors:
+#   set -g fish_pager_color_completion cyan
+#   set -g fish_pager_color_description yellow
+#   set -g fish_pager_color_prefix --bold --underline
 set -g fish_pager_color_completion ""
 set -g fish_pager_color_description ""
 set -g fish_pager_color_prefix ""
+set -g fish_pager_color_selected_completion ""
+set -g fish_pager_color_selected_description ""
+set -g fish_pager_color_selected_prefix ""
+set -g fish_pager_color_selected_background ""
+set -g fish_pager_color_background ""
+set -g fish_pager_color_secondary ""
+set -g fish_pager_color_progress ""
 
 # ── Default command list ──────────────────────────────────────────────────────
 set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch

@@ -102,6 +102,11 @@ case "$SHELL_TYPE" in
             fish -c "source $FISH_CONF_DIR/archaic.fish" 2>/dev/null || true
             info "Fish plugin sourced."
         fi
+
+        # User must re-source in current Fish session to pick up pager color overrides
+        echo ""
+        info "IMPORTANT: Run this in your current Fish session to apply changes:"
+        info "  source ~/.config/fish/conf.d/archaic.fish"
         ;;
     bash)
         BASH_COMP_DIR="$HOME/.local/share/bash-completion/completions"

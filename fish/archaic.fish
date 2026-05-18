@@ -31,6 +31,17 @@ set -l repo_root (dirname (dirname "$plugin_path"))
 set -g archaic_cli_path "$repo_root/build/archaic-cli"
 set -g archaic_helper_path "$repo_root/build/archaic-helper"
 
+# ── Completion pager colors ────────────────────────────────────────────────────
+# Fish's completion pager applies set_color calls (e.g. set_color --bold blue for
+# directories) when rendering completions. These ANSI escape codes (\033[1;34m etc.)
+# can appear as raw visible text in some terminal/pager configurations, including
+# kitty. Setting pager color variables to empty strings tells Fish to skip set_color
+# calls entirely, producing zero ANSI escape codes in completion output.
+# Restore previous values with: set -g fish_pager_color_completion <your-color>
+set -g fish_pager_color_completion ""
+set -g fish_pager_color_description ""
+set -g fish_pager_color_prefix ""
+
 # ── Default command list ──────────────────────────────────────────────────────
 set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch
 

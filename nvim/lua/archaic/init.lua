@@ -11,7 +11,7 @@ M._connected = false
 M._pipe = nil
 
 function M.setup(opts)
-    M._config = vim.tbl_deep_extend("force", M._config", opts or {})
+    M._config = vim.tbl_deep_extend("force", M._config, opts or {})
 
     vim.api.nvim_create_user_command("ArchaicStatus", function()
         M.check_health()

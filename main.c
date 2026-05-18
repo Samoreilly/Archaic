@@ -203,6 +203,25 @@ int main(int argc, char* argv[]) {
         daemon->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
         daemon_start_rescan_timer(daemon);
 
+        daemon->watcher = watcher_create();
+        if (daemon->watcher) {
+            for (int i = 0; i < scan_root_count; i++) {
+                watcher_add_root(daemon->watcher, scan_roots[i]);
+            }
+            watcher_cb_ctx wcb;
+            wcb.on_event = NULL;
+            wcb.userdata = daemon;
+            atomic_store(&daemon->watcher_dirty, false);
+
+            if (watcher_start(daemon->watcher, wcb) == 0) {
+                LOG_INFO("main", "filesystem watcher started");
+            } else {
+                LOG_WARN("main", "filesystem watcher failed to start");
+                watcher_destroy(daemon->watcher);
+                daemon->watcher = NULL;
+            }
+        }
+
         sd_notify(0, "READY=1");
         pthread_t watchdog_thread;
         pthread_create(&watchdog_thread, NULL, watchdog_thread_func, daemon);
@@ -223,6 +242,12 @@ int main(int argc, char* argv[]) {
 
         pthread_join(watchdog_thread, NULL);
         LOG_INFO("main", "shutting down...");
+
+        if (daemon->watcher) {
+            watcher_stop(daemon->watcher);
+            watcher_destroy(daemon->watcher);
+            daemon->watcher = NULL;
+        }
 
         if (sigterm_received) {
             LOG_INFO("main", "signal-safe shutdown: saving state before exit...");

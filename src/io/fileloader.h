@@ -9,6 +9,7 @@
 #include "../threadmanager.h"
 #include "../trie-storage.h"
 #include "../trie.h"
+#include "../watcher.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -46,6 +47,8 @@ typedef struct {
     bool case_insensitive;
     char bookmarks[CONFIG_MAX_BOOKMARKS][CONFIG_MAX_STRING];
     int bookmark_count;
+    fs_watcher* watcher;
+    atomic_bool watcher_dirty;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);

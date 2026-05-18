@@ -31,6 +31,7 @@
 #include "../src/incremental.h"
 #include "../src/trie-storage.h"
 #include "../src/trie.h"
+#include "../src/watcher.h"
 
 /* ── Test infrastructure ─────────────────────────────────────────────── */
 
@@ -1078,6 +1079,55 @@ static void test_concurrent_cache_ops(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ * FILESYSTEM WATCHER TESTS
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static void test_watcher_create_destroy(void) {
+    TEST(watcher_create_destroy);
+    fs_watcher* w = watcher_create();
+    ASSERT_NOT_NULL(w, "watcher_create returned NULL");
+    watcher_destroy(w);
+    PASS();
+}
+
+static void test_watcher_add_root(void) {
+    TEST(watcher_add_root);
+    fs_watcher* w = watcher_create();
+    ASSERT_NOT_NULL(w, "watcher_create returned NULL");
+
+    int result = watcher_add_root(w, "/tmp");
+    ASSERT_TRUE(result == 0, "watcher_add_root should return 0");
+    ASSERT_TRUE(w->root_count == 1, "root_count should be 1");
+    ASSERT_EQ_STR("/tmp", w->roots[0], "root path should be /tmp");
+
+    result = watcher_add_root(w, "/home");
+    ASSERT_TRUE(result == 0, "watcher_add_root should return 0 for second root");
+    ASSERT_TRUE(w->root_count == 2, "root_count should be 2");
+
+    watcher_destroy(w);
+    PASS();
+}
+
+static void test_watcher_add_root_overflow(void) {
+    TEST(watcher_add_root_overflow);
+    fs_watcher* w = watcher_create();
+    ASSERT_NOT_NULL(w, "watcher_create returned NULL");
+
+    for (int i = 0; i < WATCHER_MAX_ROOTS; i++) {
+        char path[64];
+        snprintf(path, sizeof(path), "/tmp/test%d", i);
+        watcher_add_root(w, path);
+    }
+
+    int result = watcher_add_root(w, "/tmp/overflow");
+    ASSERT_TRUE(result == -1, "watcher_add_root should return -1 on overflow");
+    ASSERT_TRUE(w->root_count == WATCHER_MAX_ROOTS, "root_count should be at max");
+
+    watcher_destroy(w);
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  * MAIN
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -1171,6 +1221,12 @@ int main(int argc, char* argv[]) {
     /* Group 12: Concurrent Stress */
     printf("\n--- Concurrent Stress ---\n");
     test_concurrent_cache_ops();
+
+    /* Group 13: Filesystem Watcher */
+    printf("\n--- Filesystem Watcher ---\n");
+    test_watcher_create_destroy();
+    test_watcher_add_root();
+    test_watcher_add_root_overflow();
 
     /* Summary */
     printf("\n========================================\n");

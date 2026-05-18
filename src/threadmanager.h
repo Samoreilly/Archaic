@@ -62,5 +62,6 @@ typedef struct {
 
     atomic_int dirs_scanned;
     atomic_int files_scanned;
+    atomic_int skipped_dirs;
     atomic_int last_progress_log;
 } parallel_scanner;

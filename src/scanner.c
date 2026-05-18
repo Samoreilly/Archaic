@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <errno.h>
 #include <fnmatch.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -111,6 +112,12 @@ static void* scanner_worker(void* arg) {
 
         DIR* dir = opendir(path);
         if (!dir) {
+            if (errno == EACCES) {
+                LOG_WARN("scanner", "permission denied: %s", path);
+                atomic_fetch_add(&scanner->skipped_dirs, 1);
+            } else {
+                LOG_WARN("scanner", "cannot open directory: %s", path);
+            }
             int prev = atomic_fetch_sub(&scanner->active_workers, 1);
             if (prev == 1) {
                 pthread_mutex_lock(&scanner->queue->queue_lock);

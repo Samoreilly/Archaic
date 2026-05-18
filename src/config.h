@@ -83,3 +83,5 @@ void config_init_defaults(archaic_config* cfg);
    Searches upward from start_path for .archaicignore until root or max_depth.
    Returns the number of patterns loaded. */
 int config_load_archaicignore(archaic_config* cfg, const char* start_path);
+
+void config_sandbox_validate(archaic_config* cfg);

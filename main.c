@@ -1,9 +1,22 @@
+#ifndef ARCHAIC_VERSION
+#define ARCHAIC_VERSION "0.9.0"
+#endif
+#ifndef ARCHAIC_COMMIT
+#define ARCHAIC_COMMIT "unknown"
+#endif
+#ifndef ARCHAIC_BUILD_DATE
+#define ARCHAIC_BUILD_DATE __DATE__
+#endif
+
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "ipc/protocol.h"
@@ -15,6 +28,7 @@
 
 static volatile int running = 1;
 static volatile int sighup_received = 0;
+static volatile int sigterm_received = 0;
 static char pid_file_path[4096] = {0};
 
 static void cleanup_pid_file(void) {
@@ -53,6 +67,12 @@ static void handle_signal(int sig) {
     running = 0;
 }
 
+static void handle_term(int sig) {
+    (void) sig;
+    sigterm_received = 1;
+    running = 0;
+}
+
 static void handle_sighup(int sig) {
     (void) sig;
     sighup_received = 1;
@@ -76,10 +96,17 @@ static void apply_config_reload(daemon_state* daemon) {
 }
 
 int main(int argc, char* argv[]) {
+    if (argc > 1 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("archaic " ARCHAIC_VERSION " (commit: " ARCHAIC_COMMIT ", date: " ARCHAIC_BUILD_DATE
+               ")\n");
+        return 0;
+    }
+
     if (argc > 1 && strcmp(argv[1], "--daemon") == 0) {
         archaic_config cfg;
         config_init_defaults(&cfg);
         config_load_default(&cfg);
+        config_sandbox_validate(&cfg);
 
         /* CLI args override config */
         const char* scan_path = (argc > 2 && argv[2][0] != '\0') ? argv[2] : NULL;
@@ -108,10 +135,19 @@ int main(int argc, char* argv[]) {
             LOG_INFO("main", "auto-detected %d scanner threads", cfg.daemon.scan_threads);
         }
 
-        signal(SIGINT, handle_signal);
-        signal(SIGTERM, handle_signal);
-        signal(SIGHUP, handle_sighup);
-        signal(SIGPIPE, SIG_IGN);
+        struct sigaction sa_int, sa_term, sa_hup, sa_pipe;
+        memset(&sa_int, 0, sizeof(sa_int));
+        sa_int.sa_handler = handle_signal;
+        sigaction(SIGINT, &sa_int, NULL);
+        memset(&sa_term, 0, sizeof(sa_term));
+        sa_term.sa_handler = handle_term;
+        sigaction(SIGTERM, &sa_term, NULL);
+        memset(&sa_hup, 0, sizeof(sa_hup));
+        sa_hup.sa_handler = handle_sighup;
+        sigaction(SIGHUP, &sa_hup, NULL);
+        memset(&sa_pipe, 0, sizeof(sa_pipe));
+        sa_pipe.sa_handler = SIG_IGN;
+        sigaction(SIGPIPE, &sa_pipe, NULL);
 
         log_init((log_level) cfg.daemon.log_level, stderr);
         LOG_INFO("main", "archaic daemon starting (v%d)", IPC_PROTOCOL_VERSION);
@@ -123,6 +159,27 @@ int main(int argc, char* argv[]) {
         }
 
         LOG_INFO("main", "starting IPC on %s", sock_path);
+
+        if (access(sock_path, F_OK) == 0) {
+            int test_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (test_fd >= 0) {
+                struct sockaddr_un addr;
+                memset(&addr, 0, sizeof(addr));
+                addr.sun_family = AF_UNIX;
+                strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
+                if (connect(test_fd, (struct sockaddr*) &addr, sizeof(addr)) == 0) {
+                    close(test_fd);
+                    LOG_ERR("main", "another daemon is already running on %s", sock_path);
+                    return 1;
+                }
+                close(test_fd);
+                LOG_WARN("main", "removing stale socket %s", sock_path);
+                unlink(sock_path);
+            }
+        }
+
+        umask(077);
+
         if (daemon_start_ipc(daemon, sock_path) != 0) {
             LOG_ERR("main", "IPC start failed");
             daemon_shutdown(daemon);
@@ -166,6 +223,14 @@ int main(int argc, char* argv[]) {
 
         pthread_join(watchdog_thread, NULL);
         LOG_INFO("main", "shutting down...");
+
+        if (sigterm_received) {
+            LOG_INFO("main", "signal-safe shutdown: saving state before exit...");
+            char state_path[4096];
+            snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
+            daemon_save_state(daemon, state_path);
+        }
+
         daemon_shutdown(daemon);
         cleanup_pid_file();
         LOG_INFO("main", "stopped.");

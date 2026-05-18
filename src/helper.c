@@ -465,6 +465,11 @@ static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
 /* ------------------------------------------------------------------ */
 
 int main(int argc, char* argv[]) {
+    if (argc > 1 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("archaic-helper 0.9.0\n");
+        return 0;
+    }
+
     /* Determine socket path: CLI arg > config > default */
     const char* sock_path = IPC_SOCK_PATH;
 

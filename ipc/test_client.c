@@ -6,7 +6,16 @@
 #include "client.h"
 #include "protocol.h"
 
+#ifndef ARCHAIC_VERSION
+#define ARCHAIC_VERSION "0.9.0"
+#endif
+
 int main(int argc, char* argv[]) {
+    if (argc > 1 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
+        printf("archaic-cli " ARCHAIC_VERSION "\n");
+        return 0;
+    }
+
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <command> [args...]\n", argv[0]);
         fprintf(stderr, "Commands:\n");

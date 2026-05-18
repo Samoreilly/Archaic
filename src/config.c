@@ -95,6 +95,45 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->bookmarks.count = 0;
 }
 
+void config_sandbox_validate(archaic_config* cfg) {
+    if (cfg->daemon.scan_threads < 1)
+        cfg->daemon.scan_threads = 1;
+    if (cfg->daemon.scan_threads > 32)
+        cfg->daemon.scan_threads = 32;
+    if (cfg->daemon.max_depth < 1)
+        cfg->daemon.max_depth = 1;
+    if (cfg->daemon.max_depth > 20)
+        cfg->daemon.max_depth = 20;
+    if (cfg->daemon.rescan_interval_seconds < 0)
+        cfg->daemon.rescan_interval_seconds = 0;
+    if (cfg->daemon.rescan_interval_seconds > 86400)
+        cfg->daemon.rescan_interval_seconds = 86400;
+    if (cfg->daemon.log_level < 0)
+        cfg->daemon.log_level = 0;
+    if (cfg->daemon.log_level > 3)
+        cfg->daemon.log_level = 3;
+    if (cfg->storage.max_buckets < 1024)
+        cfg->storage.max_buckets = 1024;
+    if (cfg->storage.max_buckets > 1048576)
+        cfg->storage.max_buckets = 1048576;
+    if (cfg->storage.cache_max_entries < 16)
+        cfg->storage.cache_max_entries = 16;
+    if (cfg->storage.cache_max_entries > 65536)
+        cfg->storage.cache_max_entries = 65536;
+    if (cfg->storage.cache_ttl_seconds < 1)
+        cfg->storage.cache_ttl_seconds = 1;
+    if (cfg->storage.cache_ttl_seconds > 300)
+        cfg->storage.cache_ttl_seconds = 300;
+    if (cfg->scoring.weight_frequency < 0.0)
+        cfg->scoring.weight_frequency = 0.0;
+    if (cfg->scoring.weight_frequency > 1.0)
+        cfg->scoring.weight_frequency = 1.0;
+    if (cfg->scoring.weight_recency < 0.0)
+        cfg->scoring.weight_recency = 0.0;
+    if (cfg->scoring.weight_recency > 1.0)
+        cfg->scoring.weight_recency = 1.0;
+}
+
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 static char* trim_left(char* s) {

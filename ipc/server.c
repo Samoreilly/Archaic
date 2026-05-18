@@ -66,9 +66,7 @@ static void dedup_insert(dedup_set* ds, const char* path) {
     }
 }
 
-static const int RECENT_FIRST_MODE = 0;
-
-static int cmp_recent_desc(const void* a, const void* b) {
+__attribute__((unused)) static int cmp_recent_desc(const void* a, const void* b) {
     const scored_entry* ea = (const scored_entry*) a;
     const scored_entry* eb = (const scored_entry*) b;
     if (eb->last_access > ea->last_access)

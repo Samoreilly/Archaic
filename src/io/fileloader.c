@@ -45,7 +45,7 @@
 #define STATE_VERSION 2U
 
 /* Simple FNV-1a hash for state file integrity checking */
-static uint32_t fnv1a_hash(const void* data, size_t len) {
+__attribute__((unused)) static uint32_t fnv1a_hash(const void* data, size_t len) {
     const uint8_t* bytes = (const uint8_t*) data;
     uint32_t hash = 2166136261U;
     for (size_t i = 0; i < len; i++) {
@@ -441,7 +441,8 @@ static void collect_frequencies_dfs(RadixNode* node, char* buffer, size_t depth,
 
     if (node->is_leaf && depth > 0) {
         buffer[depth] = '\0';
-        fprintf(f, "%s\t%lu\t%lu\t%d\n", buffer, node->freq, node->last_access, node->is_dir);
+        fprintf(f, "%s\t%llu\t%llu\t%d\n", buffer, (unsigned long long) node->freq,
+                (unsigned long long) node->last_access, node->is_dir);
     }
 
     for (uint8_t i = 0; i < node->child_count; i++) {
@@ -504,8 +505,8 @@ int daemon_import_frequencies(daemon_state* state, const char* path) {
         uint64_t freq, last_access;
         int is_dir;
 
-        if (sscanf(line, "%4095[^\t]\t%lu\t%lu\t%d", file_path, &freq, &last_access, &is_dir) >=
-            2) {
+        if (sscanf(line, "%4095[^\t]\t%llu\t%llu\t%d", file_path, (unsigned long long*) &freq,
+                   (unsigned long long*) &last_access, &is_dir) >= 2) {
             path_validation val = validate_input_path("", file_path);
             if (val.exists && val.full_path) {
                 store_lock(state->store);

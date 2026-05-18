@@ -25,7 +25,7 @@ static void detach_node(t_bucket_store* lfu, node* nde) {
     nde->next = NULL;
 }
 
-node* create_node(t_bucket_store* lfu, t_bucket* bucket) {
+node* create_node(t_bucket_store* lfu __attribute__((unused)), t_bucket* bucket) {
     node* nde = calloc(1, sizeof(node));
     nde->bucket = bucket;
     return nde;

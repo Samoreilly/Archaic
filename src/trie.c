@@ -364,7 +364,7 @@ static inline void add_child(RadixNode* node, char c, RadixNode* child) {
     node->child_count++;
 }
 
-static void remove_child_at(RadixNode* node, uint8_t idx) {
+__attribute__((unused)) static void remove_child_at(RadixNode* node, uint8_t idx) {
     if (idx >= node->child_count)
         return;
     for (uint8_t i = idx; i < node->child_count - 1; i++) {
@@ -1234,6 +1234,8 @@ static int enhanced_fuzzy_score(const char* path, const char* query) {
                     score += FUZZY_SCORE_GAP_START + gap * FUZZY_SCORE_GAP_EXTENSION;
             }
             score += FUZZY_SCORE_MATCH + bonus;
+            if (consecutive >= 2)
+                score += FUZZY_SCORE_GAP_START;
             consecutive++;
             prev_match_pos = bi;
             qi++;

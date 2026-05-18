@@ -11,22 +11,27 @@ seamlessly with Fish and Bash shells.
 
 - **Sub-millisecond query latency** — radix tree + binary search + LRU cache
 - **Intelligent scoring** — frequency, recency, depth, and type weighted ranking
+- **Enhanced fuzzy matching** — 5-strategy scoring: exact prefix, segment tokenization (acronym matching), path-boundary bonuses, Levenshtein typo tolerance, and full-path fallback
 - **Background filesystem scanning** — multi-threaded, configurable depth
+- **Real-time filesystem watching** — inotify (Linux) / kqueue (macOS) with polling fallback
 - **Periodic auto-rescan** — stays in sync with filesystem changes
-- **State persistence** — survives daemon restarts via binary save/load
+- **State persistence** — survives daemon restarts via binary save/load (atomic write)
 - **TOML configuration** — sensible defaults, fully customizable
-- **Fish and Bash integration** — tab completion and inline suggestions (Fish)
-- **Unix domain socket IPC** — versioned protocol for client communication
+- **Fish, Bash, and Zsh integration** — tab completion and inline suggestions
+- **Neovim integration** — nvim-cmp source, Telescope picker, user commands
+- **Unix domain socket IPC** — versioned binary protocol for client communication
 - **Memory safety** — configurable limits, per-bucket refcounting, LRU eviction
-- **Zero external dependencies** — pure C23, POSIX, pthreads
+- **Zero external dependencies** — pure C23, POSIX, pthreads (except libfmt for logging)
 
 ## Architecture
 
 ```
-Fish Shell → archaic-helper (persistent) → Unix Socket → archaic-daemon
+Fish/Bash/Zsh → archaic-helper (persistent) → Unix Socket → archaic-daemon
                                                         ├── Radix Tree (sorted, bsearch)
                                                         ├── Bucket Store (65536, LRU)
                                                         ├── Query Cache (LRU + TTL)
+                                                        ├── Enhanced Fuzzy (5-strategy)
+                                                        ├── Filesystem Watcher (inotify/kqueue)
                                                         └── Parallel Scanner (4 threads)
 ```
 
@@ -47,7 +52,21 @@ cd Archaic
 ```
 
 This builds the project, starts the daemon, and installs shell integration for your
-current shell (Fish or Bash) — no further steps required.
+current shell (Fish, Bash, or Zsh) — no further steps required.
+
+### Homebrew (macOS)
+
+```bash
+brew install --formula Formula/archaic.rb
+archaic --daemon ~/projects
+```
+
+### Nix
+
+```bash
+nix build
+./result/bin/archaic --daemon ~/projects
+```
 
 ### Manual install
 
@@ -64,10 +83,12 @@ cmake .. && make
 # 3. Install shell integration
 ./run.sh install-fish   # Fish shell
 ./run.sh install-bash   # Bash
+./run.sh install-zsh    # Zsh
 
 # 4. Restart your shell or run:
 #    Fish:  source ~/.config/fish/conf.d/archaic.fish
 #    Bash:  source ~/.local/share/bash-completion/completions/archaic.bash
+#    Zsh:   source ~/.config/zsh/archaic.zsh
 ```
 
 ## Configuration
@@ -117,6 +138,7 @@ ignore_files = ["*.pyc", "*.o", "*.log", ".DS_Store"]
 | `daemon` | `scan_threads` | `4` | Parallel scanner thread count |
 | `daemon` | `max_depth` | `10` | Maximum directory traversal depth |
 | `daemon` | `rescan_interval_seconds` | `300` | Auto-rescan interval (0 to disable) |
+| `daemon` | `watcher_fallback_interval` | `30` | Polling interval when inotify/kqueue unavailable |
 | `storage` | `max_buckets` | `65536` | Hash bucket count for path store |
 | `storage` | `max_nodes_per_bucket` | `100000` | Max entries per bucket |
 | `storage` | `cache_max_entries` | `1024` | Query cache size |
@@ -144,6 +166,8 @@ ignore_files = ["*.pyc", "*.o", "*.log", ".DS_Store"]
 ./run.sh uninstall-fish   # Remove Fish shell plugin
 ./run.sh install-bash     # Install Bash completion script
 ./run.sh uninstall-bash   # Remove Bash completion script
+./run.sh install-zsh      # Install Zsh completion script
+./run.sh uninstall-zsh    # Remove Zsh completion script
 ```
 
 ### Client (`archaic-cli`)
@@ -204,6 +228,60 @@ Archaic provides tab completion for Bash:
 source ~/.local/share/bash-completion/completions/archaic.bash
 ```
 
+### Zsh
+
+Archaic provides tab completion for Zsh with the same features as Bash.
+
+#### Installation
+
+```zsh
+# Add to ~/.zshrc:
+source /path/to/archaic/zsh/archaic.zsh
+```
+
+### Neovim
+
+Archaic provides integration with Neovim through two modes:
+
+- **nvim-cmp source** — autocomplete paths while typing
+- **Telescope picker** — fuzzy-find files with `:ArchaicFind`
+
+#### Installation (lazy.nvim)
+
+```lua
+{
+  "Samoreilly/Archaic",
+  lazy = true,
+  dir = "/path/to/archaic/nvim",
+  config = function()
+    require("archaic").setup({
+      socket_path = "/tmp/archaic-daemon.sock",
+      timeout_ms = 100,
+      enable_cmp = true,
+      enable_telescope = true,
+    })
+  end,
+}
+```
+
+#### Manual Setup
+
+```lua
+-- Add to your init.lua or a plugin spec:
+local archaic = require("archaic")
+archaic.setup({})
+
+-- User commands:
+-- :ArchaicStatus   — check daemon status
+-- :ArchaicReindex   — trigger rescan
+-- :ArchaicToggle    — toggle completions
+-- :ArchaicCheckHealth — health check
+
+-- Telescope extension:
+require("telescope").load_extension("archaic")
+:Telescope archaic find_files
+```
+
 ### Behavior (Both Shells)
 
 - Commands listed in `[fish].commands` or `[bash].commands` trigger completions
@@ -227,6 +305,38 @@ Archaic's speed comes from several layered optimizations:
   counts on each hash bucket
 - **4-thread parallel scanner** — filesystem indexing runs across multiple
   threads with work-stealing
+- **Real-time filesystem watching** — inotify/kqueue push updates instead of
+  periodic full rescans
+
+## Fuzzy Matching
+
+Archaic uses a 5-strategy scoring system for fuzzy path matching:
+
+| Strategy | Priority | Example |
+|----------|----------|---------|
+| Exact prefix | 1000+ | `src/ma` → `src/main.c` |
+| Segment tokenization | 100-500 | `srma` → `src/main.c`, `sio` → `src/io/` |
+| Subsequence + path bonuses | 50-200 | `srcmai` → `src/main.c` |
+| Levenshtein basename | 10-49 | `maim` → `main.c` (1 edit) |
+| Levenshtein full path | 1-9 | `src/maim` → `src/main.c` |
+
+Segment tokenization breaks paths on `/`, `.`, `-`, and `_` to match
+acronyms: typing `sio` finds `src/io/`, typing `mvcm` finds `models/view_controller.cr`.
+
+## Filesystem Watcher
+
+Archaic watches for filesystem changes in real time:
+
+- **Linux**: Uses `inotify` for immediate event notification
+- **macOS**: Uses `kqueue` with `EVFILT_VNODE` for directory monitoring
+- **Fallback**: Polling-based timer (configurable interval)
+
+Watched directories are added recursively, skipping `.git`, `node_modules`,
+`.venv`, `__pycache__`, `build`, and `dist`. New directories are automatically
+added when created. Removed directories are cleaned up.
+
+To force a full rescan regardless of the watcher, send SIGHUP or use
+`archaic-cli scan <path>`.
 
 ## Troubleshooting
 

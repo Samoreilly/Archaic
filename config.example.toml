@@ -10,6 +10,7 @@ socket_path = "/tmp/archaic-daemon.sock"
 scan_threads = 4
 max_depth = 10
 rescan_interval_seconds = 300
+watcher_fallback_interval = 30
 
 [storage]
 max_buckets = 65536

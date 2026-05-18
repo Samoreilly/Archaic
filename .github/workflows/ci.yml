@@ -90,3 +90,34 @@ jobs:
       - name: Check formatting
         run: |
           clang-format --dry-run --Werror src/*.c src/*.h ipc/*.c ipc/*.h main.c test/*.c
+
+      - name: Check Fish plugin syntax
+        run: |
+          sudo apt-get install -y fish
+          fish -c "source fish/archaic.fish" || true
+          fish -n fish/archaic.fish || true
+
+  asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libfmt-dev clang
+
+      - name: Configure with ASan
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: |
+          cd build
+          make -j$(nproc)
+
+      - name: Run tests with ASan
+        run: |
+          cd build
+          timeout 60 ./archaic "$GITHUB_WORKSPACE" 2>&1 | grep -E '(PASS|FAIL|OVERALL|ERROR|LEAK)' || true

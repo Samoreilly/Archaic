@@ -60,10 +60,20 @@ target_include_directories(archaic-helper PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(archaic-helper PRIVATE m pthread)
 target_compile_options(archaic-helper PRIVATE -Wall -Wpedantic -Wextra)
 
+add_executable(
+    archaic-bench
+    test/bench.c
+    src/trie.c
+)
+
+target_include_directories(archaic-bench PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(archaic-bench PRIVATE m pthread)
+target_compile_options(archaic-bench PRIVATE -Wall -Wpedantic -Wextra)
+
 # ── Install rules ─────────────────────────────────────────────────────────────
 
 # Install binaries
-install(TARGETS archaic archaic-cli archaic-helper
+install(TARGETS archaic archaic-cli archaic-helper archaic-bench
     RUNTIME DESTINATION bin
 )
 

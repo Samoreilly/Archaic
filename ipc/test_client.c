@@ -27,6 +27,9 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  metrics\n");
         fprintf(stderr, "  scan-status\n");
         fprintf(stderr, "  fuzzy <query> [limit]\n");
+        fprintf(stderr, "  stats\n");
+        fprintf(stderr, "  clear-cache\n");
+        fprintf(stderr, "  reindex [path]\n");
         fprintf(stderr, "  shutdown\n");
         return 1;
     }
@@ -185,6 +188,47 @@ int main(int argc, char* argv[]) {
             }
         } else {
             fprintf(stderr, "Fuzzy completions failed\n");
+        }
+    } else if (strcmp(argv[1], "stats") == 0) {
+        ipc_metrics_resp resp;
+        rc = ipc_client_metrics(client, &resp);
+        if (rc == 0) {
+            printf("archaic daemon statistics\n");
+            printf("─────────────────────────────\n");
+            printf("queries_total:       %lu\n", (unsigned long) resp.queries_total);
+            printf("completions_total:   %lu\n", (unsigned long) resp.completions_total);
+            printf("scans_total:         %lu\n", (unsigned long) resp.scans_total);
+            printf("errors_total:        %lu\n", (unsigned long) resp.errors_total);
+            printf("cache_hits:          %lu\n", (unsigned long) resp.cache_hits);
+            printf("cache_misses:         %lu\n", (unsigned long) resp.cache_misses);
+            double hit_rate =
+                (resp.cache_hits + resp.cache_misses > 0)
+                    ? (double) resp.cache_hits / (resp.cache_hits + resp.cache_misses) * 100.0
+                    : 0.0;
+            printf("cache_hit_rate:      %.1f%%\n", hit_rate);
+            printf("query_latency_avg:   %.3f ms\n", resp.query_latency_avg_ms);
+            printf("paths_indexed:       %lu\n", (unsigned long) resp.total_paths_indexed);
+            printf("dirs_indexed:        %lu\n", (unsigned long) resp.total_dirs_indexed);
+        } else {
+            fprintf(stderr, "Stats failed\n");
+        }
+    } else if (strcmp(argv[1], "clear-cache") == 0) {
+        ipc_scan_req req;
+        memset(&req, 0, sizeof(req));
+        strncpy(req.path, "__clear_cache__", sizeof(req.path) - 1);
+        if (ipc_client_scan(client, req.path) == 0) {
+            printf("Cache cleared.\n");
+        } else {
+            fprintf(stderr, "Failed to clear cache (daemon may not support this)\n");
+            rc = 1;
+        }
+    } else if (strcmp(argv[1], "reindex") == 0) {
+        const char* reindex_path = (argc > 2) ? argv[2] : "/";
+        rc = ipc_client_scan(client, reindex_path);
+        if (rc == 0) {
+            printf("Reindex started for: %s\n", reindex_path);
+        } else {
+            fprintf(stderr, "Reindex failed\n");
         }
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);

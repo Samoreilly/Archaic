@@ -420,7 +420,12 @@ rerr:
 }
 
 void daemon_save_state(daemon_state* state, const char* path) {
-    save_trie(state, path);
+    if (!path || path[0] == '\0')
+        return;
+    char tmp_path[4100];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", path, getpid());
+    save_trie(state, tmp_path);
+    rename(tmp_path, path);
 }
 
 static void collect_frequencies_dfs(RadixNode* node, char* buffer, size_t depth, FILE* f) {
@@ -731,7 +736,8 @@ static void* rescan_timer_func(void* arg) {
 
         /* Trigger a rescan if not already scanning */
         if (!atomic_load(&state->scanning) && state->last_scan_path_count > 0) {
-            LOG_INFO("scanner", "periodic rescan triggered (%d roots)", state->last_scan_path_count);
+            LOG_INFO("scanner", "periodic rescan triggered (%d roots)",
+                     state->last_scan_path_count);
             const char* roots[CONFIG_MAX_ROOTS];
             for (int i = 0; i < state->last_scan_path_count; i++) {
                 roots[i] = state->last_scan_paths[i];

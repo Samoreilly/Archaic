@@ -33,10 +33,10 @@ typedef struct {
 static int tcp_read_exact(int fd, void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = read(fd, (char*)buf + total, len - total);
+        ssize_t n = read(fd, (char*) buf + total, len - total);
         if (n <= 0)
             return -1;
-        total += (size_t)n;
+        total += (size_t) n;
     }
     return 0;
 }
@@ -44,10 +44,10 @@ static int tcp_read_exact(int fd, void* buf, size_t len) {
 static int tcp_write_exact(int fd, const void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = write(fd, (const char*)buf + total, len - total);
+        ssize_t n = write(fd, (const char*) buf + total, len - total);
         if (n <= 0)
             return -1;
-        total += (size_t)n;
+        total += (size_t) n;
     }
     return 0;
 }
@@ -154,7 +154,7 @@ static void tcp_handle_complete(tcp_server* srv, int fd, uint32_t req_id,
         return;
     }
 
-    uint64_t now = (uint64_t)time(NULL);
+    uint64_t now = (uint64_t) time(NULL);
     scored_result sr =
         daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now, req->cwd);
     const scored_completions* sc = sr.data;
@@ -214,7 +214,7 @@ static void tcp_handle_suggest(tcp_server* srv, int fd, uint32_t req_id,
         return;
     }
 
-    uint64_t now = (uint64_t)time(NULL);
+    uint64_t now = (uint64_t) time(NULL);
     scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now, req->cwd);
     const scored_completions* sc = sr.data;
 
@@ -243,8 +243,7 @@ static void tcp_handle_suggest(tcp_server* srv, int fd, uint32_t req_id,
     tcp_write_exact(fd, &resp, sizeof(resp));
 }
 
-static void tcp_handle_recent(tcp_server* srv, int fd, uint32_t req_id,
-                              const ipc_recent_req* req) {
+static void tcp_handle_recent(tcp_server* srv, int fd, uint32_t req_id, const ipc_recent_req* req) {
     ipc_header hdr;
     ipc_recent_resp resp;
     resp.count = 0;
@@ -258,9 +257,9 @@ static void tcp_handle_recent(tcp_server* srv, int fd, uint32_t req_id,
     }
     bool is_dirs[50];
 
-    int count = daemon_get_recent_files(srv->daemon, paths, is_dirs, (int)limit);
+    int count = daemon_get_recent_files(srv->daemon, paths, is_dirs, (int) limit);
 
-    resp.count = count < 50 ? (uint32_t)count : 50;
+    resp.count = count < 50 ? (uint32_t) count : 50;
     for (uint32_t i = 0; i < resp.count; i++) {
         strncpy(resp.paths[i], paths[i], sizeof(resp.paths[i]) - 1);
         resp.paths[i][sizeof(resp.paths[i]) - 1] = '\0';
@@ -279,13 +278,13 @@ static void tcp_handle_recent(tcp_server* srv, int fd, uint32_t req_id,
 static void tcp_handle_ping(tcp_server* srv, int fd, uint32_t req_id) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    int64_t sec_diff = (int64_t)now.tv_sec - (int64_t)srv->start_time.tv_sec;
-    int64_t nsec_diff = (int64_t)now.tv_nsec - (int64_t)srv->start_time.tv_nsec;
+    int64_t sec_diff = (int64_t) now.tv_sec - (int64_t) srv->start_time.tv_sec;
+    int64_t nsec_diff = (int64_t) now.tv_nsec - (int64_t) srv->start_time.tv_nsec;
     if (nsec_diff < 0) {
         sec_diff--;
         nsec_diff += 1000000000LL;
     }
-    uint64_t uptime_ms = (uint64_t)sec_diff * 1000ULL + (uint64_t)nsec_diff / 1000000ULL;
+    uint64_t uptime_ms = (uint64_t) sec_diff * 1000ULL + (uint64_t) nsec_diff / 1000000ULL;
 
     ipc_header hdr;
     ipc_pong_resp resp;
@@ -530,8 +529,7 @@ static void tcp_handle_client(tcp_server* srv, int fd) {
         if (!ipc_validate_header(&hdr)) {
             if ((hdr.magic >> 16) == IPC_MAGIC_PREFIX) {
                 char msg[64];
-                snprintf(msg, sizeof(msg),
-                         "unsupported protocol version %u (server supports 1-%u)",
+                snprintf(msg, sizeof(msg), "unsupported protocol version %u (server supports 1-%u)",
                          ipc_header_version(&hdr), IPC_PROTOCOL_VERSION);
                 tcp_send_error(fd, 0, -5, msg);
             } else {
@@ -552,13 +550,13 @@ static void tcp_handle_client(tcp_server* srv, int fd) {
 }
 
 static void tcp_handle_client_threaded(void* arg) {
-    tcp_client_ctx* ctx = (tcp_client_ctx*)arg;
+    tcp_client_ctx* ctx = (tcp_client_ctx*) arg;
     tcp_handle_client(ctx->srv, ctx->fd);
     free(ctx);
 }
 
 static void* tcp_server_loop(void* arg) {
-    tcp_server* srv = (tcp_server*)arg;
+    tcp_server* srv = (tcp_server*) arg;
 
     while (srv->running) {
         int fd = accept(srv->listen_fd, NULL, NULL);
@@ -604,7 +602,7 @@ tcp_server* tcp_server_start(daemon_state* daemon, const char* bind_addr, int po
     int pool_size;
     {
         long nproc = sysconf(_SC_NPROCESSORS_ONLN);
-        pool_size = (nproc > 0) ? (int)(nproc * 2) : 8;
+        pool_size = (nproc > 0) ? (int) (nproc * 2) : 8;
         if (pool_size > 16)
             pool_size = 16;
         if (pool_size < 4)
@@ -634,7 +632,7 @@ tcp_server* tcp_server_start(daemon_state* daemon, const char* bind_addr, int po
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
+    addr.sin_port = htons((uint16_t) port);
 
     if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
         LOG_ERR("tcp", "invalid bind address: %s", bind_addr);
@@ -644,7 +642,7 @@ tcp_server* tcp_server_start(daemon_state* daemon, const char* bind_addr, int po
         return NULL;
     }
 
-    if (bind(srv->listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    if (bind(srv->listen_fd, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
         LOG_ERR("tcp", "bind failed on %s:%d: %s", bind_addr, port, strerror(errno));
         threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
@@ -684,10 +682,10 @@ void tcp_server_stop(tcp_server* srv) {
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
-        addr.sin_port = htons((uint16_t)srv->port);
+        addr.sin_port = htons((uint16_t) srv->port);
         inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-        int wake_ret = connect(fd, (struct sockaddr*)&addr, sizeof(addr));
-        (void)wake_ret;
+        int wake_ret = connect(fd, (struct sockaddr*) &addr, sizeof(addr));
+        (void) wake_ret;
         close(fd);
     }
 

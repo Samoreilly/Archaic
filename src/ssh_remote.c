@@ -21,7 +21,7 @@
 static uint64_t hash_key(const char* str) {
     uint64_t hash = 5381;
     int c;
-    while ((c = (unsigned char)*str++))
+    while ((c = (unsigned char) *str++))
         hash = ((hash << 5) + hash) + c;
     return hash;
 }
@@ -46,7 +46,7 @@ struct remote_cache {
 static uint64_t now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec;
+    return (uint64_t) ts.tv_sec;
 }
 
 static rc_entry* rc_find(remote_cache* cache, const char* key) {
@@ -136,7 +136,7 @@ const remote_completions* remote_cache_get(remote_cache* cache, const char* key)
     }
 
     uint64_t now = now_seconds();
-    if ((int)(now - entry->timestamp) > cache->ttl_seconds) {
+    if ((int) (now - entry->timestamp) > cache->ttl_seconds) {
         rc_free_entry_value(entry);
         entry->occupied = false;
         cache->count--;
@@ -211,7 +211,7 @@ bool is_ssh_path(const char* prefix) {
         return false;
 
     const char* first_slash = strchr(prefix, '/');
-    size_t limit = first_slash ? (size_t)(first_slash - prefix) : strlen(prefix);
+    size_t limit = first_slash ? (size_t) (first_slash - prefix) : strlen(prefix);
 
     for (size_t i = 0; i < limit; i++) {
         if (prefix[i] == '@')
@@ -253,14 +253,14 @@ int parse_ssh_path(const char* prefix, char* user_buf, size_t user_len, char* ho
     const char* remote_path = colon + 1;
 
     if (at_sign && at_sign < colon) {
-        size_t ulen = (size_t)(at_sign - prefix);
+        size_t ulen = (size_t) (at_sign - prefix);
         if (user_buf && user_len > 0) {
             if (ulen >= user_len)
                 ulen = user_len - 1;
             memcpy(user_buf, prefix, ulen);
             user_buf[ulen] = '\0';
         }
-        size_t hlen = (size_t)(colon - at_sign - 1);
+        size_t hlen = (size_t) (colon - at_sign - 1);
         if (host_buf && host_len > 0) {
             if (hlen >= host_len)
                 hlen = host_len - 1;
@@ -270,7 +270,7 @@ int parse_ssh_path(const char* prefix, char* user_buf, size_t user_len, char* ho
     } else {
         if (user_buf && user_len > 0)
             user_buf[0] = '\0';
-        size_t hlen = (size_t)(colon - prefix);
+        size_t hlen = (size_t) (colon - prefix);
         if (host_buf && host_len > 0) {
             if (hlen >= host_len)
                 hlen = host_len - 1;

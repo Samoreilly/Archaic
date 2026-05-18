@@ -18,8 +18,8 @@
 
 typedef struct {
     uint8_t* base;
-    size_t   size;
-    size_t   pos;
+    size_t size;
+    size_t pos;
 } mmap_cursor;
 
 static int cursor_write(mmap_cursor* c, const void* data, size_t len) {
@@ -127,24 +127,51 @@ static int serialize_bucket(mmap_cursor* c, const t_bucket* bucket) {
         const RadixNode* nd = indexed[i].node;
 
         uint32_t kl = (uint32_t) nd->key_len;
-        if (cursor_write(c, &kl, sizeof(kl)) != 0) { free(indexed); return -1; }
-        if (kl > 0 && cursor_write(c, nd->key, kl) != 0) { free(indexed); return -1; }
+        if (cursor_write(c, &kl, sizeof(kl)) != 0) {
+            free(indexed);
+            return -1;
+        }
+        if (kl > 0 && cursor_write(c, nd->key, kl) != 0) {
+            free(indexed);
+            return -1;
+        }
 
         uint8_t cc = nd->child_count;
-        if (cursor_write(c, &cc, sizeof(cc)) != 0) { free(indexed); return -1; }
-        if (cursor_write(c, &nd->freq, sizeof(nd->freq)) != 0) { free(indexed); return -1; }
-        if (cursor_write(c, &nd->last_access, sizeof(nd->last_access)) != 0) { free(indexed); return -1; }
+        if (cursor_write(c, &cc, sizeof(cc)) != 0) {
+            free(indexed);
+            return -1;
+        }
+        if (cursor_write(c, &nd->freq, sizeof(nd->freq)) != 0) {
+            free(indexed);
+            return -1;
+        }
+        if (cursor_write(c, &nd->last_access, sizeof(nd->last_access)) != 0) {
+            free(indexed);
+            return -1;
+        }
 
         uint8_t il = (uint8_t) nd->is_leaf, id = (uint8_t) nd->is_dir;
-        if (cursor_write(c, &il, sizeof(il)) != 0) { free(indexed); return -1; }
-        if (cursor_write(c, &id, sizeof(id)) != 0) { free(indexed); return -1; }
+        if (cursor_write(c, &il, sizeof(il)) != 0) {
+            free(indexed);
+            return -1;
+        }
+        if (cursor_write(c, &id, sizeof(id)) != 0) {
+            free(indexed);
+            return -1;
+        }
 
         for (uint8_t cc2 = 0; cc2 < nd->child_count; cc2++) {
             uint8_t ec = (uint8_t) nd->children[cc2].edge_char;
-            if (cursor_write(c, &ec, sizeof(ec)) != 0) { free(indexed); return -1; }
+            if (cursor_write(c, &ec, sizeof(ec)) != 0) {
+                free(indexed);
+                return -1;
+            }
             int ci = find_child_index(indexed, nc, nd->children[cc2].node);
             uint32_t ci32 = (uint32_t) ci;
-            if (cursor_write(c, &ci32, sizeof(ci32)) != 0) { free(indexed); return -1; }
+            if (cursor_write(c, &ci32, sizeof(ci32)) != 0) {
+                free(indexed);
+                return -1;
+            }
         }
     }
     free(indexed);
@@ -169,12 +196,21 @@ static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
     char* dir_name = malloc(dn_len + 1);
     if (!dir_name)
         return -1;
-    if (cursor_read(c, dir_name, dn_len) != 0) { free(dir_name); return -1; }
+    if (cursor_read(c, dir_name, dn_len) != 0) {
+        free(dir_name);
+        return -1;
+    }
     dir_name[dn_len] = '\0';
 
     uint32_t dir_count, node_count;
-    if (cursor_read(c, &dir_count, sizeof(dir_count)) != 0) { free(dir_name); return -1; }
-    if (cursor_read(c, &node_count, sizeof(node_count)) != 0) { free(dir_name); return -1; }
+    if (cursor_read(c, &dir_count, sizeof(dir_count)) != 0) {
+        free(dir_name);
+        return -1;
+    }
+    if (cursor_read(c, &node_count, sizeof(node_count)) != 0) {
+        free(dir_name);
+        return -1;
+    }
 
     store_lock(state->store);
     t_bucket* bucket = insert_bucket(state->store, dir_name);
@@ -189,7 +225,11 @@ static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
 
     RadixNode** nodes = calloc(node_count, sizeof(RadixNode*));
     ChildRefs* crefs = calloc(node_count, sizeof(ChildRefs));
-    if (!nodes || !crefs) { free(nodes); free(crefs); return -1; }
+    if (!nodes || !crefs) {
+        free(nodes);
+        free(crefs);
+        return -1;
+    }
 
     for (uint32_t i = 0; i < node_count; i++) {
         uint32_t kl;
@@ -202,8 +242,15 @@ static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
 
         if (kl > 0) {
             nd->key = malloc(kl + 1);
-            if (!nd->key) { free(nd); goto bucket_err; }
-            if (cursor_read(c, nd->key, kl) != 0) { free(nd->key); free(nd); goto bucket_err; }
+            if (!nd->key) {
+                free(nd);
+                goto bucket_err;
+            }
+            if (cursor_read(c, nd->key, kl) != 0) {
+                free(nd->key);
+                free(nd);
+                goto bucket_err;
+            }
             nd->key[kl] = '\0';
         }
         nd->key_len = kl;
@@ -332,13 +379,17 @@ int mmap_state_save(daemon_state* state, const char* path) {
         return -1;
     }
 
-    mmap_cursor c = { .base = mapped, .size = total, .pos = 0 };
+    mmap_cursor c = {.base = mapped, .size = total, .pos = 0};
 
     uint32_t magic = STATE_MAGIC, version = STATE_VERSION, reserved = 0;
-    if (cursor_write(&c, &magic, sizeof(magic)) != 0) goto err;
-    if (cursor_write(&c, &version, sizeof(version)) != 0) goto err;
-    if (cursor_write(&c, &bucket_count, sizeof(bucket_count)) != 0) goto err;
-    if (cursor_write(&c, &reserved, sizeof(reserved)) != 0) goto err;
+    if (cursor_write(&c, &magic, sizeof(magic)) != 0)
+        goto err;
+    if (cursor_write(&c, &version, sizeof(version)) != 0)
+        goto err;
+    if (cursor_write(&c, &bucket_count, sizeof(bucket_count)) != 0)
+        goto err;
+    if (cursor_write(&c, &reserved, sizeof(reserved)) != 0)
+        goto err;
 
     store_lock(state->store);
     for (uint32_t b = 0; b < bucket_count; b++) {
@@ -382,7 +433,7 @@ int mmap_state_load(daemon_state* state, const char* path) {
         return -1;
     }
 
-    if (st.st_size < (off_t)(4 * sizeof(uint32_t))) {
+    if (st.st_size < (off_t) (4 * sizeof(uint32_t))) {
         close(fd);
         return -1;
     }
@@ -393,18 +444,22 @@ int mmap_state_load(daemon_state* state, const char* path) {
         return -1;
     }
 
-    mmap_cursor c = { .base = mapped, .size = (size_t) st.st_size, .pos = 0 };
+    mmap_cursor c = {.base = mapped, .size = (size_t) st.st_size, .pos = 0};
 
     uint32_t magic, version, bucket_count, reserved;
-    if (cursor_read(&c, &magic, sizeof(magic)) != 0) goto err;
-    if (cursor_read(&c, &version, sizeof(version)) != 0) goto err;
-    if (cursor_read(&c, &bucket_count, sizeof(bucket_count)) != 0) goto err;
-    if (cursor_read(&c, &reserved, sizeof(reserved)) != 0) goto err;
+    if (cursor_read(&c, &magic, sizeof(magic)) != 0)
+        goto err;
+    if (cursor_read(&c, &version, sizeof(version)) != 0)
+        goto err;
+    if (cursor_read(&c, &bucket_count, sizeof(bucket_count)) != 0)
+        goto err;
+    if (cursor_read(&c, &reserved, sizeof(reserved)) != 0)
+        goto err;
 
     if (magic != STATE_MAGIC || version != STATE_VERSION) {
         if (magic == STATE_MAGIC && version != STATE_VERSION) {
-            LOG_WARN("mmap", "state file version %u != expected %u, discarding",
-                     version, STATE_VERSION);
+            LOG_WARN("mmap", "state file version %u != expected %u, discarding", version,
+                     STATE_VERSION);
         }
         goto err;
     }

@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            target: linux-x86_64
+          - os: macos-latest
+            arch: arm64
+            target: macos-arm64
+          - os: macos-13
+            arch: x64
+            target: macos-x86_64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libfmt-dev
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install cmake fmt
+
+      - name: Build
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Strip binaries
+        run: |
+          strip build/archaic build/archaic-cli build/archaic-helper 2>/dev/null || true
+
+      - name: Create archive
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          ARCHIVE=archaic-${VERSION}-${{ matrix.target }}.tar.gz
+          mkdir -p archaic-${VERSION}
+          cp build/archaic build/archaic-cli build/archaic-helper archaic-${VERSION}/
+          cp build/archaic-bench archaic-${VERSION}/ 2>/dev/null || true
+          cp fish/archaic.fish archaic-${VERSION}/
+          cp bash/archaic.bash archaic-${VERSION}/
+          cp zsh/archaic.zsh archaic-${VERSION}/
+          cp man/archaic.1 man/archaic-cli.1 man/archaic.conf.5 archaic-${VERSION}/
+          cp config.example.toml archaic-${VERSION}/
+          cp README.md LICENSE archaic-${VERSION}/
+          cp install.sh archaic-${VERSION}/
+          tar czf ${ARCHIVE} archaic-${VERSION}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archaic-${{ matrix.target }}
+          path: archaic-*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

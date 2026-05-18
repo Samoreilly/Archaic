@@ -30,6 +30,7 @@
 
 #include "../ipc/protocol.h"
 #include "config.h"
+#include "src/scanner.h"
 
 /* ------------------------------------------------------------------ */
 /* Path abbreviation support                                           */

@@ -5,6 +5,7 @@
 
 #define IPC_SOCK_PATH "/tmp/archaic-daemon.sock"
 #define IPC_MAX_PAYLOAD 262144
+#define IPC_COMPRESS_THRESHOLD 512
 
 /*
     Protocol versioning: magic = 0x4152VVVV where VVVV is the version.
@@ -14,6 +15,8 @@
 #define IPC_MAGIC_PREFIX 0x4152
 #define IPC_PROTOCOL_VERSION 1
 #define IPC_MAGIC ((IPC_MAGIC_PREFIX << 16) | IPC_PROTOCOL_VERSION)
+
+#define IPC_MSG_COMPRESSED 0x80000000U
 
 /*
     Message types
@@ -179,4 +182,53 @@ static inline int ipc_validate_header(const ipc_header* hdr) {
     if (hdr->payload_len >= IPC_MAX_PAYLOAD)
         return 0;
     return 1;
+}
+
+static inline size_t ipc_rle_compress(const uint8_t* in, size_t in_len, uint8_t* out,
+                                      size_t out_cap) {
+    if (in_len == 0)
+        return 0;
+    size_t out_pos = 0;
+    size_t i = 0;
+    while (i < in_len) {
+        uint8_t byte = in[i];
+        size_t run = 1;
+        while (i + run < in_len && in[i + run] == byte && run < 255)
+            run++;
+        if (run >= 3 && out_pos + 2 <= out_cap) {
+            out[out_pos++] = (uint8_t) run;
+            out[out_pos++] = byte;
+            i += run;
+        } else {
+            if (out_pos + 2 > out_cap)
+                return 0;
+            out[out_pos++] = 0;
+            out[out_pos++] = byte;
+            i++;
+        }
+    }
+    return (out_pos < in_len) ? out_pos : 0;
+}
+
+static inline size_t ipc_rle_decompress(const uint8_t* in, size_t in_len, uint8_t* out,
+                                        size_t out_cap) {
+    size_t out_pos = 0;
+    size_t i = 0;
+    while (i < in_len) {
+        if (i + 1 >= in_len)
+            return (size_t) -1;
+        uint8_t count = in[i++];
+        uint8_t byte = in[i++];
+        if (count == 0) {
+            if (out_pos >= out_cap)
+                return (size_t) -1;
+            out[out_pos++] = byte;
+        } else {
+            if (out_pos + count > out_cap)
+                return (size_t) -1;
+            for (size_t j = 0; j < count; j++)
+                out[out_pos++] = byte;
+        }
+    }
+    return out_pos;
 }

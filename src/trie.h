@@ -77,3 +77,13 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
                                 uint64_t now, const char* cwd);
 
 int trie_fuzzy_collect(Trie* root, const char* query, char** paths, bool* is_dirs, int capacity);
+
+size_t trie_node_count(Trie* root);
+void trie_compact(Trie* root);
+
+bool is_git_tracked(const char* path);
+bool is_relevant_extension(const char* path, const char* scan_root);
+bool is_hidden_path(const char* path);
+void session_record_selection(const char* path);
+double session_get_boost(const char* path);
+void session_reset(void);

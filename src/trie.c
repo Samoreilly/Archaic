@@ -6,10 +6,310 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "threadmanager.h"
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Feature 21: Git-aware scoring
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/* Cached git root to avoid repeated filesystem walks */
+static char g_git_root[4096] = {0};
+static pthread_mutex_t g_git_root_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool dir_has_git(const char* dir) {
+    char git_path[4096];
+    int n = snprintf(git_path, sizeof(git_path), "%s/.git", dir);
+    if (n < 0 || (size_t) n >= sizeof(git_path))
+        return false;
+    struct stat st;
+    return stat(git_path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+/* Walk up from `path` to find a .git directory. Returns true if found and
+   sets `root_out` to the directory containing .git. */
+static bool find_git_root(const char* path, char* root_out, size_t root_cap) {
+    char buf[4096];
+    strncpy(buf, path, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    /* Strip trailing filename to get directory */
+    char* slash = strrchr(buf, '/');
+    if (!slash)
+        return false;
+    *slash = '\0';
+
+    while (buf[0] != '\0') {
+        if (dir_has_git(buf)) {
+            if (root_out && root_cap > 0) {
+                strncpy(root_out, buf, root_cap - 1);
+                root_out[root_cap - 1] = '\0';
+            }
+            return true;
+        }
+        slash = strrchr(buf, '/');
+        if (!slash)
+            break;
+        *slash = '\0';
+    }
+    return false;
+}
+
+bool is_git_tracked(const char* path) {
+    if (!path || path[0] == '\0')
+        return false;
+
+    /* Check cached git root first */
+    pthread_mutex_lock(&g_git_root_lock);
+    if (g_git_root[0] != '\0') {
+        size_t root_len = strlen(g_git_root);
+        if (strncmp(path, g_git_root, root_len) == 0 &&
+            (path[root_len] == '/' || path[root_len] == '\0')) {
+            pthread_mutex_unlock(&g_git_root_lock);
+            /* Verify with git ls-files */
+            char cmd[4224];
+            snprintf(cmd, sizeof(cmd), "git -C \"%s\" ls-files --error-unmatch -- '%s' 2>/dev/null",
+                     g_git_root, path);
+            FILE* fp = popen(cmd, "r");
+            if (!fp)
+                return true; /* Assume tracked if git command fails */
+            char line[4096];
+            bool tracked = (fgets(line, sizeof(line), fp) != NULL);
+            pclose(fp);
+            return tracked;
+        }
+    }
+    pthread_mutex_unlock(&g_git_root_lock);
+
+    /* Find git root from scratch */
+    char root[4096];
+    if (!find_git_root(path, root, sizeof(root)))
+        return false;
+
+    /* Cache the git root */
+    pthread_mutex_lock(&g_git_root_lock);
+    strncpy(g_git_root, root, sizeof(g_git_root) - 1);
+    g_git_root[sizeof(g_git_root) - 1] = '\0';
+    pthread_mutex_unlock(&g_git_root_lock);
+
+    /* Check if file is tracked */
+    char cmd[4224];
+    snprintf(cmd, sizeof(cmd), "git -C \"%s\" ls-files --error-unmatch -- '%s' 2>/dev/null", root,
+             path);
+    FILE* fp = popen(cmd, "r");
+    if (!fp)
+        return true;
+    char line[4096];
+    bool tracked = (fgets(line, sizeof(line), fp) != NULL);
+    pclose(fp);
+    return tracked;
+}
+
+/* Reset the cached git root (call when scan path changes) */
+void git_root_reset(void) {
+    pthread_mutex_lock(&g_git_root_lock);
+    g_git_root[0] = '\0';
+    pthread_mutex_unlock(&g_git_root_lock);
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Feature 22: File extension relevance
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/* Project type → preferred extensions mapping */
+typedef struct {
+    const char* config_file;
+    const char* extensions[8];
+} ext_mapping;
+
+static const ext_mapping EXT_MAPPINGS[] = {
+    {"package.json", {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", NULL}},
+    {"Cargo.toml", {".rs", ".rlib", NULL}},
+    {"CMakeLists.txt", {".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", NULL}},
+    {"Makefile", {".c", ".h", ".cpp", ".hpp", ".cc", ".mk", NULL}},
+    {"setup.py", {".py", ".pyx", NULL}},
+    {"pyproject.toml", {".py", ".pyx", NULL}},
+    {"go.mod", {".go", NULL}},
+    {"Gemfile", {".rb", ".rake", NULL}},
+    {"pom.xml", {".java", NULL}},
+    {"build.gradle", {".java", ".kt", ".kts", NULL}},
+};
+static const int EXT_MAPPINGS_COUNT = (int) (sizeof(EXT_MAPPINGS) / sizeof(EXT_MAPPINGS[0]));
+
+static bool file_exists_at(const char* dir, const char* filename) {
+    char path[4096];
+    int n = snprintf(path, sizeof(path), "%s/%s", dir, filename);
+    if (n < 0 || (size_t) n >= sizeof(path))
+        return false;
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+/* Get the file extension from a path (returns pointer into path or empty) */
+static const char* get_extension(const char* path) {
+    const char* basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+    const char* dot = strrchr(basename, '.');
+    if (!dot || dot == basename)
+        return "";
+    return dot;
+}
+
+bool is_relevant_extension(const char* path, const char* scan_root) {
+    if (!path || path[0] == '\0')
+        return false;
+
+    const char* ext = get_extension(path);
+    if (ext[0] == '\0')
+        return false;
+
+    /* Walk up from path to scan_root looking for config files */
+    char buf[4096];
+    strncpy(buf, path, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    /* Get directory of the file */
+    char* slash = strrchr(buf, '/');
+    if (!slash)
+        return false;
+    *slash = '\0';
+
+    size_t root_len = scan_root ? strlen(scan_root) : 0;
+
+    while (buf[0] != '\0') {
+        /* Check each config file mapping */
+        for (int i = 0; i < EXT_MAPPINGS_COUNT; i++) {
+            if (file_exists_at(buf, EXT_MAPPINGS[i].config_file)) {
+                /* Found a config file — check if extension matches */
+                for (int j = 0; EXT_MAPPINGS[i].extensions[j] != NULL; j++) {
+                    if (strcmp(ext, EXT_MAPPINGS[i].extensions[j]) == 0)
+                        return true;
+                }
+                /* Config found but extension doesn't match — not relevant */
+                return false;
+            }
+        }
+
+        /* Stop if we've reached the scan root */
+        if (root_len > 0 && strncmp(buf, scan_root, root_len) == 0 &&
+            (buf[root_len] == '/' || buf[root_len] == '\0'))
+            break;
+
+        slash = strrchr(buf, '/');
+        if (!slash)
+            break;
+        *slash = '\0';
+    }
+
+    return false;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Feature 25: Hidden file demotion
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+bool is_hidden_path(const char* path) {
+    if (!path || path[0] == '\0')
+        return false;
+
+    const char* p = path;
+    while (*p) {
+        if (*p == '/') {
+            p++;
+            if (*p == '.')
+                return true;
+        } else {
+            p++;
+        }
+    }
+    return false;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Feature 24: Session-based learning
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+#define SESSION_MAX_ENTRIES 256
+
+typedef struct {
+    char path[4096];
+    uint64_t select_count;
+} session_entry;
+
+static session_entry g_session_entries[SESSION_MAX_ENTRIES];
+static int g_session_count = 0;
+static pthread_mutex_t g_session_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int session_find_entry(const char* path) {
+    for (int i = 0; i < g_session_count; i++) {
+        if (strcmp(g_session_entries[i].path, path) == 0)
+            return i;
+    }
+    return -1;
+}
+
+void session_record_selection(const char* path) {
+    if (!path || path[0] == '\0')
+        return;
+
+    pthread_mutex_lock(&g_session_lock);
+
+    int idx = session_find_entry(path);
+    if (idx >= 0) {
+        g_session_entries[idx].select_count++;
+    } else if (g_session_count < SESSION_MAX_ENTRIES) {
+        strncpy(g_session_entries[g_session_count].path, path,
+                sizeof(g_session_entries[g_session_count].path) - 1);
+        g_session_entries[g_session_count]
+            .path[sizeof(g_session_entries[g_session_count].path) - 1] = '\0';
+        g_session_entries[g_session_count].select_count = 1;
+        g_session_count++;
+    }
+
+    pthread_mutex_unlock(&g_session_lock);
+}
+
+double session_get_boost(const char* path) {
+    if (!path || path[0] == '\0')
+        return 0.0;
+
+    pthread_mutex_lock(&g_session_lock);
+
+    double boost = 0.0;
+    size_t path_len = strlen(path);
+
+    for (int i = 0; i < g_session_count; i++) {
+        const char* selected = g_session_entries[i].path;
+        size_t sel_len = strlen(selected);
+
+        /* If the current path starts with a selected path (sub-path match),
+           apply boost proportional to selection count */
+        if (path_len > sel_len && strncmp(path, selected, sel_len) == 0 && path[sel_len] == '/') {
+            boost += 0.05 * (double) g_session_entries[i].select_count;
+        }
+        /* Exact match gets a larger boost */
+        if (strcmp(path, selected) == 0) {
+            boost += 0.10 * (double) g_session_entries[i].select_count;
+        }
+    }
+
+    /* Cap the boost at 0.5 to prevent runaway scores */
+    if (boost > 0.5)
+        boost = 0.5;
+
+    pthread_mutex_unlock(&g_session_lock);
+    return boost;
+}
+
+void session_reset(void) {
+    pthread_mutex_lock(&g_session_lock);
+    g_session_count = 0;
+    memset(g_session_entries, 0, sizeof(g_session_entries));
+    pthread_mutex_unlock(&g_session_lock);
+}
 
 static inline RadixChild* find_child(RadixNode* node, char c) {
     int lo = 0, hi = node->child_count - 1;
@@ -481,6 +781,15 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
     depth_norm = clampd(depth_norm, 0.0, 1.0);
     score += SCORE_WEIGHT_DEPTH * depth_norm;
 
+    /* Feature 23: Directory depth penalty — 5% reduction per level beyond 5 */
+    if (depth > 5) {
+        int excess = depth - 5;
+        double penalty = 1.0 - (0.05 * (double) excess);
+        if (penalty < 0.1)
+            penalty = 0.1;
+        score *= penalty;
+    }
+
     /* Type: files rank above directories */
     score += SCORE_WEIGHT_TYPE * (is_dir ? 0.0 : 1.0);
 
@@ -497,6 +806,22 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
             double cwd_norm = 1.0 / (1.0 + extra_dirs);
             score += SCORE_WEIGHT_CWD * clampd(cwd_norm, 0.0, 1.0);
         }
+    }
+
+    /* Feature 21: Git-aware scoring — boost files in git-tracked repos */
+    if (is_git_tracked(path)) {
+        score *= 1.15;
+    }
+
+    /* Feature 22: File extension relevance — boost by 20% for project-relevant extensions */
+    if (is_relevant_extension(path, cwd)) {
+        score *= 1.20;
+    }
+
+    /* Feature 24: Session-based learning boost */
+    double sess_boost = session_get_boost(path);
+    if (sess_boost > 0.0) {
+        score += sess_boost;
     }
 
     /* Recent file bonus: slight boost for paths accessed in the last 24 hours */
@@ -662,6 +987,29 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     scored_collect_dfs(node, &ctx);
 
     qsort(out->entries, out->count, sizeof(scored_entry), cmp_score_desc);
+
+    /* Feature 25: Hidden file demotion — push dotfiles/dotdirs to end unless
+       user explicitly typed a dot in the last path component */
+    int user_typed_dot = 0;
+    if (prefix_len > 0) {
+        const char* last_slash = strrchr(prefix, '/');
+        const char* last_component = last_slash ? last_slash + 1 : prefix;
+        if (last_component[0] == '.')
+            user_typed_dot = 1;
+    }
+    if (!user_typed_dot && out->count > 1) {
+        size_t write = 0;
+        for (size_t read = 0; read < out->count; read++) {
+            if (!is_hidden_path(out->entries[read].path)) {
+                if (read != write) {
+                    scored_entry tmp = out->entries[read];
+                    out->entries[read] = out->entries[write];
+                    out->entries[write] = tmp;
+                }
+                write++;
+            }
+        }
+    }
 }
 
 /*
@@ -792,4 +1140,85 @@ int trie_fuzzy_collect(Trie* root, const char* query, char** paths, bool* is_dir
 
     free(entries);
     return n;
+}
+
+size_t trie_node_count(Trie* root) {
+    if (!root)
+        return 0;
+    size_t count = 1;
+    for (uint8_t i = 0; i < root->child_count; i++) {
+        count += trie_node_count(root->children[i].node);
+    }
+    return count;
+}
+
+static void compact_node(RadixNode* node) {
+    if (!node)
+        return;
+
+    /* Recurse into children first */
+    for (uint8_t i = 0; i < node->child_count; i++) {
+        compact_node(node->children[i].node);
+    }
+
+    /* Merge single-child non-leaf nodes */
+    if (node->child_count == 1 && !node->is_leaf && node->key != NULL) {
+        RadixChild* child = &node->children[0];
+        RadixNode* child_node = child->node;
+
+        size_t new_key_len = node->key_len + child_node->key_len;
+        char* new_key = malloc(new_key_len + 1);
+        if (!new_key)
+            return;
+
+        memcpy(new_key, node->key, node->key_len);
+        memcpy(new_key + node->key_len, child_node->key, child_node->key_len);
+        new_key[new_key_len] = '\0';
+
+        free(node->key);
+        node->key = new_key;
+        node->key_len = new_key_len;
+
+        /* Adopt child's children */
+        if (child_node->child_count > 0) {
+            if (node->child_capacity < child_node->child_count) {
+                size_t new_cap = child_node->child_count;
+                if (new_cap < RADIX_INLINE_CHILDREN)
+                    new_cap = RADIX_INLINE_CHILDREN;
+                RadixChild* new_children = malloc(new_cap * sizeof(RadixChild));
+                if (!new_children)
+                    return;
+                if (node->children != node->inline_storage)
+                    free(node->children);
+                node->children = new_children;
+                node->child_capacity = (uint8_t) new_cap;
+            }
+            memcpy(node->children, child_node->children,
+                   child_node->child_count * sizeof(RadixChild));
+            node->child_count = child_node->child_count;
+        } else {
+            node->child_count = 0;
+        }
+
+        /* Preserve leaf flag and metadata from child if it was a leaf */
+        if (child_node->is_leaf) {
+            node->is_leaf = true;
+            node->is_dir = child_node->is_dir;
+        }
+
+        /* Free the merged child */
+        if (child_node->children != child_node->inline_storage)
+            free(child_node->children);
+        free(child_node->key);
+        free(child_node);
+    }
+}
+
+void trie_compact(Trie* root) {
+    if (!root)
+        return;
+    /* Compact children of root, but never compact root itself */
+    for (uint8_t i = 0; i < root->child_count; i++) {
+        compact_node(root->children[i].node);
+    }
 }

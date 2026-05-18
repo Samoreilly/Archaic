@@ -2,6 +2,7 @@
 #include "../src/io/fileloader.h"
 #include "../src/metrics.h"
 #include "../src/threadpool.h"
+#include "../src/trie.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -12,6 +13,70 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+
+#define DEDUP_CAPACITY 256
+#define DEDUP_EMPTY 0U
+
+typedef struct {
+    uint32_t hashes[DEDUP_CAPACITY];
+    int count;
+} dedup_set;
+
+static uint32_t dedup_hash(const char* str) {
+    uint32_t h = 2166136261U;
+    for (const char* p = str; *p; p++) {
+        h ^= (uint32_t) (unsigned char) *p;
+        h *= 16777619U;
+    }
+    return h;
+}
+
+static void dedup_init(dedup_set* ds) {
+    memset(ds->hashes, 0, sizeof(ds->hashes));
+    ds->count = 0;
+}
+
+static int dedup_contains(dedup_set* ds, const char* path) {
+    uint32_t h = dedup_hash(path);
+    uint32_t slot = h ? h : 1;
+    uint32_t idx = h % DEDUP_CAPACITY;
+    for (uint32_t i = 0; i < DEDUP_CAPACITY; i++) {
+        uint32_t pos = (idx + i) % DEDUP_CAPACITY;
+        if (ds->hashes[pos] == DEDUP_EMPTY)
+            return 0;
+        if (ds->hashes[pos] == slot)
+            return 1;
+    }
+    return 0;
+}
+
+static void dedup_insert(dedup_set* ds, const char* path) {
+    if (ds->count >= DEDUP_CAPACITY)
+        return;
+    uint32_t h = dedup_hash(path);
+    uint32_t slot = h ? h : 1;
+    uint32_t idx = h % DEDUP_CAPACITY;
+    for (uint32_t i = 0; i < DEDUP_CAPACITY; i++) {
+        uint32_t pos = (idx + i) % DEDUP_CAPACITY;
+        if (ds->hashes[pos] == DEDUP_EMPTY) {
+            ds->hashes[pos] = slot;
+            ds->count++;
+            return;
+        }
+    }
+}
+
+static const int RECENT_FIRST_MODE = 0;
+
+static int cmp_recent_desc(const void* a, const void* b) {
+    const scored_entry* ea = (const scored_entry*) a;
+    const scored_entry* eb = (const scored_entry*) b;
+    if (eb->last_access > ea->last_access)
+        return 1;
+    if (eb->last_access < ea->last_access)
+        return -1;
+    return strcmp(ea->path, eb->path);
+}
 
 struct ipc_server {
     daemon_state* daemon;
@@ -167,8 +232,9 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     if (sc) {
         uint32_t n = sc->count < 50 ? sc->count : 50;
         uint32_t out_idx = 0;
+        dedup_set seen;
+        dedup_init(&seen);
         for (uint32_t i = 0; i < n && out_idx < 50; i++) {
-            /* Filter directories if dirs_only flag is set */
             if (req->dirs_only && !sc->entries[i].is_dir)
                 continue;
 
@@ -182,10 +248,18 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
                 strncpy(clean, p, sizeof(clean) - 1);
                 clean[sizeof(clean) - 1] = '\0';
             }
+
+            if (dedup_contains(&seen, clean))
+                continue;
+            dedup_insert(&seen, clean);
+
             strncpy(resp.paths[out_idx], clean, sizeof(resp.paths[out_idx]) - 1);
             resp.scores[out_idx] = sc->entries[i].score;
             resp.freqs[out_idx] = sc->entries[i].freq;
             resp.is_dirs[out_idx] = sc->entries[i].is_dir ? 1 : 0;
+            if (out_idx == 0) {
+                session_record_selection(clean);
+            }
             out_idx++;
         }
         resp.count = out_idx;
@@ -232,6 +306,7 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
         resp.score = sc->entries[0].score;
         resp.freq = sc->entries[0].freq;
         resp.is_dir = sc->entries[0].is_dir ? 1 : 0;
+        session_record_selection(resp.path);
         daemon_release_scored(srv->daemon, sr);
     }
 
@@ -256,12 +331,19 @@ static void handle_recent(ipc_server* srv, int fd, uint32_t req_id, const ipc_re
 
     int count = daemon_get_recent_files(srv->daemon, paths, is_dirs, (int) limit);
 
-    resp.count = count < 50 ? (uint32_t) count : 50;
-    for (uint32_t i = 0; i < resp.count; i++) {
-        strncpy(resp.paths[i], paths[i], sizeof(resp.paths[i]) - 1);
-        resp.paths[i][sizeof(resp.paths[i]) - 1] = '\0';
-        resp.is_dirs[i] = is_dirs[i] ? 1 : 0;
+    dedup_set seen;
+    dedup_init(&seen);
+    uint32_t out_idx = 0;
+    for (int i = 0; i < count && out_idx < 50; i++) {
+        if (dedup_contains(&seen, paths[i]))
+            continue;
+        dedup_insert(&seen, paths[i]);
+        strncpy(resp.paths[out_idx], paths[i], sizeof(resp.paths[out_idx]) - 1);
+        resp.paths[out_idx][sizeof(resp.paths[out_idx]) - 1] = '\0';
+        resp.is_dirs[out_idx] = is_dirs[i] ? 1 : 0;
+        out_idx++;
     }
+    resp.count = out_idx;
 
     for (int i = 0; i < 50; i++) {
         free(paths[i]);
@@ -352,7 +434,9 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
 
     if (fc) {
         uint32_t n = fc->count < 50 ? fc->count : 50;
-        resp.count = n;
+        dedup_set seen;
+        dedup_init(&seen);
+        uint32_t out_idx = 0;
         for (uint32_t i = 0; i < n; i++) {
             const char* p = fc->paths[i];
             size_t plen = strlen(p);
@@ -364,10 +448,38 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
                 strncpy(clean, p, sizeof(clean) - 1);
                 clean[sizeof(clean) - 1] = '\0';
             }
-            strncpy(resp.paths[i], clean, sizeof(resp.paths[i]) - 1);
-            resp.is_dirs[i] = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
+
+            if (dedup_contains(&seen, clean))
+                continue;
+            dedup_insert(&seen, clean);
+
+            strncpy(resp.paths[out_idx], clean, sizeof(resp.paths[out_idx]) - 1);
+            resp.is_dirs[out_idx] = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
+            out_idx++;
         }
+        resp.count = out_idx;
         completions_free(fc);
+    }
+
+    if (sizeof(resp) > IPC_COMPRESS_THRESHOLD) {
+        uint8_t compressed[IPC_MAX_PAYLOAD];
+        size_t comp_len =
+            ipc_rle_compress((const uint8_t*) &resp, sizeof(resp), compressed, sizeof(compressed));
+        if (comp_len > 0 && comp_len < sizeof(resp)) {
+            uint8_t* wire_buf = malloc(comp_len + sizeof(uint32_t));
+            if (wire_buf) {
+                uint32_t orig_len = (uint32_t) sizeof(resp);
+                memcpy(wire_buf, &orig_len, sizeof(uint32_t));
+                memcpy(wire_buf + sizeof(uint32_t), compressed, comp_len);
+                ipc_header hdr;
+                ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS | IPC_MSG_COMPRESSED,
+                                 (uint32_t) (comp_len + sizeof(uint32_t)), req_id);
+                write_exact(fd, &hdr, sizeof(hdr));
+                write_exact(fd, wire_buf, comp_len + sizeof(uint32_t));
+                free(wire_buf);
+                return;
+            }
+        }
     }
 
     ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS, sizeof(resp), req_id);

@@ -79,6 +79,10 @@ static void check_color_env(void) {
         g_color_enabled = 0;
         return;
     }
+    if (!isatty(STDOUT_FILENO)) {
+        g_color_enabled = 0;
+        return;
+    }
 }
 
 #define COLOR_DIR "\033[1;34m"    /* Bold blue */

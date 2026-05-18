@@ -74,19 +74,10 @@ static void abbreviate_path(const char* path, char* out, size_t out_len) {
 static volatile int g_color_enabled = 0;
 
 static void check_color_env(void) {
-    if (getenv("NO_COLOR")) {
-        g_color_enabled = 0;
-        return;
-    }
-    const char* term = getenv("TERM");
-    if (!term || strcmp(term, "dumb") == 0) {
-        g_color_enabled = 0;
-        return;
-    }
-    if (!isatty(STDOUT_FILENO)) {
-        g_color_enabled = 0;
-        return;
-    }
+    /* Force-disable: helper must never emit ANSI regardless of environment.
+     * This function exists as a safety net — g_color_enabled starts at 0
+     * and no code path should re-enable it. */
+    g_color_enabled = 0;
 }
 
 #define COLOR_DIR "\033[1;34m"    /* Bold blue */
@@ -481,7 +472,9 @@ int main(int argc, char* argv[]) {
         if (config_load_default(&cfg) == 0 && cfg.daemon.socket_path[0] != '\0') {
             sock_path = cfg.daemon.socket_path;
         }
-        g_color_enabled = cfg.daemon.colored_output;
+        /* Helper stdout is always piped by shell plugins, so never emit ANSI.
+         * colored_output config is intentionally ignored to prevent escape
+         * codes leaking into completions (Fish displays raw ESC bytes). */
     }
 
     check_color_env();

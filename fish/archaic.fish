@@ -264,11 +264,13 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                 set display_path "$norm_prefix$display_path"
             end
 
-            # Plain text completions (Fish handles display coloring natively)
+            # Completion output: plain text only, no ANSI codes.
+            # Fish wraps descriptions in () automatically, so we use bare words
+            # to avoid double-parentheses like ((dir)).
             if test "$type" = "D"
-                echo "$display_path"\t"(dir)"
+                echo "$display_path"\tdirectory
             else
-                echo "$display_path"\t"(file)"
+                echo "$display_path"\tfile
             end
             set found 1
         end
@@ -302,11 +304,11 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                     set display_path (string replace "$parent_dir/" "" "$full_path")
                 end
 
-                # Plain text fuzzy completions
+                # Plain text fuzzy completions (no ANSI codes)
                 if test "$type" = "D"
-                    echo "$display_path"\t"(dir)"
+                    echo "$display_path"\tdirectory
                 else
-                    echo "$display_path"\t"(file)"
+                    echo "$display_path"\tfile
                 end
                 set found 1
             end

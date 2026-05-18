@@ -12,6 +12,15 @@ set -g __archaic_version_checked 0
 set -g __archaic_helper_pid ""
 set -g __archaic_last_query_time 0
 set -g __archaic_debounce_ms 80
+set -g __archaic_suggestion ""
+set -g __archaic_max_completions 20
+set -g __archaic_show_preview 0
+set -g __archaic_cycle_completions ""
+set -g __archaic_cycle_index 0
+set -g __archaic_cycle_prefix ""
+set -g __archaic_cycle_active 0
+set -g __archaic_cycle_full_paths ""
+set -g __archaic_cycle_types ""
 
 # ── Resolve binary paths ─────────────────────────────────────────────────────
 set -l plugin_path (status filename)
@@ -52,6 +61,18 @@ if test -n "$config_file"
         if test (count $trimmed_cmds) -gt 0
             set -g __archaic_commands $trimmed_cmds
         end
+    end
+
+    # Extract max_completions from [daemon] section
+    set -l cfg_max (grep -A10 '^\[daemon\]' "$config_file" 2>/dev/null | grep 'max_completions' | string replace -r '.*=\s*([0-9]+)' '$1')
+    if test -n "$cfg_max"
+        set -g __archaic_max_completions (math "max(1, min(100, $cfg_max))")
+    end
+
+    # Extract show_preview from [fish] section
+    set -l cfg_preview (grep -A10 '^\[fish\]' "$config_file" 2>/dev/null | grep 'show_preview' | string replace -r '.*=\s*(true|false)' '$1')
+    if test "$cfg_preview" = "true"
+        set -g __archaic_show_preview 1
     end
 end
 
@@ -213,12 +234,12 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     # Query: try helper first (persistent), fall back to CLI
     set -l results ""
     if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set results (echo "complete $resolved 20 $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+        set results (echo "complete $resolved $__archaic_max_completions $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
     end
 
     if test -z "$results"
         # Helper not available, use CLI (forks but always works)
-        set results (command $archaic_cli_path complete "$resolved" 20 2>/dev/null)
+        set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions 2>/dev/null)
     end
 
     # Parse output: "D /path" or "F /path" (one per line)
@@ -261,10 +282,10 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         # Try fuzzy matching
         set -l fuzzy_results ""
         if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-            set fuzzy_results (echo "fuzzy $resolved 20" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+            set fuzzy_results (echo "fuzzy $resolved $__archaic_max_completions" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
         end
         if test -z "$fuzzy_results"
-            set fuzzy_results (command $archaic_cli_path fuzzy "$resolved" 20 2>/dev/null)
+            set fuzzy_results (command $archaic_cli_path fuzzy "$resolved" $__archaic_max_completions 2>/dev/null)
         end
 
         for line in $fuzzy_results
@@ -392,6 +413,7 @@ function __archaic_right_prompt -d "Show archaic autosuggestion"
         echo -n "$__archaic_suggestion"
         set_color normal
     end
+    __archaic_get_preview
 end
 
 # Append to existing fish_right_prompt if it exists, otherwise define it
@@ -409,11 +431,199 @@ else
     end
 end
 
-# ── Key bindings to accept the suggestion ──────────────────────────────────────
+# ── Completion cycling ────────────────────────────────────────────────────────
+function __archaic_fetch_completions -d "Fetch completions for cycling"
+    set -l prefix (commandline -t)
+    if test -z "$prefix"
+        return
+    end
+    if not string match -q '*/*' -- "$prefix"
+        return
+    end
+    if not __archaic_check_daemon
+        return
+    end
+
+    set -l resolved "$prefix"
+    if not string match -q '/*' -- "$prefix"
+        set resolved (pwd)/"$prefix"
+    end
+    set resolved (string replace -r '/+$' '' "$resolved")
+
+    set -l results ""
+    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
+        set results (echo "complete $resolved $__archaic_max_completions $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+    end
+    if test -z "$results"
+        set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions 2>/dev/null)
+    end
+
+    if test -z "$results"
+        return
+    end
+
+    set -g __archaic_cycle_completions ""
+    set -g __archaic_cycle_full_paths ""
+    set -g __archaic_cycle_types ""
+    set -g __archaic_cycle_index 0
+    set -g __archaic_cycle_prefix "$prefix"
+    set -g __archaic_cycle_active 1
+
+    for line in $results
+        set -l parts (string split " " "$line")
+        if test (count $parts) -ge 2
+            set -g __archaic_cycle_completions $__archaic_cycle_completions "$parts[2]"
+            set -g __archaic_cycle_full_paths $__archaic_cycle_full_paths "$parts[2]"
+            set -g __archaic_cycle_types $__archaic_cycle_types "$parts[1]"
+        end
+    end
+end
+
+function __archaic_cycle_next -d "Show next completion in cycle"
+    if test (count $__archaic_cycle_completions) -eq 0
+        __archaic_fetch_completions
+    end
+    if test (count $__archaic_cycle_completions) -eq 0
+        return
+    end
+
+    set -g __archaic_cycle_index (math "($__archaic_cycle_index + 1) % (count $__archaic_cycle_completions)")
+    set -l idx (math "$__archaic_cycle_index + 1")
+    set -l completion $__archaic_cycle_completions[$idx]
+    set -g __archaic_suggestion (basename "$completion")
+    commandline -f repaint
+end
+
+function __archaic_cycle_prev -d "Show previous completion in cycle"
+    if test (count $__archaic_cycle_completions) -eq 0
+        return
+    end
+
+    set -g __archaic_cycle_index (math "($__archaic_cycle_index - 1 + count $__archaic_cycle_completions) % (count $__archaic_cycle_completions)")
+    set -l idx (math "$__archaic_cycle_index + 1")
+    set -l completion $__archaic_cycle_completions[$idx]
+    set -g __archaic_suggestion (basename "$completion")
+    commandline -f repaint
+end
+
+function __archaic_reset_cycle -d "Clear completion cycle state"
+    set -g __archaic_cycle_completions ""
+    set -g __archaic_cycle_index 0
+    set -g __archaic_cycle_prefix ""
+    set -g __archaic_cycle_active 0
+    set -g __archaic_cycle_full_paths ""
+    set -g __archaic_cycle_types ""
+end
+
+# ── Chain completions (accept and continue) ───────────────────────────────────
+function __archaic_accept_and_continue -d "Accept suggestion and keep cursor ready for more"
+    if test -n "$__archaic_suggestion"
+        commandline -i "$__archaic_suggestion"
+        set -g __archaic_suggestion ""
+        __archaic_reset_cycle
+        commandline -f end-of-line
+        commandline -f repaint
+    end
+end
+
+# ── Preview panel ─────────────────────────────────────────────────────────────
+function __archaic_human_size -d "Convert bytes to human-readable size"
+    set -l bytes $argv[1]
+    if test "$bytes" -ge 1073741824
+        echo (math "scale=1; $bytes / 1073741824")G
+    else if test "$bytes" -ge 1048576
+        echo (math "scale=1; $bytes / 1048576")M
+    else if test "$bytes" -ge 1024
+        echo (math "scale=1; $bytes / 1024")K
+    else
+        echo "$bytes"B
+    end
+end
+
+function __archaic_get_preview -d "Get file preview for current completion"
+    if test "$__archaic_show_preview" -eq 0
+        return
+    end
+    if test "$__archaic_cycle_active" -eq 0
+        return
+    end
+    if test (count $__archaic_cycle_full_paths) -eq 0
+        return
+    end
+
+    set -l idx (math "$__archaic_cycle_index + 1")
+    set -l full_path $__archaic_cycle_full_paths[$idx]
+    set -l entry_type $__archaic_cycle_types[$idx]
+
+    if test ! -e "$full_path"
+        if test "$entry_type" = "D"
+            set_color --dim yellow
+            echo -n "[dir]"
+        else
+            set_color --dim yellow
+            echo -n "[file]"
+        end
+        set_color normal
+        return
+    end
+
+    set -l size ""
+    set -l mtime ""
+    if command -v stat >/dev/null 2>&1
+        set -l stat_out (stat -c "%s %Y" "$full_path" 2>/dev/null)
+        if test $status -eq 0
+            set size (echo "$stat_out" | cut -d' ' -f1)
+            set mtime (echo "$stat_out" | cut -d' ' -f2)
+        else
+            set -l stat_out (stat -f "%z %m" "$full_path" 2>/dev/null)
+            if test $status -eq 0
+                set size (echo "$stat_out" | cut -d' ' -f1)
+                set mtime (echo "$stat_out" | cut -d' ' -f2)
+            end
+        end
+    end
+
+    set -l human_size ""
+    if test -n "$size"
+        set human_size (__archaic_human_size "$size")
+    end
+
+    set -l time_ago ""
+    if test -n "$mtime"
+        set -l now (date +%s)
+        set -l diff (math "$now - $mtime")
+        if test "$diff" -lt 60
+            set time_ago "$diff"s" ago"
+        else if test "$diff" -lt 3600
+            set time_ago (math "$diff / 60")"m ago"
+        else if test "$diff" -lt 86400
+            set time_ago (math "$diff / 3600")"h ago"
+        else
+            set time_ago (math "$diff / 86400")"d ago"
+        end
+    end
+
+    set_color --dim
+    if test "$entry_type" = "D"
+        set_color --dim blue
+        echo -n "[dir"
+    else
+        echo -n "[file"
+    end
+    if test -n "$human_size"
+        echo -n "  $human_size"
+    end
+    if test -n "$time_ago"
+        echo -n "  $time_ago"
+    end
+    echo -n "]"
+    set_color normal
+end
 function __archaic_accept_suggestion
     if test -n "$__archaic_suggestion"
         commandline -t (commandline -t)"$__archaic_suggestion"
         set -g __archaic_suggestion ""
+        __archaic_reset_cycle
         commandline -f repaint
     end
 end
@@ -421,11 +631,27 @@ end
 # Alt+Right (works immediately)
 bind \e\[1\;3C __archaic_accept_suggestion
 
+# Alt+Down: cycle next completion
+bind \e\[1\;3B __archaic_cycle_next
+
+# Alt+Up: cycle previous completion
+bind \e\[1\;3A __archaic_cycle_prev
+
+# Alt+Shift+Right: accept and continue (chain completions)
+bind \e\[1\;4C __archaic_accept_and_continue
+
+# Ctrl+Shift+Space: accept and continue (alternative)
+bind \e\[27\;6\;32~ __archaic_accept_and_continue
+
 # Ctrl+R: must use fish_user_key_bindings to override Fish's default history search
 # (conf.d scripts load before default key bindings, so direct bind gets overridden)
 function __archaic_user_key_bindings
     bind --mode insert \cr __archaic_accept_suggestion
     bind --mode default \cr __archaic_accept_suggestion
+    # Cycle bindings survive Fish defaults
+    bind --mode insert \e\[1\;3B __archaic_cycle_next
+    bind --mode insert \e\[1\;3A __archaic_cycle_prev
+    bind --mode insert \e\[1\;4C __archaic_accept_and_continue
 end
 
 # Register to run after Fish's default key bindings are loaded

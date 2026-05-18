@@ -35,7 +35,8 @@ typedef struct {
     atomic_bool scanning;
     atomic_bool scanner_healthy;
     atomic_size_t scan_bucket_count;
-    char last_scan_path[CONFIG_MAX_STRING];
+    char last_scan_paths[CONFIG_MAX_ROOTS][CONFIG_MAX_STRING];
+    int last_scan_path_count;
     int rescan_interval_seconds;
     pthread_t rescan_timer_thread;
     atomic_bool rescan_timer_running;
@@ -57,6 +58,7 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
 daemon_state* daemon_init(void);
 void daemon_shutdown(daemon_state* state);
 void daemon_run_scan(daemon_state* state, const char* path);
+void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_count);
 void daemon_start_rescan_timer(daemon_state* state);
 void daemon_stop_rescan_timer(daemon_state* state);
 scan_status daemon_scan_status(daemon_state* state);

@@ -1,0 +1,6 @@
+[2026-05-17 21:45:53] [INFO ] [main] archaic daemon starting (v1)
+[2026-05-17 21:45:53] [INFO ] [main] starting IPC on /tmp/archaic-daemon.sock
+[2026-05-17 21:45:53] [INFO ] [scanner] scanning /home/sam/samdev (background)
+[2026-05-17 21:45:53] [INFO ] [main] ready for queries. scan running in background.
+[2026-05-17 21:45:53] [INFO ] [main] send SIGHUP to reload configuration
+[2026-05-17 21:50:53] [INFO ] [scanner] periodic rescan triggered

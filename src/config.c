@@ -69,6 +69,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->daemon.log_level = 1;
     cfg->daemon.colored_output = true;
     strncpy(cfg->daemon.scan_path, "/home/sam/samdev", sizeof(cfg->daemon.scan_path) - 1);
+    cfg->daemon.scan_path_count = 0;
     strncpy(cfg->daemon.socket_path, "/tmp/archaic-daemon.sock",
             sizeof(cfg->daemon.socket_path) - 1);
 
@@ -188,7 +189,8 @@ typedef enum {
     TYPE_DOUBLE,
     TYPE_BOOL,
     TYPE_STRING_ARRAY,
-    TYPE_SCANNER_ARRAY
+    TYPE_SCANNER_ARRAY,
+    TYPE_DAEMON_PATHS_ARRAY
 } value_type;
 
 typedef struct {
@@ -311,6 +313,41 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
             }
             return 0;
         }
+        case TYPE_DAEMON_PATHS_ARRAY: {
+            config_daemon* dm = (config_daemon*) (base + (size_t) map[i].offset);
+            char* p = trim(value);
+            if (*p != '[')
+                return -1;
+            p++;
+            char* end = strchr(p, ']');
+            if (!end)
+                return -1;
+            *end = '\0';
+
+            dm->scan_path_count = 0;
+            while (*p && dm->scan_path_count < CONFIG_MAX_ROOTS) {
+                p = trim(p);
+                if (*p == ',') {
+                    p++;
+                    continue;
+                }
+                if (*p == '"') {
+                    char* item = parse_string(p);
+                    if (!item)
+                        return -1;
+                    strncpy(dm->scan_paths[dm->scan_path_count], item, CONFIG_MAX_STRING - 1);
+                    dm->scan_paths[dm->scan_path_count][CONFIG_MAX_STRING - 1] = '\0';
+                    dm->scan_path_count++;
+                    p = strchr(p, '"');
+                    if (p)
+                        p++;
+                } else {
+                    while (*p && *p != ',')
+                        p++;
+                }
+            }
+            return 0;
+        }
         }
     }
     return 0; /* unknown key: silently ignore */
@@ -318,6 +355,7 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
 
 static const field_map daemon_map[] = {
     {"scan_path", TYPE_STRING, FOFFSET(daemon, scan_path)},
+    {"scan_paths", TYPE_DAEMON_PATHS_ARRAY, FOFFSET(daemon, scan_paths)},
     {"socket_path", TYPE_STRING, FOFFSET(daemon, socket_path)},
     {"scan_threads", TYPE_INT, FOFFSET(daemon, scan_threads)},
     {"max_depth", TYPE_INT, FOFFSET(daemon, max_depth)},

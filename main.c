@@ -82,8 +82,24 @@ int main(int argc, char* argv[]) {
         config_load_default(&cfg);
 
         /* CLI args override config */
-        const char* scan_path = argc > 2 ? argv[2] : cfg.daemon.scan_path;
+        const char* scan_path = (argc > 2 && argv[2][0] != '\0') ? argv[2] : NULL;
         const char* sock_path = argc > 3 ? argv[3] : cfg.daemon.socket_path;
+
+        const char* scan_roots[CONFIG_MAX_ROOTS];
+        int scan_root_count = 0;
+
+        if (scan_path) {
+            scan_roots[0] = scan_path;
+            scan_root_count = 1;
+        } else if (cfg.daemon.scan_path_count > 0) {
+            scan_root_count = cfg.daemon.scan_path_count;
+            for (int i = 0; i < scan_root_count; i++) {
+                scan_roots[i] = cfg.daemon.scan_paths[i];
+            }
+        } else {
+            scan_roots[0] = cfg.daemon.scan_path;
+            scan_root_count = 1;
+        }
 
         /* Auto-detect scanner threads if set to 0 */
         if (cfg.daemon.scan_threads <= 0) {
@@ -117,8 +133,16 @@ int main(int argc, char* argv[]) {
         write_pid_file(sock_path);
         atexit(cleanup_pid_file);
 
-        LOG_INFO("scanner", "scanning %s (background)", scan_path);
-        daemon_run_scan(daemon, scan_path);
+        if (scan_root_count == 1) {
+            LOG_INFO("scanner", "scanning %s (background)", scan_roots[0]);
+            daemon_run_scan(daemon, scan_roots[0]);
+        } else {
+            LOG_INFO("scanner", "scanning %d roots (background)", scan_root_count);
+            for (int i = 0; i < scan_root_count; i++) {
+                LOG_INFO("scanner", "  root[%d]: %s", i, scan_roots[i]);
+            }
+            daemon_run_scan_multi(daemon, scan_roots, scan_root_count);
+        }
         daemon->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
         daemon_start_rescan_timer(daemon);
 

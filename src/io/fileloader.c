@@ -629,7 +629,21 @@ daemon_state* daemon_init(void) {
     state->rescan_interval_seconds = cfg.daemon.rescan_interval_seconds;
     atomic_store(&state->rescan_timer_running, false);
     atomic_store(&state->config_reload_requested, false);
-    state->last_scan_path[0] = '\0';
+
+    state->last_scan_path_count = 0;
+    if (cfg.daemon.scan_path_count > 0) {
+        state->last_scan_path_count = cfg.daemon.scan_path_count;
+        for (int i = 0; i < cfg.daemon.scan_path_count; i++) {
+            strncpy(state->last_scan_paths[i], cfg.daemon.scan_paths[i],
+                    sizeof(state->last_scan_paths[i]) - 1);
+            state->last_scan_paths[i][sizeof(state->last_scan_paths[i]) - 1] = '\0';
+        }
+    } else if (cfg.daemon.scan_path[0] != '\0') {
+        state->last_scan_path_count = 1;
+        strncpy(state->last_scan_paths[0], cfg.daemon.scan_path,
+                sizeof(state->last_scan_paths[0]) - 1);
+        state->last_scan_paths[0][sizeof(state->last_scan_paths[0]) - 1] = '\0';
+    }
 
     const char* state_path = "/tmp/archaic-state.bin";
     FILE* sf = fopen(state_path, "rb");
@@ -696,7 +710,8 @@ void daemon_shutdown(daemon_state* state) {
 
 typedef struct {
     daemon_state* state;
-    char* path;
+    char** paths;
+    int path_count;
 } scan_thread_ctx;
 
 /* ── Periodic rescan timer thread ────────────────────────────────── */
@@ -715,9 +730,13 @@ static void* rescan_timer_func(void* arg) {
             break;
 
         /* Trigger a rescan if not already scanning */
-        if (!atomic_load(&state->scanning) && state->last_scan_path[0] != '\0') {
-            LOG_INFO("scanner", "periodic rescan triggered");
-            daemon_run_scan(state, state->last_scan_path);
+        if (!atomic_load(&state->scanning) && state->last_scan_path_count > 0) {
+            LOG_INFO("scanner", "periodic rescan triggered (%d roots)", state->last_scan_path_count);
+            const char* roots[CONFIG_MAX_ROOTS];
+            for (int i = 0; i < state->last_scan_path_count; i++) {
+                roots[i] = state->last_scan_paths[i];
+            }
+            daemon_run_scan_multi(state, roots, state->last_scan_path_count);
         }
     }
     return NULL;
@@ -726,7 +745,8 @@ static void* rescan_timer_func(void* arg) {
 static void* scan_thread_func(void* arg) {
     scan_thread_ctx* ctx = (scan_thread_ctx*) arg;
     daemon_state* state = ctx->state;
-    char* path = ctx->path;
+    char** paths = ctx->paths;
+    int path_count = ctx->path_count;
     free(ctx);
 
     atomic_store(&state->scanning, true);
@@ -737,7 +757,9 @@ static void* scan_thread_func(void* arg) {
     archaic_config cfg;
     config_init_defaults(&cfg);
     config_load_default(&cfg);
-    config_load_archaicignore(&cfg, path);
+    if (path_count > 0) {
+        config_load_archaicignore(&cfg, paths[0]);
+    }
 
     const char* ignore_dirs[64];
     for (int i = 0; i < cfg.scanner.ignore_dir_count && i < 64; i++)
@@ -748,7 +770,11 @@ static void* scan_thread_func(void* arg) {
     parallel_scanner_set_ignores(&state->scanner, ignore_dirs, cfg.scanner.ignore_dir_count,
                                  ignore_files, cfg.scanner.ignore_file_count);
 
-    parallel_scanner_start(&state->scanner, path);
+    if (path_count == 1) {
+        parallel_scanner_start(&state->scanner, paths[0]);
+    } else {
+        parallel_scanner_start_multi(&state->scanner, (const char**) paths, path_count);
+    }
     parallel_scanner_wait(&state->scanner);
 
     atomic_store(&state->scan_bucket_count, state->store->right_index);
@@ -758,7 +784,10 @@ static void* scan_thread_func(void* arg) {
     if (state->cache)
         cache_invalidate(state->cache);
 
-    free((char*) path);
+    for (int i = 0; i < path_count; i++) {
+        free(paths[i]);
+    }
+    free(paths);
     return NULL;
 }
 
@@ -766,25 +795,77 @@ void daemon_run_scan(daemon_state* state, const char* path) {
     if (!state || !path)
         return;
 
-    /* If a scan is already running, don't start another */
     if (atomic_load(&state->scanning))
         return;
 
-    strncpy(state->last_scan_path, path, sizeof(state->last_scan_path) - 1);
-    state->last_scan_path[sizeof(state->last_scan_path) - 1] = '\0';
+    state->last_scan_path_count = 1;
+    strncpy(state->last_scan_paths[0], path, sizeof(state->last_scan_paths[0]) - 1);
+    state->last_scan_paths[0][sizeof(state->last_scan_paths[0]) - 1] = '\0';
 
     scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
     if (!ctx)
         return;
     ctx->state = state;
-    ctx->path = strdup(path);
-    if (!ctx->path) {
+    ctx->path_count = 1;
+    ctx->paths = malloc(sizeof(char*));
+    if (!ctx->paths) {
+        free(ctx);
+        return;
+    }
+    ctx->paths[0] = strdup(path);
+    if (!ctx->paths[0]) {
+        free(ctx->paths);
         free(ctx);
         return;
     }
 
     if (pthread_create(&state->scan_thread, NULL, scan_thread_func, ctx) != 0) {
-        free(ctx->path);
+        free(ctx->paths[0]);
+        free(ctx->paths);
+        free(ctx);
+    }
+}
+
+void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_count) {
+    if (!state || !paths || path_count <= 0)
+        return;
+
+    if (atomic_load(&state->scanning))
+        return;
+
+    int count = path_count < CONFIG_MAX_ROOTS ? path_count : CONFIG_MAX_ROOTS;
+
+    state->last_scan_path_count = count;
+    for (int i = 0; i < count; i++) {
+        strncpy(state->last_scan_paths[i], paths[i], sizeof(state->last_scan_paths[i]) - 1);
+        state->last_scan_paths[i][sizeof(state->last_scan_paths[i]) - 1] = '\0';
+    }
+
+    scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
+    if (!ctx)
+        return;
+    ctx->state = state;
+    ctx->path_count = count;
+    ctx->paths = malloc(count * sizeof(char*));
+    if (!ctx->paths) {
+        free(ctx);
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        ctx->paths[i] = strdup(paths[i]);
+        if (!ctx->paths[i]) {
+            for (int j = 0; j < i; j++)
+                free(ctx->paths[j]);
+            free(ctx->paths);
+            free(ctx);
+            return;
+        }
+    }
+
+    if (pthread_create(&state->scan_thread, NULL, scan_thread_func, ctx) != 0) {
+        for (int i = 0; i < count; i++)
+            free(ctx->paths[i]);
+        free(ctx->paths);
         free(ctx);
     }
 }

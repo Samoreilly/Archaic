@@ -8,9 +8,12 @@
 #define CONFIG_MAX_COMMAND_LEN 64
 #define CONFIG_MAX_IGNORE 64
 #define CONFIG_MAX_IGNORE_LEN 128
+#define CONFIG_MAX_ROOTS 16
 
 typedef struct {
     char scan_path[CONFIG_MAX_STRING];
+    char scan_paths[CONFIG_MAX_ROOTS][CONFIG_MAX_STRING];
+    int scan_path_count;
     char socket_path[CONFIG_MAX_STRING];
     int scan_threads;
     int max_depth;

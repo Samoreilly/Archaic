@@ -268,6 +268,20 @@ void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {
     }
 }
 
+void parallel_scanner_start_multi(parallel_scanner* scanner, const char** roots, int root_count) {
+    atomic_store(&scanner->stop, false);
+    atomic_store(&scanner->active_workers, 0);
+    atomic_store(&scanner->threads_joined, false);
+
+    for (int i = 0; i < root_count; i++) {
+        scan_queue_push(scanner->queue, roots[i], 0);
+    }
+
+    for (int i = 0; i < scanner->num_threads; i++) {
+        pthread_create(&scanner->workers[i], NULL, scanner_worker, (void*) scanner);
+    }
+}
+
 void parallel_scanner_wait(parallel_scanner* scanner) {
     for (int i = 0; i < scanner->num_threads; i++) {
         pthread_join(scanner->workers[i], NULL);

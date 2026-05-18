@@ -90,7 +90,6 @@ start_daemon() {
     if [ -z "$scan_path" ] && [ -n "$config_file" ]; then
         scan_path="$(toml_get "$config_file" daemon scan_path)"
     fi
-    scan_path="${scan_path:-/home/sam/samdev}"
 
     local sock_path
     sock_path="$(resolve_sock_path)"
@@ -102,11 +101,15 @@ start_daemon() {
 
     rm -f "$sock_path"
 
-    echo "Starting archaic daemon, scanning: $scan_path"
-    echo "Socket: $sock_path"
-
-    "$SCRIPT_DIR/build/archaic" --daemon "$scan_path" "$sock_path" &
+    if [ -n "$scan_path" ]; then
+        echo "Starting archaic daemon, scanning: $scan_path"
+        "$SCRIPT_DIR/build/archaic" --daemon "$scan_path" "$sock_path" &
+    else
+        echo "Starting archaic daemon (using config scan_paths)"
+        "$SCRIPT_DIR/build/archaic" --daemon "" "$sock_path" &
+    fi
     echo $! > "${sock_path}.pid"
+    echo "Socket: $sock_path"
 
     sleep 1
 

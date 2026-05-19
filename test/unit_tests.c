@@ -1128,6 +1128,205 @@ static void test_watcher_add_root_overflow(void) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ * IPC FUZZ TESTS
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static void test_ipc_fuzz_random_headers(void) {
+    TEST(ipc_fuzz_random_headers);
+    uint8_t buf[16];
+    uint32_t seed = 0xDEADBEEF;
+    int passed = 0;
+    int total = 1000;
+
+    for (int i = 0; i < total; i++) {
+        for (int b = 0; b < 16; b++) {
+            seed = seed * 1103515245 + 12345;
+            buf[b] = (uint8_t) (seed >> 16);
+        }
+
+        ipc_header* hdr = (ipc_header*) buf;
+        if (ipc_validate_header(hdr)) {
+            ASSERT_TRUE((hdr->magic >> 16) == IPC_MAGIC_PREFIX,
+                        "valid fuzz header must have correct magic");
+            ASSERT_TRUE(hdr->payload_len < IPC_MAX_PAYLOAD,
+                        "valid fuzz header must have bounded payload");
+            passed++;
+        }
+    }
+
+    ASSERT_TRUE(passed < total, "not all random data should validate as headers");
+    (void) passed;
+    PASS();
+}
+
+static void test_ipc_fuzz_corrupted_magic(void) {
+    TEST(ipc_fuzz_corrupted_magic);
+    ipc_header hdr;
+    ipc_write_header(&hdr, IPC_MSG_COMPLETE, 100, 1);
+
+    for (int bit = 0; bit < 32; bit++) {
+        ipc_header mutated = hdr;
+        mutated.magic ^= (1U << bit);
+
+        if ((mutated.magic >> 16) == IPC_MAGIC_PREFIX) {
+            ipc_header original = hdr;
+            uint16_t orig_ver = ipc_header_version(&original);
+            uint16_t mut_ver = ipc_header_version(&mutated);
+            if (mut_ver >= 1 && mut_ver <= IPC_PROTOCOL_VERSION && mut_ver == orig_ver)
+                ASSERT_TRUE(ipc_validate_header(&mutated),
+                            "bit-flip preserving magic+version should validate");
+        }
+    }
+    PASS();
+}
+
+static void test_ipc_fuzz_oversized_payloads(void) {
+    TEST(ipc_fuzz_oversized_payloads);
+    ipc_header hdr;
+    ipc_write_header(&hdr, IPC_MSG_COMPLETE, IPC_MAX_PAYLOAD - 1, 1);
+    ASSERT_TRUE(ipc_validate_header(&hdr), "max-1 payload should validate");
+
+    hdr.payload_len = IPC_MAX_PAYLOAD;
+    ASSERT_TRUE(!ipc_validate_header(&hdr), "payload at max should fail");
+
+    hdr.payload_len = UINT32_MAX;
+    ASSERT_TRUE(!ipc_validate_header(&hdr), "UINT32_MAX payload should fail");
+
+    hdr.payload_len = 0;
+    ASSERT_TRUE(ipc_validate_header(&hdr), "zero payload should validate");
+    PASS();
+}
+
+static void test_ipc_fuzz_rle_boundary(void) {
+    TEST(ipc_fuzz_rle_boundary);
+    uint8_t all_same[1024];
+    memset(all_same, 0xAA, sizeof(all_same));
+    uint8_t compressed[2048];
+    uint8_t decompressed[2048];
+
+    size_t comp = ipc_rle_compress(all_same, sizeof(all_same), compressed, sizeof(compressed));
+    ASSERT_TRUE(comp > 0, "uniform data should compress");
+    ASSERT_TRUE(comp < sizeof(all_same), "compressed should be smaller");
+
+    size_t decomp = ipc_rle_decompress(compressed, comp, decompressed, sizeof(decompressed));
+    ASSERT_TRUE(decomp == sizeof(all_same), "decompressed size should match");
+    for (size_t i = 0; i < sizeof(all_same); i++) {
+        ASSERT_TRUE(decompressed[i] == 0xAA, "decompressed data should match");
+    }
+
+    uint8_t alternating[256];
+    for (int i = 0; i < 256; i++)
+        alternating[i] = (uint8_t) (i & 1);
+    comp = ipc_rle_compress(alternating, sizeof(alternating), compressed, sizeof(compressed));
+    ASSERT_TRUE(comp == 0, "alternating data should not compress");
+
+    PASS();
+}
+
+static void test_ipc_fuzz_rle_random_data(void) {
+    TEST(ipc_fuzz_rle_random_data);
+    uint32_t seed = 0xCAFEBABE;
+    uint8_t data[512];
+    uint8_t compressed[1024];
+    uint8_t decompressed[1024];
+
+    for (int trial = 0; trial < 50; trial++) {
+        for (int i = 0; i < 512; i++) {
+            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            data[i] = (uint8_t) (seed >> 24);
+        }
+
+        size_t comp = ipc_rle_compress(data, sizeof(data), compressed, sizeof(compressed));
+        if (comp > 0) {
+            size_t decomp =
+                ipc_rle_decompress(compressed, comp, decompressed, sizeof(decompressed));
+            if (decomp != sizeof(data)) {
+                ASSERT_TRUE(0, "rle roundtrip failed for random data");
+                break;
+            }
+            int match = 1;
+            for (size_t j = 0; j < sizeof(data); j++) {
+                if (decompressed[j] != data[j]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (!match) {
+                ASSERT_TRUE(0, "rle decompressed data mismatch");
+                break;
+            }
+        }
+    }
+    PASS();
+}
+
+static void test_ipc_fuzz_truncated_payloads(void) {
+    TEST(ipc_fuzz_truncated_payloads);
+    ipc_complete_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.prefix, "/home", sizeof(req.prefix) - 1);
+    strncpy(req.cwd, "/home/user", sizeof(req.cwd) - 1);
+    req.limit = 50;
+    req.dirs_only = 0;
+
+    ipc_header hdr;
+    ipc_write_header(&hdr, IPC_MSG_COMPLETE, sizeof(req), 42);
+    ASSERT_TRUE(ipc_validate_header(&hdr), "valid complete header should pass");
+
+    uint32_t valid_payload = hdr.payload_len;
+
+    hdr.payload_len = valid_payload - 1;
+    ASSERT_TRUE(ipc_validate_header(&hdr), "off-by-one payload should still validate as header");
+
+    hdr.payload_len = 0;
+    ASSERT_TRUE(ipc_validate_header(&hdr), "zero payload should validate");
+
+    hdr.payload_len = IPC_MAX_PAYLOAD;
+    ASSERT_TRUE(!ipc_validate_header(&hdr), "oversized payload should fail validation");
+    PASS();
+}
+
+static void test_ipc_fuzz_message_type_bounds(void) {
+    TEST(ipc_fuzz_message_type_bounds);
+    ipc_header hdr;
+    ipc_msg_type valid_types[] = {IPC_MSG_SCAN,
+                                  IPC_MSG_QUERY,
+                                  IPC_MSG_COMPLETE,
+                                  IPC_MSG_SHUTDOWN,
+                                  IPC_MSG_SUGGEST,
+                                  IPC_MSG_SAVE,
+                                  IPC_MSG_PING,
+                                  IPC_MSG_METRICS,
+                                  IPC_MSG_SCAN_STATUS,
+                                  IPC_MSG_FUZZY_COMPLETE,
+                                  IPC_MSG_RECENT,
+                                  IPC_MSG_OK,
+                                  IPC_MSG_ERROR,
+                                  IPC_MSG_COMPLETIONS,
+                                  IPC_MSG_VALIDATION,
+                                  IPC_MSG_SUGGESTION,
+                                  IPC_MSG_PONG,
+                                  IPC_MSG_METRICS_RESP,
+                                  IPC_MSG_SCAN_STATUS_RESP,
+                                  IPC_MSG_FUZZY_COMPLETIONS,
+                                  IPC_MSG_RECENT_RESP};
+
+    for (int i = 0; i < (int) (sizeof(valid_types) / sizeof(valid_types[0])); i++) {
+        ipc_write_header(&hdr, valid_types[i], 100, 1);
+        ASSERT_TRUE(ipc_validate_header(&hdr), "known message type should validate");
+    }
+
+    ipc_write_header(&hdr, 0, 100, 1);
+    if ((hdr.magic >> 16) == IPC_MAGIC_PREFIX)
+        ASSERT_TRUE(ipc_validate_header(&hdr), "type 0 with valid magic should validate");
+
+    ipc_write_header(&hdr, 99999, 100, 1);
+    ASSERT_TRUE(ipc_validate_header(&hdr),
+                "unknown type with valid magic+version should still validate header");
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  * MAIN
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -1227,6 +1426,16 @@ int main(int argc, char* argv[]) {
     test_watcher_create_destroy();
     test_watcher_add_root();
     test_watcher_add_root_overflow();
+
+    /* Group 14: IPC Fuzz Testing */
+    printf("\n--- IPC Fuzz Testing ---\n");
+    test_ipc_fuzz_random_headers();
+    test_ipc_fuzz_corrupted_magic();
+    test_ipc_fuzz_oversized_payloads();
+    test_ipc_fuzz_rle_boundary();
+    test_ipc_fuzz_rle_random_data();
+    test_ipc_fuzz_truncated_payloads();
+    test_ipc_fuzz_message_type_bounds();
 
     /* Summary */
     printf("\n========================================\n");

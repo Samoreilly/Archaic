@@ -1,6 +1,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fnmatch.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -78,6 +79,47 @@ int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_ca
     return 0;
 }
 
+typedef struct {
+    dev_t dev;
+    ino_t ino;
+} dev_ino_pair;
+
+#define SYMLINK_DEDUP_MAX 65536
+
+typedef struct {
+    dev_ino_pair entries[SYMLINK_DEDUP_MAX];
+    int count;
+    pthread_mutex_t lock;
+} symlink_dedup_set;
+
+static void symlink_dedup_init(symlink_dedup_set* set) {
+    memset(set, 0, sizeof(*set));
+    pthread_mutex_init(&set->lock, NULL);
+}
+
+__attribute__((unused)) static void symlink_dedup_free(symlink_dedup_set* set) {
+    pthread_mutex_destroy(&set->lock);
+}
+
+static int symlink_dedup_check_and_add(symlink_dedup_set* set, dev_t dev, ino_t ino) {
+    pthread_mutex_lock(&set->lock);
+    for (int i = 0; i < set->count; i++) {
+        if (set->entries[i].dev == dev && set->entries[i].ino == ino) {
+            pthread_mutex_unlock(&set->lock);
+            return 1;
+        }
+    }
+    if (set->count < SYMLINK_DEDUP_MAX) {
+        set->entries[set->count].dev = dev;
+        set->entries[set->count].ino = ino;
+        set->count++;
+    }
+    pthread_mutex_unlock(&set->lock);
+    return 0;
+}
+
+static symlink_dedup_set g_symlink_seen;
+
 static void* scanner_worker(void* arg) {
     parallel_scanner* scanner = (parallel_scanner*) arg;
 
@@ -113,10 +155,16 @@ static void* scanner_worker(void* arg) {
         DIR* dir = opendir(path);
         if (!dir) {
             if (errno == EACCES) {
-                LOG_WARN("scanner", "permission denied: %s", path);
+                LOG_WARN("scanner", "permission denied: %s (check directory permissions)", path);
                 atomic_fetch_add(&scanner->skipped_dirs, 1);
+            } else if (errno == ENOENT) {
+                LOG_WARN("scanner", "directory removed during scan: %s", path);
+            } else if (errno == ENOTDIR) {
+                LOG_WARN("scanner", "not a directory: %s", path);
+            } else if (errno == EMFILE || errno == ENFILE) {
+                LOG_ERR("scanner", "too many open files, cannot open: %s (errno=%d)", path, errno);
             } else {
-                LOG_WARN("scanner", "cannot open directory: %s", path);
+                LOG_WARN("scanner", "cannot open directory: %s (errno=%d)", path, errno);
             }
             int prev = atomic_fetch_sub(&scanner->active_workers, 1);
             if (prev == 1) {
@@ -139,15 +187,49 @@ static void* scanner_worker(void* arg) {
                 continue;
 
             bool is_dir = (entry->d_type == DT_DIR);
-            if (!is_dir && entry->d_type == DT_UNKNOWN) {
+            bool is_symlink = false;
+            if (entry->d_type == DT_LNK) {
+                is_symlink = true;
+                char child_path[4096];
+                snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
+                struct stat target_st;
+                if (stat(child_path, &target_st) == 0) {
+                    is_dir = S_ISDIR(target_st.st_mode);
+                    if (is_dir) {
+                        if (symlink_dedup_check_and_add(&g_symlink_seen, target_st.st_dev,
+                                                        target_st.st_ino)) {
+                            continue;
+                        }
+                    }
+                } else {
+                    continue;
+                }
+            } else if (!is_dir && entry->d_type == DT_UNKNOWN) {
                 char child_path[4096];
                 snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
                 struct stat st;
-                if (stat(child_path, &st) == 0) {
-                    is_dir = S_ISDIR(st.st_mode);
+                if (lstat(child_path, &st) == 0) {
+                    if (S_ISLNK(st.st_mode)) {
+                        is_symlink = true;
+                        struct stat target_st;
+                        if (stat(child_path, &target_st) == 0) {
+                            is_dir = S_ISDIR(target_st.st_mode);
+                            if (is_dir) {
+                                if (symlink_dedup_check_and_add(&g_symlink_seen, target_st.st_dev,
+                                                                target_st.st_ino)) {
+                                    continue;
+                                }
+                            }
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        is_dir = S_ISDIR(st.st_mode);
+                    }
                 }
             }
 
+            (void) is_symlink;
             if (is_dir && should_ignore_dir(scanner, entry->d_name))
                 continue;
             if (!is_dir && should_ignore_file(scanner, entry->d_name))
@@ -267,6 +349,7 @@ void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {
     atomic_store(&scanner->stop, false);
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_joined, false);
+    symlink_dedup_init(&g_symlink_seen);
 
     scan_queue_push(scanner->queue, root_path, 0);
 
@@ -279,6 +362,7 @@ void parallel_scanner_start_multi(parallel_scanner* scanner, const char** roots,
     atomic_store(&scanner->stop, false);
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_joined, false);
+    symlink_dedup_init(&g_symlink_seen);
 
     for (int i = 0; i < root_count; i++) {
         scan_queue_push(scanner->queue, roots[i], 0);

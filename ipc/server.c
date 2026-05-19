@@ -663,6 +663,27 @@ static void handle_client(ipc_server* srv, int fd) {
             write_exact(fd, &resp, sizeof(resp));
             break;
         }
+        case IPC_MSG_RELOAD_CONFIG: {
+            atomic_store(&srv->daemon->config_reload_requested, true);
+            ipc_header resp_hdr;
+            ipc_ok_resp resp;
+            resp.status = 0;
+            ipc_write_header(&resp_hdr, IPC_MSG_OK, sizeof(resp), hdr.request_id);
+            write_exact(fd, &resp_hdr, sizeof(resp_hdr));
+            write_exact(fd, &resp, sizeof(resp));
+            break;
+        }
+        case IPC_MSG_RESET_STATS: {
+            memset(&srv->daemon->metrics, 0, sizeof(srv->daemon->metrics));
+            cache_clear(srv->daemon->cache);
+            ipc_header resp_hdr;
+            ipc_ok_resp resp;
+            resp.status = 0;
+            ipc_write_header(&resp_hdr, IPC_MSG_OK, sizeof(resp), hdr.request_id);
+            write_exact(fd, &resp_hdr, sizeof(resp_hdr));
+            write_exact(fd, &resp, sizeof(resp));
+            break;
+        }
         default:
             send_error(fd, hdr.request_id, -4, "unknown message type");
             break;

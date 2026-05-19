@@ -266,6 +266,20 @@ int main(int argc, char* argv[]) {
         } else {
             fprintf(stderr, "Failed to get health info\n");
         }
+    } else if (strcmp(argv[1], "reload") == 0) {
+        rc = ipc_client_reload(client);
+        if (rc == 0) {
+            printf("Config reload requested (send SIGHUP to daemon to apply)\n");
+        } else {
+            fprintf(stderr, "Reload failed\n");
+        }
+    } else if (strcmp(argv[1], "reset-stats") == 0) {
+        rc = ipc_client_reset_stats(client);
+        if (rc == 0) {
+            printf("Stats reset complete\n");
+        } else {
+            fprintf(stderr, "Reset failed\n");
+        }
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);
         rc = 1;

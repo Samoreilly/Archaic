@@ -48,6 +48,8 @@ typedef enum {
     IPC_MSG_BOOKMARKS_RESP = 111,
     IPC_MSG_HEALTH = 112,
     IPC_MSG_HEALTH_RESP = 113,
+    IPC_MSG_RELOAD_CONFIG = 114,
+    IPC_MSG_RESET_STATS = 115,
 } ipc_msg_type;
 
 /*

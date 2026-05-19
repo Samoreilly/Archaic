@@ -278,6 +278,30 @@ int ipc_client_health(ipc_client* client, ipc_health_resp* out) {
     return 0;
 }
 
+int ipc_client_reload(ipc_client* client) {
+    if (send_request(client, IPC_MSG_RELOAD_CONFIG, NULL, 0) < 0)
+        return -1;
+    ipc_header hdr;
+    ipc_ok_resp resp;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_OK)
+        return -1;
+    return 0;
+}
+
+int ipc_client_reset_stats(ipc_client* client) {
+    if (send_request(client, IPC_MSG_RESET_STATS, NULL, 0) < 0)
+        return -1;
+    ipc_header hdr;
+    ipc_ok_resp resp;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_OK)
+        return -1;
+    return 0;
+}
+
 #include "../src/config.h"
 
 ipc_client* ipc_client_connect_default(void) {

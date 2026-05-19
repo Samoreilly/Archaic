@@ -66,4 +66,7 @@ int ipc_client_bookmarks(ipc_client* client, uint32_t limit, ipc_bookmarks_resp*
 
 int ipc_client_health(ipc_client* client, ipc_health_resp* out);
 
+int ipc_client_reload(ipc_client* client);
+int ipc_client_reset_stats(ipc_client* client);
+
 ipc_client* ipc_client_connect_default(void);

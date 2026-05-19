@@ -50,6 +50,8 @@ typedef enum {
     IPC_MSG_HEALTH_RESP = 113,
     IPC_MSG_RELOAD_CONFIG = 114,
     IPC_MSG_RESET_STATS = 115,
+    IPC_MSG_FUZZY_SUGGEST = 116,
+    IPC_MSG_FUZZY_SUGGEST_RESP = 117,
 } ipc_msg_type;
 
 /*
@@ -187,6 +189,17 @@ typedef struct {
     uint64_t uptime_seconds;
     uint64_t estimated_memory_bytes;
 } __attribute__((packed)) ipc_health_resp;
+
+typedef struct {
+    char query[4096];
+    uint32_t limit;
+} __attribute__((packed)) ipc_fuzzy_suggest_req;
+
+typedef struct {
+    uint32_t count;
+    char suggestions[20][4096];
+    double scores[20];
+} __attribute__((packed)) ipc_fuzzy_suggest_resp;
 
 /*
     Serialization helpers

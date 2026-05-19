@@ -685,6 +685,42 @@ static void handle_client(ipc_server* srv, int fd) {
             write_exact(fd, &resp, sizeof(resp));
             break;
         }
+        case IPC_MSG_FUZZY_SUGGEST: {
+            ipc_fuzzy_suggest_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid fuzzy suggest payload");
+                break;
+            }
+            if (validate_string_field(req.query, sizeof(req.query)) != 0) {
+                send_error(fd, hdr.request_id, -6, "invalid query: not null-terminated");
+                break;
+            }
+
+            char expanded[4096];
+            path_expand_abbrev(expanded, req.query, sizeof(expanded));
+
+            completions* fc = daemon_get_fuzzy_completions(srv->daemon, expanded, req.limit);
+
+            ipc_header resp_hdr;
+            ipc_fuzzy_suggest_resp resp;
+            resp.count = 0;
+            memset(resp.suggestions, 0, sizeof(resp.suggestions));
+            memset(resp.scores, 0, sizeof(resp.scores));
+
+            if (fc) {
+                uint32_t n = fc->count < 20 ? fc->count : 20;
+                for (uint32_t i = 0; i < n; i++) {
+                    strncpy(resp.suggestions[i], fc->paths[i], sizeof(resp.suggestions[i]) - 1);
+                    resp.count++;
+                }
+                completions_free(fc);
+            }
+
+            ipc_write_header(&resp_hdr, IPC_MSG_FUZZY_SUGGEST_RESP, sizeof(resp), hdr.request_id);
+            write_exact(fd, &resp_hdr, sizeof(resp_hdr));
+            write_exact(fd, &resp, sizeof(resp));
+            break;
+        }
         default:
             send_error(fd, hdr.request_id, -4, "unknown message type");
             break;

@@ -30,6 +30,7 @@ typedef struct {
     bool colored_output;
     uint32_t recent_files_capacity;
     bool case_insensitive;
+    uint32_t max_total_nodes;
 } config_storage;
 
 typedef struct {

@@ -80,6 +80,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->storage.cache_ttl_seconds = 2;
     cfg->storage.recent_files_capacity = 50;
     cfg->storage.case_insensitive = false;
+    cfg->storage.max_total_nodes = 0;
 
     cfg->scoring.weight_frequency = 0.40;
     cfg->scoring.weight_recency = 0.30;
@@ -486,6 +487,7 @@ static const field_map storage_map[] = {
     {"cache_ttl_seconds", TYPE_INT, FOFFSET(storage, cache_ttl_seconds)},
     {"recent_files_capacity", TYPE_INT, FOFFSET(storage, recent_files_capacity)},
     {"case_insensitive", TYPE_BOOL, FOFFSET(storage, case_insensitive)},
+    {"max_total_nodes", TYPE_INT, FOFFSET(storage, max_total_nodes)},
 };
 
 static const field_map scoring_map[] = {

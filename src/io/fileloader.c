@@ -673,6 +673,7 @@ daemon_state* daemon_init(void) {
 
     state->store->max_buckets = BUCKETS;
     state->store->max_nodes_per_bucket = cfg.storage.max_nodes_per_bucket;
+    state->store->max_total_nodes = cfg.storage.max_total_nodes;
     atomic_store(&state->store->total_nodes, 0);
     atomic_store(&state->store->estimated_memory_bytes, 0);
 

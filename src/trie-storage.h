@@ -22,10 +22,10 @@ typedef struct t_bucket {
 } t_bucket;
 
 typedef struct t_bucket_store {
-    t_bucket* buckets[BUCKETS];
-    t_bucket* lru;
+    t_bucket** buckets;
+    size_t capacity;
     size_t right_index;
-
+    size_t max_total_nodes;
     pthread_mutex_t store_lock;
 
     /* Safety limits */
@@ -97,3 +97,5 @@ void remove_char(char* str, int s_index);
 void add_char(char* str, char c, int s_index);
 
 void update_memory_estimate(t_bucket_store* store);
+void store_set_max_nodes(t_bucket_store* store, size_t max_nodes);
+void store_enforce_budget(t_bucket_store* store);

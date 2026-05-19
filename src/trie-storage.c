@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "log.h"
 #include "lru.h"
 #include "trie-storage.h"
 #include "trie.h"
@@ -336,4 +337,43 @@ void update_memory_estimate(t_bucket_store* store) {
     est += store->right_index * sizeof(t_bucket*);
     est += atomic_load(&store->total_nodes) * 200;
     atomic_store(&store->estimated_memory_bytes, est);
+}
+
+void store_set_max_nodes(t_bucket_store* store, size_t max_nodes) {
+    if (store)
+        store->max_total_nodes = max_nodes;
+}
+
+__attribute__((unused)) static size_t count_bucket_nodes(t_bucket* bucket) {
+    if (!bucket || !bucket->dir_trie)
+        return 0;
+    return trie_node_count(bucket->dir_trie);
+}
+
+void store_enforce_budget(t_bucket_store* store) {
+    if (!store || store->max_total_nodes == 0)
+        return;
+
+    size_t total = atomic_load(&store->total_nodes);
+    if (total <= store->max_total_nodes)
+        return;
+
+    LOG_WARN("store", "node budget exceeded (%zu > %zu), evicting low-frequency entries",
+             total, store->max_total_nodes);
+
+    store_lock(store);
+    for (size_t b = 0; b < store->right_index; b++) {
+        t_bucket* bucket = store->buckets[b];
+        if (!bucket || !bucket->dir_trie)
+            continue;
+
+        total = atomic_load(&store->total_nodes);
+        if (total <= store->max_total_nodes)
+            break;
+
+        trie_compact(bucket->dir_trie);
+    }
+    store_unlock(store);
+
+    update_memory_estimate(store);
 }

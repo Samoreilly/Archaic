@@ -152,6 +152,9 @@ static void* scanner_worker(void* arg) {
         atomic_fetch_add(&scanner->active_workers, 1);
         pthread_mutex_unlock(&scanner->queue->queue_lock);
 
+        struct timespec dir_start;
+        clock_gettime(CLOCK_MONOTONIC, &dir_start);
+
         DIR* dir = opendir(path);
         if (!dir) {
             if (errno == EACCES) {
@@ -183,6 +186,19 @@ static void* scanner_worker(void* arg) {
 
         struct dirent* entry;
         while ((entry = readdir(dir)) && entry_count < 512) {
+            if (scanner->dir_timeout_ms > 0) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                long elapsed_ms = (now.tv_sec - dir_start.tv_sec) * 1000 +
+                                  (now.tv_nsec - dir_start.tv_nsec) / 1000000;
+                if (elapsed_ms > scanner->dir_timeout_ms) {
+                    LOG_WARN("scanner", "directory scan timeout (%dms): %s (%d entries read)",
+                             scanner->dir_timeout_ms, path, entry_count);
+                    atomic_fetch_add(&scanner->skipped_dirs, 1);
+                    break;
+                }
+            }
+
             if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
                 continue;
 
@@ -317,6 +333,11 @@ void parallel_scanner_init(parallel_scanner* scanner, t_bucket_store* store, str
     atomic_store(&scanner->dirs_scanned, 0);
     atomic_store(&scanner->files_scanned, 0);
     atomic_store(&scanner->last_progress_log, 0);
+}
+
+void parallel_scanner_set_dir_timeout(parallel_scanner* scanner, int timeout_ms) {
+    if (scanner)
+        scanner->dir_timeout_ms = timeout_ms > 0 ? timeout_ms : 0;
 }
 
 void parallel_scanner_set_ignores(parallel_scanner* scanner, const char** dirs, int dir_count,

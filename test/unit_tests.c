@@ -33,6 +33,8 @@
 #include "../src/trie.h"
 #include "../src/watcher.h"
 #include "../src/path-utils.h"
+#include "../src/threadmanager.h"
+#include "../src/scanner.h"
 
 /* ── Test infrastructure ─────────────────────────────────────────────── */
 
@@ -1448,7 +1450,23 @@ static void test_executable_script_detection(void) {
     PASS();
 }
 
-/* ── Group 18: Config Path Validation ──────────────────────────────────── */
+/* ── Group 18: Scanner Timeout ─────────────────────────────────────────── */
+
+static void test_scanner_dir_timeout(void) {
+    TEST(scanner_dir_timeout);
+    parallel_scanner scanner;
+    memset(&scanner, 0, sizeof(scanner));
+    ASSERT_EQ_INT(0, scanner.dir_timeout_ms, "default timeout is 0");
+    parallel_scanner_set_dir_timeout(&scanner, 5000);
+    ASSERT_EQ_INT(5000, scanner.dir_timeout_ms, "timeout set to 5000ms");
+    parallel_scanner_set_dir_timeout(&scanner, 0);
+    ASSERT_EQ_INT(0, scanner.dir_timeout_ms, "timeout reset to 0");
+    parallel_scanner_set_dir_timeout(&scanner, -1);
+    ASSERT_EQ_INT(0, scanner.dir_timeout_ms, "negative timeout clamped to 0");
+    PASS();
+}
+
+/* ── Group 19: Config Path Validation ──────────────────────────────────── */
 
 static void test_config_validate_paths(void) {
     TEST(config_validate_paths);
@@ -1611,7 +1629,11 @@ int main(int argc, char* argv[]) {
     printf("\n--- Executable Script Detection ---\n");
     test_executable_script_detection();
 
-    /* Group 18: Config Path Validation */
+    /* Group 18: Scanner Timeout */
+    printf("\n--- Scanner Timeout ---\n");
+    test_scanner_dir_timeout();
+
+    /* Group 19: Config Path Validation */
     printf("\n--- Config Path Validation ---\n");
     test_config_validate_paths();
     test_config_validate_paths_invalid();

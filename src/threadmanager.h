@@ -64,4 +64,5 @@ typedef struct {
     atomic_int files_scanned;
     atomic_int skipped_dirs;
     atomic_int last_progress_log;
+    int dir_timeout_ms;
 } parallel_scanner;

@@ -29,6 +29,7 @@
 static volatile int running = 1;
 static volatile int sighup_received = 0;
 static volatile int sigterm_received = 0;
+static volatile int sigusr2_received = 0;
 static char pid_file_path[4096] = {0};
 
 static void cleanup_pid_file(void) {
@@ -78,10 +79,16 @@ static void handle_sighup(int sig) {
     sighup_received = 1;
 }
 
+static void handle_sigusr2(int sig) {
+    (void) sig;
+    sigusr2_received = 1;
+}
+
 static void apply_config_reload(daemon_state* daemon) {
     archaic_config cfg;
     config_init_defaults(&cfg);
     if (config_load_default(&cfg) == 0) {
+        config_expand_vars(&cfg);
         LOG_INFO("main", "config reloaded from disk");
 
         /* Apply live-reloadable settings */
@@ -106,6 +113,7 @@ int main(int argc, char* argv[]) {
         archaic_config cfg;
         config_init_defaults(&cfg);
         config_load_default(&cfg);
+        config_expand_vars(&cfg);
         config_sandbox_validate(&cfg);
 
         /* CLI args override config */
@@ -148,6 +156,12 @@ int main(int argc, char* argv[]) {
         memset(&sa_pipe, 0, sizeof(sa_pipe));
         sa_pipe.sa_handler = SIG_IGN;
         sigaction(SIGPIPE, &sa_pipe, NULL);
+        {
+            struct sigaction sa_usr2;
+            memset(&sa_usr2, 0, sizeof(sa_usr2));
+            sa_usr2.sa_handler = handle_sigusr2;
+            sigaction(SIGUSR2, &sa_usr2, NULL);
+        }
 
         log_init((log_level) cfg.daemon.log_level, stderr);
         LOG_INFO("main", "archaic daemon starting (v%d)", IPC_PROTOCOL_VERSION);
@@ -236,6 +250,14 @@ int main(int argc, char* argv[]) {
                 LOG_INFO("main", "SIGHUP received, reloading configuration...");
                 apply_config_reload(daemon);
                 atomic_store(&daemon->config_reload_requested, true);
+            }
+            if (sigusr2_received) {
+                sigusr2_received = 0;
+                LOG_INFO("main", "SIGUSR2 received, dumping state...");
+                char state_path[4096];
+                snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
+                daemon_save_state(daemon, state_path);
+                LOG_INFO("main", "state saved to %s", state_path);
             }
             sleep(1);
         }

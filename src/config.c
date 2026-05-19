@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* ── Ignore helpers ──────────────────────────────────────────────────────── */
 
@@ -132,6 +133,81 @@ void config_sandbox_validate(archaic_config* cfg) {
         cfg->scoring.weight_recency = 0.0;
     if (cfg->scoring.weight_recency > 1.0)
         cfg->scoring.weight_recency = 1.0;
+}
+
+/* ── Environment variable expansion ──────────────────────────────────────── */
+
+/* Expand environment variables in a path string.
+   Supports $VAR and ${VAR} syntax, expanding to the variable's value.
+   Falls back to the literal string if the variable is not set.
+   Writes the result to dst (at most dst_size bytes including NUL). */
+void expand_env_vars(const char* src, char* dst, size_t dst_size) {
+    if (!src || !dst || dst_size == 0) {
+        if (dst && dst_size > 0)
+            dst[0] = '\0';
+        return;
+    }
+
+    size_t si = 0, di = 0;
+    size_t src_len = strlen(src);
+
+    while (si < src_len && di < dst_size - 1) {
+        if (src[si] == '$') {
+            if (si + 1 < src_len && src[si + 1] == '$') {
+                dst[di++] = '$';
+                si += 2;
+                continue;
+            }
+
+            si++;
+
+            if (si < src_len && src[si] == '{') {
+                si++;
+                char varname[256];
+                size_t vi = 0;
+                while (si < src_len && src[si] != '}' && vi < sizeof(varname) - 1)
+                    varname[vi++] = src[si++];
+                varname[vi] = '\0';
+                if (si < src_len && src[si] == '}')
+                    si++;
+
+                const char* val = getenv(varname);
+                if (val) {
+                    size_t vlen = strlen(val);
+                    for (size_t k = 0; k < vlen && di < dst_size - 1; k++)
+                        dst[di++] = val[k];
+                } else {
+                    dst[di++] = '$';
+                    dst[di++] = '{';
+                    for (size_t k = 0; k < vi && di < dst_size - 2; k++)
+                        dst[di++] = varname[k];
+                    if (di < dst_size - 1)
+                        dst[di++] = '}';
+                }
+            } else {
+                char varname[256];
+                size_t vi = 0;
+                while (si < src_len && (isalnum((unsigned char) src[si]) || src[si] == '_') &&
+                       vi < sizeof(varname) - 1)
+                    varname[vi++] = src[si++];
+                varname[vi] = '\0';
+
+                if (vi > 0) {
+                    const char* val = getenv(varname);
+                    if (val) {
+                        size_t vlen = strlen(val);
+                        for (size_t k = 0; k < vlen && di < dst_size - 1; k++)
+                            dst[di++] = val[k];
+                    }
+                } else {
+                    dst[di++] = '$';
+                }
+            }
+        } else {
+            dst[di++] = src[si++];
+        }
+    }
+    dst[di] = '\0';
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
@@ -565,6 +641,51 @@ int config_load_default(archaic_config* cfg) {
     /* None found — use defaults */
     config_init_defaults(cfg);
     return -1;
+}
+
+void config_expand_vars(archaic_config* cfg) {
+    char buf[CONFIG_MAX_STRING];
+
+    expand_env_vars(cfg->daemon.scan_path, buf, sizeof(buf));
+    strncpy(cfg->daemon.scan_path, buf, sizeof(cfg->daemon.scan_path) - 1);
+    cfg->daemon.scan_path[sizeof(cfg->daemon.scan_path) - 1] = '\0';
+
+    for (int i = 0; i < cfg->daemon.scan_path_count; i++) {
+        expand_env_vars(cfg->daemon.scan_paths[i], buf, sizeof(buf));
+        strncpy(cfg->daemon.scan_paths[i], buf, sizeof(cfg->daemon.scan_paths[i]) - 1);
+        cfg->daemon.scan_paths[i][sizeof(cfg->daemon.scan_paths[i]) - 1] = '\0';
+    }
+
+    expand_env_vars(cfg->daemon.socket_path, buf, sizeof(buf));
+    strncpy(cfg->daemon.socket_path, buf, sizeof(cfg->daemon.socket_path) - 1);
+    cfg->daemon.socket_path[sizeof(cfg->daemon.socket_path) - 1] = '\0';
+}
+
+int config_validate_paths(archaic_config* cfg) {
+    int errors = 0;
+    struct stat st;
+
+    if (cfg->daemon.scan_path[0] != '\0') {
+        if (stat(cfg->daemon.scan_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "archaic: scan_path not found or not a directory: %s\n",
+                    cfg->daemon.scan_path);
+            errors++;
+        }
+    }
+    for (int i = 0; i < cfg->daemon.scan_path_count; i++) {
+        if (stat(cfg->daemon.scan_paths[i], &st) != 0 || !S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "archaic: scan_paths[%d] not found or not a directory: %s\n", i,
+                     cfg->daemon.scan_paths[i]);
+            errors++;
+        }
+    }
+
+    if (cfg->daemon.scan_path[0] == '\0' && cfg->daemon.scan_path_count == 0) {
+        fprintf(stderr, "archaic: no scan_path or scan_paths configured\n");
+        errors++;
+    }
+
+    return errors;
 }
 
 /* ── .archaicignore support ──────────────────────────────────────────────── */

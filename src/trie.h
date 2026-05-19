@@ -87,3 +87,5 @@ bool is_hidden_path(const char* path);
 void session_record_selection(const char* path);
 double session_get_boost(const char* path);
 void session_reset(void);
+
+bool is_executable_script(const char* path);

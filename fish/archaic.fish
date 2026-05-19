@@ -32,12 +32,25 @@ set -g archaic_cli_path "$repo_root/build/archaic-cli"
 set -g archaic_helper_path "$repo_root/build/archaic-helper"
 
 # ── Completion pager colors ────────────────────────────────────────────────────
-# Archaic does NOT override Fish's pager colors. Fish uses its defaults:
-# blue/bold for directories, default color for files, etc. If you want to
-# customize, set these in your own Fish config:
-#   set -g fish_pager_color_completion blue
-#   set -g fish_pager_color_description brblack
+# Fish's completion pager applies set_color calls (e.g. set_color --bold blue for
+# directories) when rendering completions. These ANSI escape codes (\033[1;34m etc.)
+# can appear as raw visible text in some terminal/pager configurations, including
+# kitty. Setting pager color variables to empty strings tells Fish to skip set_color
+# calls entirely, producing zero ANSI escape codes in completion output.
+# This affects ALL Fish completions, not just archaic's. To restore colors:
+#   set -g fish_pager_color_completion cyan
+#   set -g fish_pager_color_description yellow
 #   set -g fish_pager_color_prefix --bold --underline
+set -g fish_pager_color_completion ""
+set -g fish_pager_color_description ""
+set -g fish_pager_color_prefix ""
+set -g fish_pager_color_selected_completion ""
+set -g fish_pager_color_selected_description ""
+set -g fish_pager_color_selected_prefix ""
+set -g fish_pager_color_selected_background ""
+set -g fish_pager_color_background ""
+set -g fish_pager_color_secondary ""
+set -g fish_pager_color_progress ""
 
 # ── Default command list ──────────────────────────────────────────────────────
 set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch

@@ -85,3 +85,9 @@ void config_init_defaults(archaic_config* cfg);
 int config_load_archaicignore(archaic_config* cfg, const char* start_path);
 
 void config_sandbox_validate(archaic_config* cfg);
+
+void config_expand_vars(archaic_config* cfg);
+
+int config_validate_paths(archaic_config* cfg);
+
+void expand_env_vars(const char* src, char* dst, size_t dst_size);

@@ -32,6 +32,7 @@
 #include "../src/trie-storage.h"
 #include "../src/trie.h"
 #include "../src/watcher.h"
+#include "../src/path-utils.h"
 
 /* ── Test infrastructure ─────────────────────────────────────────────── */
 
@@ -1330,6 +1331,158 @@ static void test_ipc_fuzz_message_type_bounds(void) {
  * MAIN
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* ── Group 15: Env Var Expansion ─────────────────────────────────────────── */
+
+static void test_env_var_expand_home(void) {
+    TEST(env_var_expand_home);
+    setenv("HOME", "/home/testuser", 1);
+    char buf[4096];
+    expand_env_vars("$HOME/projects", buf, sizeof(buf));
+    ASSERT_EQ_STR("/home/testuser/projects", buf, "$HOME expansion");
+    unsetenv("HOME");
+    PASS();
+}
+
+static void test_env_var_expand_braces(void) {
+    TEST(env_var_expand_braces);
+    setenv("PROJECTS", "/data/code", 1);
+    char buf[4096];
+    expand_env_vars("${PROJECTS}/src", buf, sizeof(buf));
+    ASSERT_EQ_STR("/data/code/src", buf, "${PROJECTS} expansion");
+    unsetenv("PROJECTS");
+    PASS();
+}
+
+static void test_env_var_expand_unset(void) {
+    TEST(env_var_expand_unset);
+    unsetenv("NONEXISTENT_VAR");
+    char buf[4096];
+    expand_env_vars("$NONEXISTENT_VAR/path", buf, sizeof(buf));
+    ASSERT_EQ_STR("/path", buf, "unset var expands to empty");
+    PASS();
+}
+
+static void test_env_var_expand_unset_braces(void) {
+    TEST(env_var_expand_unset_braces);
+    unsetenv("MISSING_VAR");
+    char buf[4096];
+    expand_env_vars("${MISSING_VAR}/path", buf, sizeof(buf));
+    ASSERT_EQ_STR("${MISSING_VAR}/path", buf, "unset ${VAR} preserved");
+    PASS();
+}
+
+static void test_env_var_double_dollar(void) {
+    TEST(env_var_double_dollar);
+    char buf[4096];
+    expand_env_vars("$$HOME", buf, sizeof(buf));
+    ASSERT_EQ_STR("$HOME", buf, "$$ escapes to $");
+    PASS();
+}
+
+static void test_env_var_no_expansion(void) {
+    TEST(env_var_no_expansion);
+    char buf[4096];
+    expand_env_vars("/plain/path", buf, sizeof(buf));
+    ASSERT_EQ_STR("/plain/path", buf, "no vars to expand");
+    PASS();
+}
+
+/* ── Group 16: Path Normalization ───────────────────────────────────────── */
+
+static void test_path_normalize_dots(void) {
+    TEST(path_normalize_dots);
+    char buf[4096];
+    size_t len = path_normalize(buf, "/home/user/../other/./dir", sizeof(buf));
+    ASSERT_EQ_STR("/home/other/dir", buf, "normalize /../ and /./");
+    (void) len;
+    PASS();
+}
+
+static void test_path_normalize_double_slash(void) {
+    TEST(path_normalize_double_slash);
+    char buf[4096];
+    path_normalize(buf, "/home//user///dir", sizeof(buf));
+    ASSERT_EQ_STR("/home/user/dir", buf, "normalize double slashes");
+    PASS();
+}
+
+static void test_path_normalize_root(void) {
+    TEST(path_normalize_root);
+    char buf[4096];
+    path_normalize(buf, "/", sizeof(buf));
+    ASSERT_EQ_STR("/", buf, "normalize root");
+    PASS();
+}
+
+static void test_path_expand_tilde(void) {
+    TEST(path_expand_tilde);
+    setenv("HOME", "/home/testuser", 1);
+    char buf[4096];
+    path_expand_tilde(buf, "~/projects", sizeof(buf));
+    ASSERT_EQ_STR("/home/testuser/projects", buf, "tilde expansion");
+    unsetenv("HOME");
+    PASS();
+}
+
+static void test_path_expand_tilde_no_home(void) {
+    TEST(path_expand_tilde_no_home);
+    unsetenv("HOME");
+    char buf[4096];
+    path_expand_tilde(buf, "~/projects", sizeof(buf));
+    ASSERT_TRUE(buf[0] == '/', "tilde expansion falls back to /");
+    PASS();
+}
+
+/* ── Group 17: Executable Script Detection ───────────────────────────────── */
+
+static void test_executable_script_detection(void) {
+    TEST(executable_script_detection);
+    ASSERT_TRUE(is_executable_script("deploy.sh"), ".sh detected");
+    ASSERT_TRUE(is_executable_script("setup.bash"), ".bash detected");
+    ASSERT_TRUE(is_executable_script("main.py"), ".py detected");
+    ASSERT_TRUE(is_executable_script("app.js"), ".js detected");
+    ASSERT_TRUE(is_executable_script(".bashrc"), "dot rc detected");
+    ASSERT_TRUE(!is_executable_script("readme.md"), ".md not executable");
+    ASSERT_TRUE(!is_executable_script("image.png"), ".png not executable");
+    ASSERT_TRUE(!is_executable_script("Makefile"), "Makefile not in ext list");
+    PASS();
+}
+
+/* ── Group 18: Config Path Validation ──────────────────────────────────── */
+
+static void test_config_validate_paths(void) {
+    TEST(config_validate_paths);
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    strncpy(cfg.daemon.scan_path, "/tmp", sizeof(cfg.daemon.scan_path) - 1);
+    cfg.daemon.scan_path_count = 0;
+    int errors = config_validate_paths(&cfg);
+    ASSERT_EQ_INT(0, errors, "/tmp is valid directory");
+    PASS();
+}
+
+static void test_config_validate_paths_invalid(void) {
+    TEST(config_validate_paths_invalid);
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    strncpy(cfg.daemon.scan_path, "/nonexistent_archaic_test_path", sizeof(cfg.daemon.scan_path) - 1);
+    cfg.daemon.scan_path_count = 0;
+    int errors = config_validate_paths(&cfg);
+    ASSERT_TRUE(errors > 0, "nonexistent path should report errors");
+    PASS();
+}
+
+static void test_config_validate_paths_empty(void) {
+    TEST(config_validate_paths_empty);
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    cfg.daemon.scan_path[0] = '\0';
+    cfg.daemon.scan_path_count = 0;
+    int errors = config_validate_paths(&cfg);
+    ASSERT_TRUE(errors > 0, "no paths configured should report error");
+    PASS();
+}
+
 int main(int argc, char* argv[]) {
     (void) argc;
     (void) argv;
@@ -1436,6 +1589,33 @@ int main(int argc, char* argv[]) {
     test_ipc_fuzz_rle_random_data();
     test_ipc_fuzz_truncated_payloads();
     test_ipc_fuzz_message_type_bounds();
+
+    /* Group 15: Env Var Expansion */
+    printf("\n--- Env Var Expansion ---\n");
+    test_env_var_expand_home();
+    test_env_var_expand_braces();
+    test_env_var_expand_unset();
+    test_env_var_expand_unset_braces();
+    test_env_var_double_dollar();
+    test_env_var_no_expansion();
+
+    /* Group 16: Path Normalization */
+    printf("\n--- Path Normalization ---\n");
+    test_path_normalize_dots();
+    test_path_normalize_double_slash();
+    test_path_normalize_root();
+    test_path_expand_tilde();
+    test_path_expand_tilde_no_home();
+
+    /* Group 17: Executable Script Detection */
+    printf("\n--- Executable Script Detection ---\n");
+    test_executable_script_detection();
+
+    /* Group 18: Config Path Validation */
+    printf("\n--- Config Path Validation ---\n");
+    test_config_validate_paths();
+    test_config_validate_paths_invalid();
+    test_config_validate_paths_empty();
 
     /* Summary */
     printf("\n========================================\n");

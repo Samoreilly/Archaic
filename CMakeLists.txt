@@ -29,6 +29,7 @@ add_executable(
     src/recent-files.c
     src/incremental.c
     src/watcher.c
+    src/path-utils.c
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)
@@ -129,6 +130,7 @@ add_executable(
     src/recent-files.c
     src/incremental.c
     src/watcher.c
+    src/path-utils.c
     ipc/server.c
     ipc/client.c
 )

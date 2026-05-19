@@ -229,6 +229,31 @@ bool is_hidden_path(const char* path) {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
+ * Feature 26: Executable script detection — boost scripts with shebangs
+ * and common executable extensions
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+bool is_executable_script(const char* path) {
+    const char* basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+
+    static const char* const exec_exts[] = {".sh",  ".bash", ".zsh", ".fish", ".py",
+                                             ".rb",  ".pl",   ".js",  ".ts",   ".rs",
+                                             ".go",  ".java", ".lua", ".vim",  NULL};
+    for (int i = 0; exec_exts[i]; i++) {
+        size_t elen = strlen(exec_exts[i]);
+        size_t nlen = strlen(basename);
+        if (nlen >= elen && strcmp(basename + nlen - elen, exec_exts[i]) == 0)
+            return true;
+    }
+
+    if (basename[0] == '.' && strstr(basename, "rc") != NULL)
+        return true;
+
+    return false;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
  * Feature 24: Session-based learning
  * ──────────────────────────────────────────────────────────────────────────── */
 
@@ -816,6 +841,11 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
     /* Feature 22: File extension relevance — boost by 20% for project-relevant extensions */
     if (is_relevant_extension(path, cwd)) {
         score *= 1.20;
+    }
+
+    /* Feature 26: Executable script boost */
+    if (!is_dir && is_executable_script(path)) {
+        score *= 1.10;
     }
 
     /* Feature 24: Session-based learning boost */

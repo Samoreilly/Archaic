@@ -29,6 +29,7 @@
 static volatile int running = 1;
 static volatile int sighup_received = 0;
 static volatile int sigterm_received = 0;
+static volatile int sigusr1_received = 0;
 static volatile int sigusr2_received = 0;
 static char pid_file_path[4096] = {0};
 
@@ -77,6 +78,11 @@ static void handle_term(int sig) {
 static void handle_sighup(int sig) {
     (void) sig;
     sighup_received = 1;
+}
+
+static void handle_sigusr1(int sig) {
+    (void) sig;
+    sigusr1_received = 1;
 }
 
 static void handle_sigusr2(int sig) {
@@ -161,6 +167,12 @@ int main(int argc, char* argv[]) {
             memset(&sa_usr2, 0, sizeof(sa_usr2));
             sa_usr2.sa_handler = handle_sigusr2;
             sigaction(SIGUSR2, &sa_usr2, NULL);
+        }
+        {
+            struct sigaction sa_usr1;
+            memset(&sa_usr1, 0, sizeof(sa_usr1));
+            sa_usr1.sa_handler = handle_sigusr1;
+            sigaction(SIGUSR1, &sa_usr1, NULL);
         }
 
         log_init((log_level) cfg.daemon.log_level, stderr);
@@ -261,6 +273,13 @@ int main(int argc, char* argv[]) {
                 daemon_save_state(daemon, state_path);
                 LOG_INFO("main", "state saved to %s", state_path);
             }
+            if (sigusr1_received) {
+                sigusr1_received = 0;
+                LOG_INFO("main", "SIGUSR1 received, saving state and continuing...");
+                char state_path[4096];
+                snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
+                daemon_save_state(daemon, state_path);
+            }
             sleep(1);
         }
 
@@ -275,6 +294,11 @@ int main(int argc, char* argv[]) {
 
         if (sigterm_received) {
             LOG_INFO("main", "signal-safe shutdown: saving state before exit...");
+            char state_path[4096];
+            snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
+            daemon_save_state(daemon, state_path);
+        } else {
+            LOG_INFO("main", "saving state before exit...");
             char state_path[4096];
             snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
             daemon_save_state(daemon, state_path);

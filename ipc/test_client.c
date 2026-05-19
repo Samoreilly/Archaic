@@ -264,6 +264,9 @@ int main(int argc, char* argv[]) {
             printf("  Recent files: %u\n", resp.recent_count);
             printf("  Uptime: %lus\n", (unsigned long) resp.uptime_seconds);
             printf("  Est. memory: %lu bytes\n", (unsigned long) resp.estimated_memory_bytes);
+            printf("  PID: %d\n", resp.daemon_pid);
+            printf("  Socket: %s\n", resp.socket_path);
+            printf("  Active connections: %d\n", resp.active_connections);
         } else {
             fprintf(stderr, "Failed to get health info\n");
         }

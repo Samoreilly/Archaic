@@ -188,6 +188,9 @@ typedef struct {
     uint32_t recent_count;
     uint64_t uptime_seconds;
     uint64_t estimated_memory_bytes;
+    int32_t daemon_pid;
+    char socket_path[4096];
+    int32_t active_connections;
 } __attribute__((packed)) ipc_health_resp;
 
 typedef struct {

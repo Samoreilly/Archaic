@@ -82,9 +82,10 @@ struct ipc_server {
     int listen_fd;
     pthread_t worker;
     int running;
-    char sock_path[256];
+    char sock_path[4096];
     threadpool* pool;
     struct timespec start_time;
+    atomic_int active_connections;
 };
 
 typedef struct {
@@ -651,6 +652,9 @@ static void handle_client(ipc_server* srv, int fd) {
             clock_gettime(CLOCK_MONOTONIC, &now);
             resp.uptime_seconds = (uint64_t) (now.tv_sec - srv->daemon->start_time.tv_sec);
             resp.estimated_memory_bytes = atomic_load(&srv->daemon->store->estimated_memory_bytes);
+            resp.daemon_pid = (int32_t) getpid();
+            resp.active_connections = atomic_load(&srv->active_connections);
+            strncpy(resp.socket_path, srv->sock_path, sizeof(resp.socket_path) - 1);
 
             cache_stats cs = cache_get_stats(srv->daemon->cache);
             resp.cache_entries = (int32_t) cs.entries;
@@ -732,7 +736,9 @@ static void handle_client(ipc_server* srv, int fd) {
 
 static void handle_client_threaded(void* arg) {
     client_ctx* ctx = (client_ctx*) arg;
+    atomic_fetch_add(&ctx->srv->active_connections, 1);
     handle_client(ctx->srv, ctx->fd);
+    atomic_fetch_sub(&ctx->srv->active_connections, 1);
     free(ctx);
 }
 
@@ -763,6 +769,7 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
     srv->daemon = daemon;
     srv->running = 1;
     strncpy(srv->sock_path, sock_path, sizeof(srv->sock_path) - 1);
+    atomic_store(&srv->active_connections, 0);
 
     int pool_size;
     {

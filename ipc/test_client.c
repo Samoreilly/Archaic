@@ -267,6 +267,14 @@ int main(int argc, char* argv[]) {
             printf("  PID: %d\n", resp.daemon_pid);
             printf("  Socket: %s\n", resp.socket_path);
             printf("  Active connections: %d\n", resp.active_connections);
+            if (resp.scanning_progress_pct > 0)
+                printf("  Scan progress: %d%%\n", resp.scanning_progress_pct);
+            if (resp.scan_root_count > 0) {
+                printf("  Scan roots (%d):\n", resp.scan_root_count);
+                for (int i = 0; i < resp.scan_root_count && i < 10; i++) {
+                    printf("    [%d] %s\n", i, resp.scan_roots[i]);
+                }
+            }
         } else {
             fprintf(stderr, "Failed to get health info\n");
         }

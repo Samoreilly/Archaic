@@ -656,6 +656,18 @@ static void handle_client(ipc_server* srv, int fd) {
             resp.active_connections = atomic_load(&srv->active_connections);
             strncpy(resp.socket_path, srv->sock_path, sizeof(resp.socket_path) - 1);
 
+            resp.scanning_progress_pct = 0;
+            if (atomic_load(&srv->daemon->scanning)) {
+                int dirs = atomic_load(&srv->daemon->scanner.dirs_scanned);
+                resp.scanning_progress_pct = dirs > 0 ? (dirs < 100 ? dirs : 100) : 0;
+            }
+
+            resp.scan_root_count = srv->daemon->last_scan_path_count;
+            for (int i = 0; i < resp.scan_root_count && i < 10; i++) {
+                strncpy(resp.scan_roots[i], srv->daemon->last_scan_paths[i],
+                        sizeof(resp.scan_roots[i]) - 1);
+            }
+
             cache_stats cs = cache_get_stats(srv->daemon->cache);
             resp.cache_entries = (int32_t) cs.entries;
 

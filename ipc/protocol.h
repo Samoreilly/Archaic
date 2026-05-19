@@ -191,6 +191,9 @@ typedef struct {
     int32_t daemon_pid;
     char socket_path[4096];
     int32_t active_connections;
+    int32_t scanning_progress_pct;
+    char scan_roots[10][4096];
+    int32_t scan_root_count;
 } __attribute__((packed)) ipc_health_resp;
 
 typedef struct {

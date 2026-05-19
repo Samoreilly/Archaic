@@ -1242,3 +1242,22 @@ void daemon_prefetch_common_prefixes(daemon_state* state) {
             daemon_release_scored(state, sr);
     }
 }
+
+void daemon_log_query(daemon_state* state, const char* prefix, const char* cwd, size_t result_count) {
+    if (!state || !prefix)
+        return;
+
+    FILE* f = fopen("/tmp/archaic-query.log", "a");
+    if (!f)
+        return;
+
+    time_t now = time(NULL);
+    struct tm tm_buf;
+    localtime_r(&now, &tm_buf);
+    char time_buf[64];
+    strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+
+    fprintf(f, "[%s] prefix=\"%s\" cwd=\"%s\" results=%zu\n",
+            time_buf, prefix, cwd ? cwd : "", result_count);
+    fclose(f);
+}

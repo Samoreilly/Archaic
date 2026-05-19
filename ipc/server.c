@@ -273,6 +273,8 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         daemon_release_scored(srv->daemon, sr);
     }
 
+    daemon_log_query(srv->daemon, req->prefix, req->cwd, resp.count);
+
     ipc_write_header(&hdr, IPC_MSG_COMPLETIONS, sizeof(resp), req_id);
     write_exact(fd, &hdr, sizeof(hdr));
     write_exact(fd, &resp, sizeof(resp));

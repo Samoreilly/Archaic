@@ -91,3 +91,5 @@ int daemon_import_frequencies(daemon_state* state, const char* path);
 int daemon_export_json(daemon_state* state, const char* path);
 
 void daemon_prefetch_common_prefixes(daemon_state* state);
+
+void daemon_log_query(daemon_state* state, const char* prefix, const char* cwd, size_t result_count);

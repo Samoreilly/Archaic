@@ -275,6 +275,7 @@ int main(int argc, char* argv[]) {
                     printf("    [%d] %s\n", i, resp.scan_roots[i]);
                 }
             }
+            printf("  Protocol version: %d\n", resp.protocol_version);
         } else {
             fprintf(stderr, "Failed to get health info\n");
         }

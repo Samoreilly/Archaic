@@ -667,6 +667,7 @@ static void handle_client(ipc_server* srv, int fd) {
                 strncpy(resp.scan_roots[i], srv->daemon->last_scan_paths[i],
                         sizeof(resp.scan_roots[i]) - 1);
             }
+            resp.protocol_version = IPC_PROTOCOL_VERSION;
 
             cache_stats cs = cache_get_stats(srv->daemon->cache);
             resp.cache_entries = (int32_t) cs.entries;

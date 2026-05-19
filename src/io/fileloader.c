@@ -1249,11 +1249,20 @@ void daemon_log_query(daemon_state* state, const char* prefix, const char* cwd, 
     if (!state || !prefix)
         return;
 
+    static char last_prefix[4096] = {0};
+    static time_t last_log_time = 0;
+    time_t now = time(NULL);
+
+    if (strcmp(prefix, last_prefix) == 0 && (now - last_log_time) < 5)
+        return;
+
+    strncpy(last_prefix, prefix, sizeof(last_prefix) - 1);
+    last_log_time = now;
+
     FILE* f = fopen("/tmp/archaic-query.log", "a");
     if (!f)
         return;
 
-    time_t now = time(NULL);
     struct tm tm_buf;
     localtime_r(&now, &tm_buf);
     char time_buf[64];

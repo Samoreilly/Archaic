@@ -194,6 +194,7 @@ typedef struct {
     int32_t scanning_progress_pct;
     char scan_roots[10][4096];
     int32_t scan_root_count;
+    int32_t protocol_version;
 } __attribute__((packed)) ipc_health_resp;
 
 typedef struct {

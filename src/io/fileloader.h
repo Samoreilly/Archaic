@@ -49,6 +49,7 @@ typedef struct {
     int bookmark_count;
     fs_watcher* watcher;
     atomic_bool watcher_dirty;
+    struct timespec start_time;
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);

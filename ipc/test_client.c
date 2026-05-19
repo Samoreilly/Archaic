@@ -262,6 +262,7 @@ int main(int argc, char* argv[]) {
             printf("  Rescan interval: %us\n", resp.rescan_interval);
             printf("  Bookmarks: %u\n", resp.bookmark_count);
             printf("  Recent files: %u\n", resp.recent_count);
+            printf("  Uptime: %lus\n", (unsigned long) resp.uptime_seconds);
         } else {
             fprintf(stderr, "Failed to get health info\n");
         }

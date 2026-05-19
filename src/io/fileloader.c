@@ -737,6 +737,8 @@ daemon_state* daemon_init(void) {
             LOG_INFO("daemon", "state loaded. %zu buckets restored.", state->store->right_index);
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &state->start_time);
+
     return state;
 }
 

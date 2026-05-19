@@ -44,6 +44,10 @@ typedef enum {
     IPC_MSG_SCAN_STATUS_RESP = 107,
     IPC_MSG_FUZZY_COMPLETIONS = 108,
     IPC_MSG_RECENT_RESP = 109,
+    IPC_MSG_BOOKMARKS = 110,
+    IPC_MSG_BOOKMARKS_RESP = 111,
+    IPC_MSG_HEALTH = 112,
+    IPC_MSG_HEALTH_RESP = 113,
 } ipc_msg_type;
 
 /*
@@ -154,6 +158,31 @@ typedef struct {
     char paths[50][4096];
     uint32_t is_dirs[50];
 } __attribute__((packed)) ipc_recent_resp;
+
+typedef struct {
+    uint32_t limit;
+} __attribute__((packed)) ipc_bookmarks_req;
+
+typedef struct {
+    uint32_t count;
+    char paths[50][4096];
+} __attribute__((packed)) ipc_bookmarks_resp;
+
+typedef struct {
+    int32_t daemon_running;
+    int32_t scanning;
+    int32_t watcher_active;
+    int32_t cache_entries;
+    uint64_t buckets_indexed;
+    uint64_t files_scanned;
+    uint64_t dirs_scanned;
+    uint64_t queries_total;
+    uint64_t cache_hits;
+    uint64_t cache_misses;
+    uint32_t rescan_interval;
+    uint32_t bookmark_count;
+    uint32_t recent_count;
+} __attribute__((packed)) ipc_health_resp;
 
 /*
     Serialization helpers

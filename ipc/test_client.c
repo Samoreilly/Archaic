@@ -230,6 +230,41 @@ int main(int argc, char* argv[]) {
         } else {
             fprintf(stderr, "Reindex failed\n");
         }
+    } else if (strcmp(argv[1], "bookmarks") == 0) {
+        uint32_t limit = (argc > 2) ? (uint32_t) atoi(argv[2]) : 50;
+        ipc_bookmarks_resp resp;
+        memset(&resp, 0, sizeof(resp));
+        rc = ipc_client_bookmarks(client, limit, &resp);
+        if (rc == 0) {
+            printf("Bookmarks (%u):\n", resp.count);
+            for (uint32_t i = 0; i < resp.count; i++) {
+                printf("  %s\n", resp.paths[i]);
+            }
+        } else {
+            fprintf(stderr, "Failed to get bookmarks\n");
+        }
+    } else if (strcmp(argv[1], "health") == 0) {
+        ipc_health_resp resp;
+        memset(&resp, 0, sizeof(resp));
+        rc = ipc_client_health(client, &resp);
+        if (rc == 0) {
+            printf("Daemon Health:\n");
+            printf("  Running: %s\n", resp.daemon_running ? "yes" : "no");
+            printf("  Scanning: %s\n", resp.scanning ? "yes" : "no");
+            printf("  Watcher: %s\n", resp.watcher_active ? "active" : "inactive");
+            printf("  Cache entries: %d\n", resp.cache_entries);
+            printf("  Buckets indexed: %lu\n", (unsigned long) resp.buckets_indexed);
+            printf("  Files scanned: %lu\n", (unsigned long) resp.files_scanned);
+            printf("  Dirs scanned: %lu\n", (unsigned long) resp.dirs_scanned);
+            printf("  Queries total: %lu\n", (unsigned long) resp.queries_total);
+            printf("  Cache hits: %lu\n", (unsigned long) resp.cache_hits);
+            printf("  Cache misses: %lu\n", (unsigned long) resp.cache_misses);
+            printf("  Rescan interval: %us\n", resp.rescan_interval);
+            printf("  Bookmarks: %u\n", resp.bookmark_count);
+            printf("  Recent files: %u\n", resp.recent_count);
+        } else {
+            fprintf(stderr, "Failed to get health info\n");
+        }
     } else {
         fprintf(stderr, "Unknown command: %s\n", argv[1]);
         rc = 1;

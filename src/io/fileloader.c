@@ -532,6 +532,82 @@ int daemon_import_frequencies(daemon_state* state, const char* path) {
     return imported;
 }
 
+typedef struct {
+    FILE* f;
+    int first;
+} json_ctx;
+
+static void collect_json_dfs(RadixNode* node, char* buf, size_t pos, json_ctx* ctx) {
+    if (!node)
+        return;
+    if (pos + node->key_len >= 4095)
+        return;
+
+    memcpy(buf + pos, node->key, node->key_len);
+    pos += node->key_len;
+    buf[pos] = '\0';
+
+    if (node->is_leaf && node->freq > 0) {
+        if (!ctx->first)
+            fprintf(ctx->f, ",\n");
+        ctx->first = 0;
+        fprintf(ctx->f, "    {\"path\": \"");
+        for (size_t i = 0; i < pos; i++) {
+            if (buf[i] == '"')
+                fprintf(ctx->f, "\\\"");
+            else if (buf[i] == '\\')
+                fprintf(ctx->f, "\\\\");
+            else
+                fputc(buf[i], ctx->f);
+        }
+        fprintf(ctx->f, "\", \"freq\": %llu, \"last_access\": %llu, \"is_dir\": %s}",
+                (unsigned long long) node->freq, (unsigned long long) node->last_access,
+                node->is_dir ? "true" : "false");
+    }
+
+    for (uint8_t i = 0; i < node->child_count; i++)
+        collect_json_dfs(node->children[i].node, buf, pos, ctx);
+}
+
+int daemon_export_json(daemon_state* state, const char* path) {
+    if (!state || !state->store || !path)
+        return -1;
+
+    FILE* f = fopen(path, "w");
+    if (!f)
+        return -1;
+
+    fprintf(f, "{\n  \"version\": 2,\n  \"entries\": [\n");
+
+    json_ctx ctx = {.f = f, .first = 1};
+    char buffer[4096];
+
+    store_lock(state->store);
+    size_t bucket_count = state->store->right_index;
+
+    for (size_t b = 0; b < bucket_count; b++) {
+        t_bucket* bucket = state->store->buckets[b];
+        if (!bucket || !bucket->dir_trie)
+            continue;
+
+        trie_lock(bucket);
+        if (bucket->dir_name) {
+            size_t dn_len = strlen(bucket->dir_name);
+            if (dn_len < 4096) {
+                memcpy(buffer, bucket->dir_name, dn_len);
+                buffer[dn_len] = '\0';
+                collect_json_dfs(bucket->dir_trie, buffer, dn_len, &ctx);
+            }
+        }
+        trie_unlock(bucket);
+    }
+
+    store_unlock(state->store);
+    fprintf(f, "\n  ]\n}\n");
+    fclose(f);
+    return 0;
+}
+
 path_validation process_input(t_bucket_store* store, const char* cwd, const char* input) {
     path_validation validation = validate_input_path(cwd, input);
 

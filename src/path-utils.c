@@ -141,3 +141,42 @@ size_t path_expand_dash(char* dst, const char* oldpwd, size_t dst_size) {
     dst[len] = '\0';
     return len;
 }
+
+size_t path_expand_abbrev(char* dst, const char* src, size_t dst_size) {
+    if (!src || !dst || dst_size == 0) {
+        if (dst && dst_size > 0)
+            dst[0] = '\0';
+        return 0;
+    }
+
+    if (src[0] == '~') {
+        return path_expand_tilde(dst, src, dst_size);
+    }
+
+    if (src[0] == '-' && (src[1] == '/' || src[1] == '\0')) {
+        const char* oldpwd = getenv("OLDPWD");
+        if (oldpwd && oldpwd[0]) {
+            if (src[1] == '/') {
+                size_t olen = strlen(oldpwd);
+                size_t rest_len = strlen(src + 1);
+                size_t total = olen + rest_len;
+                if (total >= dst_size)
+                    total = dst_size - 1;
+                size_t copy_old = olen < total ? olen : total;
+                memcpy(dst, oldpwd, copy_old);
+                size_t copy_rest = total - copy_old;
+                memcpy(dst + copy_old, src + 1, copy_rest);
+                dst[copy_old + copy_rest] = '\0';
+                return copy_old + copy_rest;
+            }
+            return path_expand_dash(dst, oldpwd, dst_size);
+        }
+    }
+
+    size_t len = strlen(src);
+    if (len >= dst_size)
+        len = dst_size - 1;
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+    return len;
+}

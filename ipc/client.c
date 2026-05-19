@@ -250,6 +250,34 @@ int ipc_client_fuzzy(ipc_client* client, const char* query, uint32_t limit,
     return 0;
 }
 
+int ipc_client_bookmarks(ipc_client* client, uint32_t limit, ipc_bookmarks_resp* out) {
+    ipc_bookmarks_req req;
+    memset(&req, 0, sizeof(req));
+    req.limit = limit;
+
+    if (send_request(client, IPC_MSG_BOOKMARKS, &req, sizeof(req)) < 0)
+        return -1;
+
+    ipc_header hdr;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_BOOKMARKS_RESP)
+        return -1;
+    return 0;
+}
+
+int ipc_client_health(ipc_client* client, ipc_health_resp* out) {
+    if (send_request(client, IPC_MSG_HEALTH, NULL, 0) < 0)
+        return -1;
+
+    ipc_header hdr;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_HEALTH_RESP)
+        return -1;
+    return 0;
+}
+
 #include "../src/config.h"
 
 ipc_client* ipc_client_connect_default(void) {

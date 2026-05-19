@@ -88,3 +88,4 @@ int daemon_start_ipc(daemon_state* state, const char* sock_path);
 
 int daemon_export_frequencies(daemon_state* state, const char* path);
 int daemon_import_frequencies(daemon_state* state, const char* path);
+int daemon_export_json(daemon_state* state, const char* path);

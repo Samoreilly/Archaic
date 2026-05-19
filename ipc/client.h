@@ -62,4 +62,8 @@ int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out);
 int ipc_client_fuzzy(ipc_client* client, const char* query, uint32_t limit,
                      ipc_completions_resp* out);
 
+int ipc_client_bookmarks(ipc_client* client, uint32_t limit, ipc_bookmarks_resp* out);
+
+int ipc_client_health(ipc_client* client, ipc_health_resp* out);
+
 ipc_client* ipc_client_connect_default(void);

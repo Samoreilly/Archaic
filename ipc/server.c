@@ -1,6 +1,7 @@
 #include "server.h"
 #include "../src/io/fileloader.h"
 #include "../src/metrics.h"
+#include "../src/path-utils.h"
 #include "../src/threadpool.h"
 #include "../src/trie.h"
 #include <errno.h>
@@ -176,12 +177,16 @@ static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_que
         send_error(fd, req_id, -6, "invalid input: not null-terminated");
         return;
     }
-    if (strstr(req->cwd, "..") != NULL || strstr(req->input, "..") != NULL) {
+
+    char expanded_input[4096];
+    path_expand_abbrev(expanded_input, req->input, sizeof(expanded_input));
+
+    if (strstr(req->cwd, "..") != NULL || strstr(expanded_input, "..") != NULL) {
         send_error(fd, req_id, -8, "path traversal not allowed");
         return;
     }
 
-    path_validation v = daemon_process_query(srv->daemon, req->cwd, req->input);
+    path_validation v = daemon_process_query(srv->daemon, req->cwd, expanded_input);
 
     ipc_header hdr;
     ipc_validation_resp resp;
@@ -209,14 +214,18 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
         return;
     }
-    if (strstr(req->prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
+
+    char expanded_prefix[4096];
+    path_expand_abbrev(expanded_prefix, req->prefix, sizeof(expanded_prefix));
+
+    if (strstr(expanded_prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
         send_error(fd, req_id, -8, "path traversal not allowed");
         return;
     }
 
     uint64_t now = (uint64_t) time(NULL);
     scored_result sr =
-        daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now, req->cwd);
+        daemon_get_scored_completions(srv->daemon, expanded_prefix, req->limit, now, req->cwd);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -278,13 +287,17 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
         send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
         return;
     }
-    if (strstr(req->prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
+
+    char expanded_prefix[4096];
+    path_expand_abbrev(expanded_prefix, req->prefix, sizeof(expanded_prefix));
+
+    if (strstr(expanded_prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
         send_error(fd, req_id, -8, "path traversal not allowed");
         return;
     }
 
     uint64_t now = (uint64_t) time(NULL);
-    scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now, req->cwd);
+    scored_result sr = daemon_get_scored_completions(srv->daemon, expanded_prefix, 1, now, req->cwd);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -590,6 +603,58 @@ static void handle_client(ipc_server* srv, int fd) {
                 break;
             }
             handle_recent(srv, fd, hdr.request_id, &req);
+            break;
+        }
+        case IPC_MSG_BOOKMARKS: {
+            ipc_bookmarks_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid bookmarks payload");
+                break;
+            }
+            ipc_header resp_hdr;
+            ipc_bookmarks_resp resp;
+            resp.count = 0;
+            memset(resp.paths, 0, sizeof(resp.paths));
+
+            uint32_t n = srv->daemon->bookmark_count < 50 ? srv->daemon->bookmark_count : 50;
+            uint32_t limit = req.limit > 0 && req.limit < 50 ? req.limit : 50;
+            for (uint32_t i = 0; i < n && resp.count < limit; i++) {
+                if (srv->daemon->bookmarks[i][0] != '\0') {
+                    strncpy(resp.paths[resp.count], srv->daemon->bookmarks[i],
+                            sizeof(resp.paths[resp.count]) - 1);
+                    resp.count++;
+                }
+            }
+
+            ipc_write_header(&resp_hdr, IPC_MSG_BOOKMARKS_RESP, sizeof(resp), hdr.request_id);
+            write_exact(fd, &resp_hdr, sizeof(resp_hdr));
+            write_exact(fd, &resp, sizeof(resp));
+            break;
+        }
+        case IPC_MSG_HEALTH: {
+            ipc_health_resp resp;
+            memset(&resp, 0, sizeof(resp));
+            resp.daemon_running = 1;
+            resp.scanning = atomic_load(&srv->daemon->scanning) ? 1 : 0;
+            resp.watcher_active = (srv->daemon->watcher != NULL) ? 1 : 0;
+            resp.buckets_indexed = srv->daemon->store ? srv->daemon->store->right_index : 0;
+            resp.queries_total = srv->daemon->metrics.queries_total;
+            resp.cache_hits = srv->daemon->metrics.cache_hits;
+            resp.cache_misses = srv->daemon->metrics.cache_misses;
+            resp.rescan_interval = (uint32_t) srv->daemon->rescan_interval_seconds;
+            resp.bookmark_count = (uint32_t) srv->daemon->bookmark_count;
+            resp.recent_count = (uint32_t) srv->daemon->recent.count;
+
+            cache_stats cs = cache_get_stats(srv->daemon->cache);
+            resp.cache_entries = (int32_t) cs.entries;
+
+            resp.files_scanned = (uint64_t) atomic_load(&srv->daemon->scanner.files_scanned);
+            resp.dirs_scanned = (uint64_t) atomic_load(&srv->daemon->scanner.dirs_scanned);
+
+            ipc_header resp_hdr;
+            ipc_write_header(&resp_hdr, IPC_MSG_HEALTH_RESP, sizeof(resp), hdr.request_id);
+            write_exact(fd, &resp_hdr, sizeof(resp_hdr));
+            write_exact(fd, &resp, sizeof(resp));
             break;
         }
         default:

@@ -263,6 +263,7 @@ int main(int argc, char* argv[]) {
             printf("  Bookmarks: %u\n", resp.bookmark_count);
             printf("  Recent files: %u\n", resp.recent_count);
             printf("  Uptime: %lus\n", (unsigned long) resp.uptime_seconds);
+            printf("  Est. memory: %lu bytes\n", (unsigned long) resp.estimated_memory_bytes);
         } else {
             fprintf(stderr, "Failed to get health info\n");
         }

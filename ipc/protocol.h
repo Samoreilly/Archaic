@@ -185,6 +185,7 @@ typedef struct {
     uint32_t bookmark_count;
     uint32_t recent_count;
     uint64_t uptime_seconds;
+    uint64_t estimated_memory_bytes;
 } __attribute__((packed)) ipc_health_resp;
 
 /*

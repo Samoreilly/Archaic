@@ -650,6 +650,7 @@ static void handle_client(ipc_server* srv, int fd) {
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
             resp.uptime_seconds = (uint64_t) (now.tv_sec - srv->daemon->start_time.tv_sec);
+            resp.estimated_memory_bytes = atomic_load(&srv->daemon->store->estimated_memory_bytes);
 
             cache_stats cs = cache_get_stats(srv->daemon->cache);
             resp.cache_entries = (int32_t) cs.entries;

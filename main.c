@@ -237,6 +237,8 @@ int main(int argc, char* argv[]) {
         }
 
         sd_notify(0, "READY=1");
+        daemon_prefetch_common_prefixes(daemon);
+
         pthread_t watchdog_thread;
         pthread_create(&watchdog_thread, NULL, watchdog_thread_func, daemon);
 

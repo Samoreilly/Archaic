@@ -1219,3 +1219,26 @@ int daemon_start_ipc(daemon_state* state, const char* sock_path) {
     state->ipc = ipc_server_start(state, sock_path);
     return state->ipc ? 0 : -1;
 }
+
+void daemon_prefetch_common_prefixes(daemon_state* state) {
+    if (!state || !state->cache)
+        return;
+
+    static const char* const prefixes[] = {
+        "/", "/h", "/ho", "/hom", "/home",
+        "/u", "/us", "/usr", "/usr/", "/usr/b", "/usr/bi", "/usr/bin",
+        "/e", "/et", "/etc", "/etc/",
+        "/t", "/tm", "/tmp", "/tmp/",
+        "/v", "/va", "/var", "/var/",
+        "/d", "/de", "/dev", "/dev/",
+        "/o", "/op", "/opt", "/opt/",
+        NULL
+    };
+
+    uint64_t now = (uint64_t) time(NULL);
+    for (int i = 0; prefixes[i]; i++) {
+        scored_result sr = daemon_get_scored_completions(state, prefixes[i], 10, now, "/");
+        if (sr.data)
+            daemon_release_scored(state, sr);
+    }
+}

@@ -59,7 +59,7 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
             continue;
         }
 
-        starts[comp_count] = (size_t)(start - src);
+        starts[comp_count] = (size_t) (start - src);
         lens[comp_count] = len;
         comp_count++;
     }

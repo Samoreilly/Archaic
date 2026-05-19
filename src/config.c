@@ -679,7 +679,7 @@ int config_validate_paths(archaic_config* cfg) {
     for (int i = 0; i < cfg->daemon.scan_path_count; i++) {
         if (stat(cfg->daemon.scan_paths[i], &st) != 0 || !S_ISDIR(st.st_mode)) {
             fprintf(stderr, "archaic: scan_paths[%d] not found or not a directory: %s\n", i,
-                     cfg->daemon.scan_paths[i]);
+                    cfg->daemon.scan_paths[i]);
             errors++;
         }
     }

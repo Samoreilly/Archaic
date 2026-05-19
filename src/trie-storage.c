@@ -358,8 +358,8 @@ void store_enforce_budget(t_bucket_store* store) {
     if (total <= store->max_total_nodes)
         return;
 
-    LOG_WARN("store", "node budget exceeded (%zu > %zu), evicting low-frequency entries",
-             total, store->max_total_nodes);
+    LOG_WARN("store", "node budget exceeded (%zu > %zu), evicting low-frequency entries", total,
+             store->max_total_nodes);
 
     store_lock(store);
     for (size_t b = 0; b < store->right_index; b++) {

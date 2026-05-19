@@ -237,9 +237,9 @@ bool is_executable_script(const char* path) {
     const char* basename = strrchr(path, '/');
     basename = basename ? basename + 1 : path;
 
-    static const char* const exec_exts[] = {".sh",  ".bash", ".zsh", ".fish", ".py",
-                                             ".rb",  ".pl",   ".js",  ".ts",   ".rs",
-                                             ".go",  ".java", ".lua", ".vim",  NULL};
+    static const char* const exec_exts[] = {".sh", ".bash", ".zsh", ".fish", ".py",
+                                            ".rb", ".pl",   ".js",  ".ts",   ".rs",
+                                            ".go", ".java", ".lua", ".vim",  NULL};
     for (int i = 0; exec_exts[i]; i++) {
         size_t elen = strlen(exec_exts[i]);
         size_t nlen = strlen(basename);

@@ -22,10 +22,11 @@ typedef struct t_bucket {
 } t_bucket;
 
 typedef struct t_bucket_store {
-    t_bucket** buckets;
-    size_t capacity;
+    t_bucket* buckets[BUCKETS];
+    t_bucket* lru;
     size_t right_index;
     size_t max_total_nodes;
+
     pthread_mutex_t store_lock;
 
     /* Safety limits */

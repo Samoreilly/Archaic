@@ -29,12 +29,12 @@
 #include "../src/config.h"
 #include "../src/hashset.h"
 #include "../src/incremental.h"
+#include "../src/path-utils.h"
+#include "../src/scanner.h"
+#include "../src/threadmanager.h"
 #include "../src/trie-storage.h"
 #include "../src/trie.h"
 #include "../src/watcher.h"
-#include "../src/path-utils.h"
-#include "../src/threadmanager.h"
-#include "../src/scanner.h"
 
 /* ── Test infrastructure ─────────────────────────────────────────────── */
 
@@ -1483,7 +1483,8 @@ static void test_config_validate_paths_invalid(void) {
     TEST(config_validate_paths_invalid);
     archaic_config cfg;
     config_init_defaults(&cfg);
-    strncpy(cfg.daemon.scan_path, "/nonexistent_archaic_test_path", sizeof(cfg.daemon.scan_path) - 1);
+    strncpy(cfg.daemon.scan_path, "/nonexistent_archaic_test_path",
+            sizeof(cfg.daemon.scan_path) - 1);
     cfg.daemon.scan_path_count = 0;
     int errors = config_validate_paths(&cfg);
     ASSERT_TRUE(errors > 0, "nonexistent path should report errors");

@@ -300,7 +300,8 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
     }
 
     uint64_t now = (uint64_t) time(NULL);
-    scored_result sr = daemon_get_scored_completions(srv->daemon, expanded_prefix, 1, now, req->cwd);
+    scored_result sr =
+        daemon_get_scored_completions(srv->daemon, expanded_prefix, 1, now, req->cwd);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;

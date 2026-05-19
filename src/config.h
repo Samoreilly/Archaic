@@ -39,6 +39,7 @@ typedef struct {
     double weight_depth;
     double weight_type;
     double weight_cwd_proximity;
+    double min_score_threshold;
 } config_scoring;
 
 typedef struct {

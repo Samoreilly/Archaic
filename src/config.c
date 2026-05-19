@@ -87,6 +87,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->scoring.weight_depth = 0.15;
     cfg->scoring.weight_type = 0.10;
     cfg->scoring.weight_cwd_proximity = 0.05;
+    cfg->scoring.min_score_threshold = 0.0;
 
     cfg->fish.command_count = 0;
 
@@ -496,6 +497,7 @@ static const field_map scoring_map[] = {
     {"weight_depth", TYPE_DOUBLE, FOFFSET(scoring, weight_depth)},
     {"weight_type", TYPE_DOUBLE, FOFFSET(scoring, weight_type)},
     {"weight_cwd_proximity", TYPE_DOUBLE, FOFFSET(scoring, weight_cwd_proximity)},
+    {"min_score_threshold", TYPE_DOUBLE, FOFFSET(scoring, min_score_threshold)},
 };
 
 static const field_map fish_map[] = {

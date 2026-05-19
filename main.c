@@ -95,6 +95,8 @@ static void apply_config_reload(daemon_state* daemon) {
     config_init_defaults(&cfg);
     if (config_load_default(&cfg) == 0) {
         config_expand_vars(&cfg);
+        config_sandbox_validate(&cfg);
+        config_validate_paths(&cfg);
         LOG_INFO("main", "config reloaded from disk");
 
         /* Apply live-reloadable settings */

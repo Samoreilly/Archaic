@@ -34,7 +34,8 @@ add_executable(
 )
 
 target_link_libraries(archaic PRIVATE fmt::fmt m pthread)
-target_compile_options(archaic PRIVATE -Wall -Wpedantic -Wextra)
+target_compile_options(archaic PRIVATE -Wall -Wpedantic -Wextra
+    $<$<CONFIG:Release>:-O3 -fno-math-errno>)
 
 if(SYSTEMD_FOUND)
     target_compile_definitions(archaic PRIVATE HAVE_SYSTEMD)
@@ -71,7 +72,8 @@ add_executable(
 
 target_include_directories(archaic-bench PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(archaic-bench PRIVATE m pthread)
-target_compile_options(archaic-bench PRIVATE -Wall -Wpedantic -Wextra)
+target_compile_options(archaic-bench PRIVATE -Wall -Wpedantic -Wextra
+    $<$<CONFIG:Release>:-O3 -fno-math-errno>)
 
 # ── Install rules ─────────────────────────────────────────────────────────────
 

@@ -1,17 +1,25 @@
+```
+     _    ____   ____ _   _    _    ___  ____
+    / \  |  _ \ / ___| | | |  / \  |_ _|/ ___|
+   / _ \ | |_) | |   | |_| | / _ \  | | |    
+  / ___ \|  _ <| |___|  _  |/ ___ \ | | |___ 
+ /_/   \_\_| \_\\____|_| |_/_/   \_\___\____|
+```
+
 # Archaic
 
-**Blazing-fast, intelligent terminal autocomplete daemon for Fish and Bash.**
+**Resident path-complete daemon for Fish, Bash, and Zsh.**
 
-Archaic is a C-based autocomplete daemon that indexes your filesystem and serves
-context-aware, frequency-weighted path completions in sub-milliseconds. It runs
-as a background process, learns from your usage patterns, and integrates
-seamlessly with Fish and Bash shells.
+Archaic indexes your tree once, keeps it warm with inotify/kqueue, and answers
+tab completion over a Unix socket. Prefix collect is a radix walk. Fuzzy is a
+full-index scan with typo tolerance. Ranked by recency, depth, and name prefix —
+not by forking `find` on every Tab.
 
 ## Features
 
-- **Sub-millisecond query latency** — radix tree + binary search + LRU cache
-- **Intelligent scoring** — frequency, recency, depth, and type weighted ranking
-- **Enhanced fuzzy matching** — 5-strategy scoring: exact prefix, segment tokenization (acronym matching), path-boundary bonuses, Levenshtein typo tolerance, and full-path fallback
+- **Sub-millisecond prefix complete** — radix trie, one-level prune, SSE2 depth, bucket skip
+- **Scoring** — recency, depth, cwd, basename-prefix; dirs first on `ls`, dirs-only on `cd`
+- **Fuzzy matching** — prefix, acronym/segment, tight subsequence, Levenshtein on basename
 - **Background filesystem scanning** — multi-threaded, configurable depth
 - **Real-time filesystem watching** — inotify (Linux) / kqueue (macOS) with polling fallback
 - **Periodic auto-rescan** — stays in sync with filesystem changes
@@ -178,8 +186,10 @@ archaic-cli query <cwd> <input>   # Validate path
 archaic-cli complete <prefix> [n] # Get completions
 archaic-cli suggest <prefix>      # Get best suggestion
 archaic-cli ping                  # Check daemon health
+archaic-cli health                # Full daemon health dump
 archaic-cli metrics               # View daemon metrics
 archaic-cli scan-status           # Check scan progress
+archaic-cli fuzzy <query> [n]     # Fuzzy path search
 archaic-cli save <path>           # Save state to file
 archaic-cli shutdown              # Stop daemon
 ```
@@ -188,7 +198,9 @@ archaic-cli shutdown              # Stop daemon
 
 ```bash
 archaic-helper [socket_path]      # Start persistent helper
-# Then pipe commands: echo "complete /path 20" | archaic-helper
+# Then pipe commands:
+#   complete<TAB><dirs_only><TAB><limit><TAB><cwd><TAB><prefix>
+#   echo "complete /path 20" still works (legacy)
 ```
 
 The helper maintains a persistent connection to the daemon, eliminating the
@@ -282,12 +294,27 @@ require("telescope").load_extension("archaic")
 :Telescope archaic find_files
 ```
 
-### Behavior (Both Shells)
+### Commands that get path complete
 
-- Commands listed in `[fish].commands` or `[bash].commands` trigger completions
-- `cd` and `mkdir` filter to directories only
-- The plugin monitors daemon health and falls back gracefully if unavailable
-- Suggestions are ranked by the daemon's scoring algorithm
+Defaults include everyday file tools (`ls`, `cat`, `mv`, `rg`, `nvim`, `gcc`,
+`sudo`, …). Fish also wires path complete into:
+
+| Tool | When |
+|---|---|
+| `git` | `add`, `checkout`, `switch`, `restore`, `diff`, `rm`, `mv`, `show`, `commit`, `blame`, … |
+| `docker` / `podman` | `build`, `cp`, `run`, `save`, `load` |
+| `kubectl` | `apply`, `create`, `delete`, `replace` |
+| `cargo` / `npm` / `pnpm` / `yarn` | `run`, `build`, `test`, … |
+
+Override the list in `[fish].commands` / `[bash].commands` / `[zsh].commands`.
+Builtin flag completions are left intact (`ls -<Tab>` still works).
+
+### Behavior
+
+- `cd` / `mkdir` / `pushd` / `rmdir` → directories only
+- `ls dir/` → directories first, then files; hidden names only if you typed `.`
+- No slash (`vim trie`) falls back to fuzzy basename match
+- Daemon down → plugin stays quiet; start it with `./run.sh start`
 
 ## Performance
 
@@ -297,16 +324,12 @@ Archaic's speed comes from several layered optimizations:
   reducing memory and traversal time
 - **Binary search on sorted children** — child node lookups use `bsearch` for
   O(log n) instead of linear scan
-- **O(log n) duplicate detection** — scored completions use binary search to
-  avoid duplicates without hashing overhead
-- **LRU cache with TTL** — repeated queries hit the cache instead of traversing
-  the tree
-- **Per-bucket refcounting** — lock-free concurrent reads via atomic reference
-  counts on each hash bucket
-- **4-thread parallel scanner** — filesystem indexing runs across multiple
-  threads with work-stealing
-- **Real-time filesystem watching** — inotify/kqueue push updates instead of
-  periodic full rescans
+- **One-level DFS prune** — listing `src/` does not walk `src/foo/bar`
+- **Bucket prefix skip** — tries whose root cannot match the query are not visited
+- **SSE2** — slash-count on paths; glibc `strchr`/`memcmp` for the rest
+- **LRU query cache** — repeated prefixes skip the walk (not used for `cd`)
+- **Per-bucket refcount** — readers hold a bucket without the store lock
+- **Parallel scanner + inotify/kqueue** — index stays warm without full rescans
 
 ## Fuzzy Matching
 
@@ -318,7 +341,6 @@ Archaic uses a 5-strategy scoring system for fuzzy path matching:
 | Segment tokenization | 100-500 | `srma` → `src/main.c`, `sio` → `src/io/` |
 | Subsequence + path bonuses | 50-200 | `srcmai` → `src/main.c` |
 | Levenshtein basename | 10-49 | `maim` → `main.c` (1 edit) |
-| Levenshtein full path | 1-9 | `src/maim` → `src/main.c` |
 
 Segment tokenization breaks paths on `/`, `.`, `-`, and `_` to match
 acronyms: typing `sio` finds `src/io/`, typing `mvcm` finds `models/view_controller.cr`.

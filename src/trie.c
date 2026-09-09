@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,9 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 #include "threadmanager.h"
 
@@ -214,16 +218,11 @@ bool is_relevant_extension(const char* path, const char* scan_root) {
 bool is_hidden_path(const char* path) {
     if (!path || path[0] == '\0')
         return false;
-
     const char* p = path;
-    while (*p) {
-        if (*p == '/') {
-            p++;
-            if (*p == '.')
-                return true;
-        } else {
-            p++;
-        }
+    while ((p = strchr(p, '/')) != NULL) {
+        if (p[1] == '.')
+            return true;
+        p++;
     }
     return false;
 }
@@ -754,6 +753,7 @@ scored_completions* scored_completions_create(size_t capacity) {
     }
     sc->capacity = capacity;
     sc->count = 0;
+    sc->min_idx = 0;
     sc->cache_shard = -1;
     sc->cache_slot = 0;
     return sc;
@@ -767,11 +767,25 @@ void scored_completions_free(scored_completions* sc) {
 }
 
 static inline int path_depth(const char* path) {
+    size_t n = strlen(path);
     int d = 0;
-    for (const char* p = path; *p; p++) {
-        if (*p == '/')
+#if defined(__SSE2__)
+    size_t i = 0;
+    const __m128i slash = _mm_set1_epi8('/');
+    for (; i + 16 <= n; i += 16) {
+        __m128i v = _mm_loadu_si128((const __m128i*) (path + i));
+        d += __builtin_popcount((unsigned) _mm_movemask_epi8(_mm_cmpeq_epi8(v, slash)));
+    }
+    for (; i < n; i++) {
+        if (path[i] == '/')
             d++;
     }
+#else
+    for (size_t i = 0; i < n; i++) {
+        if (path[i] == '/')
+            d++;
+    }
+#endif
     return d;
 }
 
@@ -786,7 +800,6 @@ static inline double clampd(double val, double lo, double hi) {
 static double compute_score(const char* path, uint64_t freq, uint64_t last_access, bool is_dir,
                             uint64_t now, int max_depth, const char* cwd,
                             const char* command, const char* prefix, double hidden_file_penalty) {
-    (void) command;
     double score = 0.0;
 
     double freq_norm = (freq > 0) ? (1.0 - 1.0 / (1.0 + (double) freq)) : 0.0;
@@ -870,8 +883,15 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
             score += 0.20;
     }
 
-    if (!is_dir && is_executable_script(path))
-        score *= 1.10;
+    size_t nlen = strlen(path);
+    if (!is_dir && nlen >= 3) {
+        const char* e = path + nlen;
+        if ((e[-3] == '.' && e[-2] == 's' && e[-1] == 'h') ||
+            (e[-3] == '.' && e[-2] == 'p' && e[-1] == 'y') ||
+            (e[-3] == '.' && e[-2] == 'j' && e[-1] == 's') ||
+            (e[-3] == '.' && e[-2] == 'r' && e[-1] == 's'))
+            score *= 1.10;
+    }
 
     if (last_access > 0 && now > last_access) {
         double age_hours = (double) (now - last_access) * (1.0 / 3600.0);
@@ -934,18 +954,24 @@ static void scored_insert(scored_completions* sc, const char* path, double score
                           uint64_t last_access, bool is_dir) {
     if (sc->count < sc->capacity) {
         scored_fill(&sc->entries[sc->count], path, score, freq, last_access, is_dir);
+        if (sc->count == 0 || score < sc->entries[sc->min_idx].score)
+            sc->min_idx = sc->count;
         sc->count++;
         return;
     }
 
-    size_t min_i = 0;
+    size_t min_i = sc->min_idx;
+    if (min_i >= sc->count)
+        min_i = 0;
+    if (score <= sc->entries[min_i].score)
+        return;
+    scored_fill(&sc->entries[min_i], path, score, freq, last_access, is_dir);
+    min_i = 0;
     for (size_t i = 1; i < sc->count; i++) {
         if (sc->entries[i].score < sc->entries[min_i].score)
             min_i = i;
     }
-    if (score <= sc->entries[min_i].score)
-        return;
-    scored_fill(&sc->entries[min_i], path, score, freq, last_access, is_dir);
+    sc->min_idx = min_i;
 }
 
 typedef struct {
@@ -960,6 +986,7 @@ typedef struct {
     const char* command;
     double hidden_file_penalty;
     int dirs_only;
+    size_t prune_from;
 } scored_dfs_ctx;
 
 static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
@@ -981,6 +1008,20 @@ static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
                 scored_insert(ctx->out, full, score, node->freq, node->last_access, node->is_dir);
             }
         }
+    }
+
+    if (ctx->depth > ctx->prune_from) {
+        int prune = 0;
+        for (size_t i = ctx->prune_from; i + 1 < ctx->depth; i++) {
+            if (ctx->buffer[i] == '/') {
+                prune = 1;
+                break;
+            }
+        }
+        if (!prune && ctx->buffer[ctx->depth - 1] == '/')
+            prune = 1;
+        if (prune)
+            return;
     }
 
     for (uint8_t i = 0; i < node->child_count; i++) {
@@ -1031,6 +1072,7 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     ctx.command = command;
     ctx.hidden_file_penalty = hidden_file_penalty;
     ctx.dirs_only = dirs_only;
+    ctx.prune_from = 0;
 
     ctx.max_depth = path_depth(prefix) + 10;
 
@@ -1048,6 +1090,7 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
         if (remaining_key > 0 && remaining_key < 2048) {
             memcpy(ctx.buffer, node->key + matched_in_node, remaining_key);
             ctx.depth = remaining_key;
+            ctx.prune_from = remaining_key;
 
             if (node->is_leaf && !prefix_is_dir && !(dirs_only && !node->is_dir)) {
                 ctx.buffer[ctx.depth] = '\0';
@@ -1093,8 +1136,10 @@ static int levenshtein_distance(const char* s, int s_len, const char* t, int t_l
     if (s_len > 64 || t_len > 64)
         return max_dist + 1;
 
-    int prev[65];
-    int curr[65];
+    int row0[65];
+    int row1[65];
+    int* prev = row0;
+    int* curr = row1;
     for (int j = 0; j <= t_len; j++)
         prev[j] = j;
 
@@ -1116,7 +1161,9 @@ static int levenshtein_distance(const char* s, int s_len, const char* t, int t_l
         }
         if (row_min > max_dist)
             return max_dist + 1;
-        memcpy(prev, curr, (size_t) (t_len + 1) * sizeof(int));
+        int* tmp = prev;
+        prev = curr;
+        curr = tmp;
     }
     return prev[t_len];
 }
@@ -1261,6 +1308,7 @@ typedef struct {
     int query_len;
     uint64_t qmask;
     int acronym;
+    int min_keep;
 } fuzzy_query;
 
 static int enhanced_fuzzy_score(const char* path, int path_len, const fuzzy_query* q) {
@@ -1282,6 +1330,8 @@ static int enhanced_fuzzy_score(const char* path, int path_len, const fuzzy_quer
 
     uint64_t pmask = q->acronym ? char_mask(path) : char_mask(basename);
     if ((q->qmask & ~pmask) != 0) {
+        if (q->min_keep > 20)
+            return -1;
         int dlen = bn_len - query_len;
         if (dlen < 0)
             dlen = -dlen;
@@ -1299,7 +1349,13 @@ static int enhanced_fuzzy_score(const char* path, int path_len, const fuzzy_quer
     int first_match_pos = -1;
     int consecutive = 0;
     for (int bi = 0; bi < bn_len && qi < query_len; bi++) {
-        if (tolower((unsigned char) basename[bi]) == tolower((unsigned char) q->query[qi])) {
+        unsigned char bc = (unsigned char) basename[bi];
+        unsigned char qc = (unsigned char) q->query[qi];
+        if (bc >= 'A' && bc <= 'Z')
+            bc = (unsigned char) (bc + 32);
+        if (qc >= 'A' && qc <= 'Z')
+            qc = (unsigned char) (qc + 32);
+        if (bc == qc) {
             int bonus = path_bonus_at(basename, bi);
             if (prev_match_pos >= 0) {
                 int gap = bi - prev_match_pos - 1;
@@ -1330,6 +1386,8 @@ static int enhanced_fuzzy_score(const char* path, int path_len, const fuzzy_quer
             return seg_score + 100;
     }
 
+    if (q->min_keep > 20)
+        return -1;
     int dlen = bn_len - query_len;
     if (dlen < 0)
         dlen = -dlen;
@@ -1352,7 +1410,7 @@ static void fuzzy_recompute_min(fuzzy_entry* entries, size_t count, int* min_sco
     }
 }
 
-static void fuzzy_collect_dfs(RadixNode* node, char* buffer, size_t depth, const fuzzy_query* q,
+static void fuzzy_collect_dfs(RadixNode* node, char* buffer, size_t depth, fuzzy_query* q,
                               fuzzy_entry* entries, size_t* count, size_t capacity, int* min_score,
                               size_t* min_idx) {
     if (!node)
@@ -1360,6 +1418,7 @@ static void fuzzy_collect_dfs(RadixNode* node, char* buffer, size_t depth, const
 
     if (node->is_leaf && depth > 0) {
         buffer[depth] = '\0';
+        q->min_keep = *min_score;
         int score = enhanced_fuzzy_score(buffer, (int) depth, q);
         if (score >= 0) {
             if (*count < capacity) {
@@ -1434,6 +1493,7 @@ int trie_fuzzy_collect(Trie* root, const char* query, char** paths, bool* is_dir
     q.query_len = (int) strlen(query);
     q.qmask = char_mask(query);
     q.acronym = query_is_acronym(query, q.query_len);
+    q.min_keep = 0;
 
     size_t count = 0;
     int min_score = 0;

@@ -53,7 +53,7 @@ set -g fish_pager_color_secondary ""
 set -g fish_pager_color_progress ""
 
 # ── Default command list ──────────────────────────────────────────────────────
-set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod chown ln tar unzip gzip diff open xdg-open code cursor hx nano emacs rg fd eza exa grep find file stat wc python python3 node bun cargo go make cmake scp rsync jq more source
+set -g __archaic_commands cd ls ll la l cat vim nvim lvim hx helix kak micro nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown chgrp ln tar unzip zip gzip bzip2 xz 7z diff patch open xdg-open code cursor codium zed subl rg ag ack fd eza exa lsd tree dust tokei ncdu grep find file stat wc du realpath readlink dirname basename python python3 pytest lua ruby perl php node bun deno cargo rustc go gcc g++ clang clang++ make cmake ninja meson just scp sftp rsync rclone sshfs jq yq sqlite3 hexdump xxd strings pandoc ffmpeg ffplay mpv vlc feh zathura convert curl wget aria2c pip uv npx yarn pnpm sudo doas env nohup timeout watch xargs tee strace gdb lldb objdump readelf nm install strip man which type source docker podman kubectl terraform ansible-playbook gh git
 
 # ── Load config (socket path + command list) ─────────────────────────────────
 set -l config_file ""
@@ -236,7 +236,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     end
 
     # Commands that only accept directories
-    set -l dir_only_cmds cd mkdir pushd popd rmdir
+    set -l dir_only_cmds cd mkdir pushd popd rmdir chdir
     set -l dirs_only 0
     for dc in $dir_only_cmds
         if test "$cmd" = "$dc"
@@ -398,7 +398,16 @@ for cmd in $__archaic_commands
     complete -c $cmd -k -a "(__archaic_do_complete)"
 end
 
-complete -c git -n '__fish_seen_subcommand_from add checkout restore diff rm mv show' -k -a "(__archaic_do_complete)"
+complete -c git -n '__fish_seen_subcommand_from add checkout switch restore diff rm mv show reset commit blame log grep apply am archive mergetool clean stash' -k -a "(__archaic_do_complete)"
+complete -c docker -n '__fish_seen_subcommand_from build cp run save load import export' -k -a "(__archaic_do_complete)"
+complete -c podman -n '__fish_seen_subcommand_from build cp run save load import export' -k -a "(__archaic_do_complete)"
+complete -c kubectl -n '__fish_seen_subcommand_from apply create delete replace diff kustomize' -k -a "(__archaic_do_complete)"
+complete -c cargo -n '__fish_seen_subcommand_from run build test bench install rustc' -k -a "(__archaic_do_complete)"
+complete -c npm -n '__fish_seen_subcommand_from run test exec pack publish' -k -a "(__archaic_do_complete)"
+complete -c pnpm -n '__fish_seen_subcommand_from run test exec' -k -a "(__archaic_do_complete)"
+complete -c yarn -n '__fish_seen_subcommand_from run test' -k -a "(__archaic_do_complete)"
+complete -c terraform -n '__fish_seen_subcommand_from apply plan destroy validate fmt' -k -a "(__archaic_do_complete)"
+complete -c gh -n '__fish_seen_subcommand_from repo gist pr issue' -k -a "(__archaic_do_complete)"
 
 # ── Inline autosuggestion via fish_right_prompt ────────────────────────────────
 set -g __archaic_suggestion ""

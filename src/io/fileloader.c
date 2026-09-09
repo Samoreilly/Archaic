@@ -1101,10 +1101,20 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     }
     store_unlock(state->store);
 
+    size_t prefix_len = strlen(prefix);
     for (size_t i = 0; i < count; i++) {
         t_bucket* bucket = snapshot[i];
         if (!bucket)
             continue;
+
+        if (prefix_len > 0 && bucket->dir_name) {
+            size_t bl = strlen(bucket->dir_name);
+            size_t n = bl < prefix_len ? bl : prefix_len;
+            if (n > 0 && memcmp(bucket->dir_name, prefix, n) != 0) {
+                bucket_release(bucket);
+                continue;
+            }
+        }
 
         trie_lock(bucket);
         scored_completions_collect(bucket->dir_trie, prefix, out, now, cwd, NULL,

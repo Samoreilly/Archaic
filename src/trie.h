@@ -56,6 +56,7 @@ typedef struct {
     scored_entry* entries;
     size_t count;
     size_t capacity;
+    size_t min_idx;
     int cache_shard;
     size_t cache_slot;
 } scored_completions;

@@ -1,4 +1,4 @@
-#compdef cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod rg fd code hx grep find
+#compdef cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod rg fd code hx grep find sudo docker git
 
 # archaic.zsh - ZSH shell integration for archaic autocomplete daemon
 #
@@ -367,7 +367,7 @@ _archaic_do_complete() {
 }
 
 # ── Default command list ─────────────────────────────────────────────────────
-_archaic_commands=(cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod chown ln tar unzip gzip diff open xdg-open code cursor hx nano emacs rg fd eza exa grep find file stat wc python python3 node bun cargo go make cmake scp rsync jq more)
+_archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip)
 
 _archaic_load_commands() {
     local config_file=""

@@ -32,6 +32,7 @@ typedef struct t_bucket_store {
     /* Safety limits */
     size_t max_buckets;
     size_t max_nodes_per_bucket;
+    size_t max_memory_bytes;
     atomic_size_t total_nodes;
     atomic_size_t estimated_memory_bytes;
 
@@ -99,4 +100,7 @@ void add_char(char* str, char c, int s_index);
 
 void update_memory_estimate(t_bucket_store* store);
 void store_set_max_nodes(t_bucket_store* store, size_t max_nodes);
+void store_set_max_memory(t_bucket_store* store, size_t max_bytes);
+size_t store_calculate_memory_bytes(t_bucket_store* store);
+int store_check_memory_budget(t_bucket_store* store);
 void store_enforce_budget(t_bucket_store* store);

@@ -216,18 +216,35 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         return;
     }
 
+    char expanded_tmp[4096];
     char expanded_prefix[4096];
-    path_expand_abbrev(expanded_prefix, req->prefix, sizeof(expanded_prefix));
-
-    if (strstr(expanded_prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
-        send_error(fd, req_id, -8, "path traversal not allowed");
-        return;
+    path_expand_abbrev(expanded_tmp, req->prefix, sizeof(expanded_tmp));
+    size_t tmp_len = strlen(expanded_tmp);
+    int explicit_slash = (tmp_len > 0 && expanded_tmp[tmp_len - 1] == '/');
+    const char* keep_dot = strrchr(expanded_tmp, '/');
+    int keep_trailing_dot = (keep_dot && strcmp(keep_dot, "/.") == 0);
+    path_normalize(expanded_prefix, expanded_tmp, sizeof(expanded_prefix));
+    if (keep_trailing_dot) {
+        size_t elen = strlen(expanded_prefix);
+        if (elen + 2 < sizeof(expanded_prefix)) {
+            if (elen > 0 && expanded_prefix[elen - 1] != '/')
+                expanded_prefix[elen++] = '/';
+            expanded_prefix[elen++] = '.';
+            expanded_prefix[elen] = '\0';
+        }
     }
 
     uint64_t now = (uint64_t) time(NULL);
-    scored_result sr =
-        daemon_get_scored_completions(srv->daemon, expanded_prefix, req->limit, now, req->cwd);
-    const scored_completions* sc = sr.data;
+    uint32_t want = req->limit > 0 ? req->limit : 50;
+    if (want > 50)
+        want = 50;
+
+    scored_result sr_dirs = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now,
+                                                          req->cwd, 1);
+    scored_result sr_files = {NULL, false};
+    if (!req->dirs_only)
+        sr_files = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now, req->cwd,
+                                                 0);
 
     ipc_header hdr;
     ipc_completions_resp resp;
@@ -237,21 +254,75 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     memset(resp.freqs, 0, sizeof(resp.freqs));
     memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
 
-    if (sc) {
-        uint32_t n = sc->count < 50 ? sc->count : 50;
-        uint32_t out_idx = 0;
-        dedup_set seen;
-        dedup_init(&seen);
-        for (uint32_t i = 0; i < n && out_idx < 50; i++) {
+    const scored_completions* sources[2];
+    int nsrc = 0;
+    if (sr_dirs.data)
+        sources[nsrc++] = sr_dirs.data;
+    if (sr_files.data)
+        sources[nsrc++] = sr_files.data;
+
+    uint32_t out_idx = 0;
+    size_t prefix_len = strlen(expanded_prefix);
+    if (prefix_len > 1 && expanded_prefix[prefix_len - 1] == '/')
+        prefix_len--;
+    const char* last_comp = strrchr(expanded_prefix, '/');
+    last_comp = last_comp ? last_comp + 1 : expanded_prefix;
+    int typed_dot = (last_comp[0] == '.');
+    dedup_set seen;
+    dedup_init(&seen);
+
+    for (int s = 0; s < nsrc && out_idx < want; s++) {
+        const scored_completions* sc = sources[s];
+        uint32_t n = (uint32_t) sc->count;
+        for (uint32_t i = 0; i < n && out_idx < want; i++) {
             if (req->dirs_only && !sc->entries[i].is_dir)
+                continue;
+            if (!req->dirs_only && s == 1 && sc->entries[i].is_dir)
                 continue;
 
             const char* p = sc->entries[i].path;
-            size_t plen = strlen(p);
+            if (!typed_dot && is_hidden_path(p))
+                continue;
+            size_t path_len = strlen(p);
+            size_t effective_path_len = path_len;
+            if (effective_path_len > 1 && p[effective_path_len - 1] == '/')
+                effective_path_len--;
+
+            if (prefix_len > 0) {
+                if (effective_path_len <= prefix_len)
+                    continue;
+                if (strncmp(p, expanded_prefix, prefix_len) != 0)
+                    continue;
+                if (p[prefix_len] == '/') {
+                    if (memchr(p + prefix_len + 1, '/', effective_path_len - prefix_len - 1) != NULL)
+                        continue;
+                } else if (explicit_slash) {
+                    continue;
+                } else if (memchr(p + prefix_len, '/', effective_path_len - prefix_len) != NULL) {
+                    continue;
+                }
+            }
+
+            if (req->cwd[0] != '\0') {
+                size_t cwd_len = strlen(req->cwd);
+                int match = 0;
+                if (effective_path_len == cwd_len && strncmp(p, req->cwd, cwd_len) == 0)
+                    match = 1;
+                else if (path_len == cwd_len + 1 && p[cwd_len] == '/' &&
+                         strncmp(p, req->cwd, cwd_len) == 0)
+                    match = 1;
+                else if (cwd_len == effective_path_len + 1 &&
+                         req->cwd[effective_path_len] == '/' &&
+                         strncmp(p, req->cwd, effective_path_len) == 0)
+                    match = 1;
+                if (match)
+                    continue;
+            }
+
             char clean[4096];
-            if (plen > 0 && p[plen - 1] == '/') {
-                memcpy(clean, p, plen - 1);
-                clean[plen - 1] = '\0';
+            if (path_len > 0 && p[path_len - 1] == '/') {
+                memcpy(clean, p, path_len - 1);
+                clean[path_len - 1] = '\0';
             } else {
                 strncpy(clean, p, sizeof(clean) - 1);
                 clean[sizeof(clean) - 1] = '\0';
@@ -265,14 +336,14 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
             resp.scores[out_idx] = sc->entries[i].score;
             resp.freqs[out_idx] = sc->entries[i].freq;
             resp.is_dirs[out_idx] = sc->entries[i].is_dir ? 1 : 0;
-            if (out_idx == 0) {
-                session_record_selection(clean);
-            }
             out_idx++;
         }
-        resp.count = out_idx;
-        daemon_release_scored(srv->daemon, sr);
     }
+    resp.count = out_idx;
+    if (sr_dirs.data)
+        daemon_release_scored(srv->daemon, sr_dirs);
+    if (sr_files.data)
+        daemon_release_scored(srv->daemon, sr_files);
 
     daemon_log_query(srv->daemon, req->prefix, req->cwd, resp.count);
 
@@ -291,17 +362,14 @@ static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_s
         return;
     }
 
+    char expanded_tmp[4096];
     char expanded_prefix[4096];
-    path_expand_abbrev(expanded_prefix, req->prefix, sizeof(expanded_prefix));
-
-    if (strstr(expanded_prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
-        send_error(fd, req_id, -8, "path traversal not allowed");
-        return;
-    }
+    path_expand_abbrev(expanded_tmp, req->prefix, sizeof(expanded_tmp));
+    path_normalize(expanded_prefix, expanded_tmp, sizeof(expanded_prefix));
 
     uint64_t now = (uint64_t) time(NULL);
     scored_result sr =
-        daemon_get_scored_completions(srv->daemon, expanded_prefix, 1, now, req->cwd);
+        daemon_get_scored_completions(srv->daemon, expanded_prefix, 1, now, req->cwd, 0);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -448,17 +516,20 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
     memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
 
     if (fc) {
-        uint32_t n = fc->count < 50 ? fc->count : 50;
+        uint32_t n = fc->count < 50 ? (uint32_t) fc->count : 50;
+        uint32_t out_idx = 0;
         dedup_set seen;
         dedup_init(&seen);
-        uint32_t out_idx = 0;
-        for (uint32_t i = 0; i < n; i++) {
+        for (uint32_t i = 0; i < n && out_idx < 50; i++) {
             const char* p = fc->paths[i];
-            size_t plen = strlen(p);
+            if (!p)
+                continue;
+            size_t path_len = strlen(p);
+
             char clean[4096];
-            if (plen > 0 && p[plen - 1] == '/') {
-                memcpy(clean, p, plen - 1);
-                clean[plen - 1] = '\0';
+            if (path_len > 0 && p[path_len - 1] == '/') {
+                memcpy(clean, p, path_len - 1);
+                clean[path_len - 1] = '\0';
             } else {
                 strncpy(clean, p, sizeof(clean) - 1);
                 clean[sizeof(clean) - 1] = '\0';
@@ -474,27 +545,6 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
         }
         resp.count = out_idx;
         completions_free(fc);
-    }
-
-    if (sizeof(resp) > IPC_COMPRESS_THRESHOLD) {
-        uint8_t compressed[IPC_MAX_PAYLOAD];
-        size_t comp_len =
-            ipc_rle_compress((const uint8_t*) &resp, sizeof(resp), compressed, sizeof(compressed));
-        if (comp_len > 0 && comp_len < sizeof(resp)) {
-            uint8_t* wire_buf = malloc(comp_len + sizeof(uint32_t));
-            if (wire_buf) {
-                uint32_t orig_len = (uint32_t) sizeof(resp);
-                memcpy(wire_buf, &orig_len, sizeof(uint32_t));
-                memcpy(wire_buf + sizeof(uint32_t), compressed, comp_len);
-                ipc_header hdr;
-                ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS | IPC_MSG_COMPRESSED,
-                                 (uint32_t) (comp_len + sizeof(uint32_t)), req_id);
-                write_exact(fd, &hdr, sizeof(hdr));
-                write_exact(fd, wire_buf, comp_len + sizeof(uint32_t));
-                free(wire_buf);
-                return;
-            }
-        }
     }
 
     ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS, sizeof(resp), req_id);

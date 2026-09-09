@@ -1,0 +1,110 @@
+.TH ARCHAIC-HELPER 1 "May 2026" "Archaic 0.9.0" "User Commands"
+.SH NAME
+archaic-helper \- persistent connection helper for the Archaic autocomplete daemon
+.SH SYNOPSIS
+.B archaic-helper
+.RI [ socket_path ]
+.SH DESCRIPTION
+.B archaic-helper
+maintains a persistent Unix domain socket connection to the Archaic daemon.
+It reads commands from stdin and writes responses to stdout, eliminating
+the overhead of socket setup for each query. This is what the Fish shell
+plugin uses internally for fast completions.
+.SH USAGE
+Start the helper, optionally specifying the daemon socket path:
+.PP
+.RS
+.nf
+$ archaic-helper
+$ archaic-helper /tmp/archaic-daemon.sock
+.fi
+.RE
+.PP
+Then pipe commands via stdin:
+.PP
+.RS
+.nf
+$ echo "complete /path 20" | archaic-helper
+.fi
+.RE
+.SH COMMANDS
+Commands are sent one per line via stdin:
+.TP
+.B complete \fIprefix\fR [\fIlimit\fR] [\fIcwd\fR] [\fIdirs_only\fR] [\fIcommand\fR]
+Get path completions for the given prefix. CWD boosts nearby paths.
+.TP
+.B fuzzy \fIprefix\fR [\fIlimit\fR]
+Get fuzzy path completions matching the prefix pattern.
+.TP
+.B suggest \fIprefix\fR [\fIcwd\fR]
+Get the single best suggestion for the given prefix.
+.TP
+.B query \fIcwd\fR \fIinput\fR
+Validate a path. Returns existence, type, and full path.
+.TP
+.B ping
+Check if the daemon is running. Returns uptime in milliseconds.
+.TP
+.B metrics
+Display daemon performance metrics and statistics.
+.TP
+.B scan-status
+Check the current scan progress and status.
+.TP
+.B quit / exit
+Terminate the helper process.
+.SH OPTIONS
+.TP
+.B \-v, \-\-version
+Display version information and exit.
+.SH ENVIRONMENT
+.TP
+.B ARCHAIC_CONFIG
+Path to configuration file (default: ~/.config/archaic/config.toml).
+.TP
+.B ARCHAIC_SOCKET
+Path to daemon socket (default: /tmp/archaic-daemon.sock).
+.SH FILES
+.TP
+.I ~/.config/archaic/config.toml
+User configuration file.
+.TP
+.I /etc/archaic/config.toml
+System-wide configuration file.
+.TP
+.I /tmp/archaic-daemon.sock
+Default daemon socket path.
+.SH EXAMPLES
+.PP
+Get completions for a path prefix:
+.RS
+.nf
+$ echo "complete ~/pro 10" | archaic-helper
+D ~/projects
+F ~/profile.txt
+.fi
+.RE
+.PP
+Check daemon health:
+.RS
+.nf
+$ echo "ping" | archaic-helper
+12345678
+.fi
+.RE
+.PP
+Get the best suggestion:
+.RS
+.nf
+$ echo "suggest ~/doc" | archaic-helper
+~/documents
+.fi
+.RE
+.SH SEE ALSO
+.BR archaic (1),
+.BR archaic-cli (1),
+.BR archaic.conf (5)
+.SH AUTHORS
+Sam O'Reilly and contributors.
+.SH BUGS
+Report bugs at: https://github.com/Samoreilly/Archaic/issues

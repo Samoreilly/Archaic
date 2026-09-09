@@ -13,7 +13,7 @@ set -g __archaic_helper_pid ""
 set -g __archaic_last_query_time 0
 set -g __archaic_debounce_ms 80
 set -g __archaic_suggestion ""
-set -g __archaic_max_completions 20
+set -g __archaic_max_completions 50
 set -g __archaic_show_preview 0
 set -g __archaic_cycle_completions ""
 set -g __archaic_cycle_index 0
@@ -53,7 +53,7 @@ set -g fish_pager_color_secondary ""
 set -g fish_pager_color_progress ""
 
 # ── Default command list ──────────────────────────────────────────────────────
-set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch
+set -g __archaic_commands cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod chown ln tar unzip gzip diff open xdg-open code cursor hx nano emacs rg fd eza exa grep find file stat wc python python3 node bun cargo go make cmake scp rsync jq more source
 
 # ── Load config (socket path + command list) ─────────────────────────────────
 set -l config_file ""
@@ -182,18 +182,45 @@ function __archaic_check_version -d "Verify CLI/helper version compatibility"
     set -g __archaic_version_checked 1
 end
 
+function __archaic_expand_path -d "Expand ~ and \$VAR in a path prefix"
+    set -l path $argv[1]
+    if test -z "$path"
+        echo ""
+        return
+    end
+    if test "$path" = "~"
+        echo "$HOME"
+        return
+    end
+    if string match -q '~/*' -- "$path"
+        echo "$HOME"(string replace -r '^~' '' "$path")
+        return
+    end
+    if string match -qr '^\$\{[A-Za-z_][A-Za-z0-9_]*\}' -- "$path"
+        set -l var (string replace -r '^\$\{([A-Za-z_][A-Za-z0-9_]*)\}.*' '$1' "$path")
+        set -l val $$var
+        echo (string replace -r '^\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$val" "$path")
+        return
+    end
+    if string match -qr '^\$[A-Za-z_][A-Za-z0-9_]*' -- "$path"
+        set -l var (string replace -r '^\$([A-Za-z_][A-Za-z0-9_]*).*' '$1' "$path")
+        set -l val $$var
+        echo (string replace -r '^\$[A-Za-z_][A-Za-z0-9_]*' "$val" "$path")
+        return
+    end
+    echo "$path"
+end
+
+function __archaic_parse_line -d "Split 'D /path with spaces' into type and path"
+    set -l line $argv[1]
+    set -l type (string split -m 1 -f 1 " " -- "$line")
+    set -l rest (string split -m 1 -f 2 " " -- "$line")
+    echo "$type"
+    echo "$rest"
+end
+
 # ── Core completion function ──────────────────────────────────────────────────
 function __archaic_do_complete -d "Query archaic daemon for completions"
-    # Debounce: skip if last query was too recent
-    set -l now (date +%s%3N 2>/dev/null; or date +%s)
-    if test -n "$__archaic_last_query_time"
-        set -l elapsed (math "$now - $__archaic_last_query_time")
-        if test $elapsed -lt $__archaic_debounce_ms 2>/dev/null
-            return
-        end
-    end
-    set -g __archaic_last_query_time "$now"
-
     set -l prefix (commandline -ct)
 
     # Detect command being completed
@@ -201,6 +228,11 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     set -l cmd ""
     if test (count $cmd_tokens) -gt 0
         set cmd $cmd_tokens[1]
+    end
+
+    # Flags are not paths
+    if string match -q -- '-*' "$prefix"
+        return
     end
 
     # Commands that only accept directories
@@ -221,6 +253,8 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     # Version check on first use
     __archaic_check_version
 
+    set prefix (__archaic_expand_path "$prefix")
+
     # Resolve prefix to absolute path
     set -l resolved ""
     set -l norm_prefix ""
@@ -230,7 +264,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     else
         # Only complete path-like inputs or simple directory names
         if not string match -q '*/*' -- "$prefix"
-            if not string match -qr '^[a-zA-Z0-9._-]+$' -- "$prefix"
+            if not string match -qr '^[a-zA-Z0-9._~-]+$' -- "$prefix"
                 return
             end
         end
@@ -240,54 +274,115 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             set -l clean_prefix (string replace -r '^\./' '' "$prefix")
             set resolved (pwd)/"$clean_prefix"
         end
-        # Normalize: resolve //, /./, and /../
+        # Normalize: resolve //, /./, and /../ (including trailing /..)
         while string match -q '*/../*' -- "$resolved"
             set resolved (string replace -r '/[^/]+/\.\./' '/' "$resolved")
+        end
+        # Handle trailing /.. (e.g., /home/sam/samdev/.. -> /home/sam)
+        while string match -q '*/..' -- "$resolved"
+            set resolved (string replace -r '/[^/]+/\.\.$' '/' "$resolved")
         end
         set resolved (string replace -r '/\.$' '/' "$resolved")
         set resolved (string replace -r '//+' '/' "$resolved")
         set resolved (string replace -r '/\./' '/' "$resolved")
+        # Remove trailing slash for root
+        if test "$resolved" = "/"
+            # Keep as is
+        else
+            set resolved (string replace -r '/+$' '' "$resolved")
+        end
         set norm_prefix (string replace -r '/+$' '' "$prefix")
     end
 
     set -l norm_resolved (string replace -r '/+$' '' "$resolved")
 
-    # Query: try helper first (persistent), fall back to CLI
+    if test -n "$prefix"; and not string match -q '*/' -- "$prefix"; and test -d "$resolved"
+        echo "$prefix/"\tdirectory
+    end
+
     set -l results ""
     if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set results (echo "complete $resolved $__archaic_max_completions $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+        set results (printf 'complete\t%s\t%s\t%s\t%s\n' "$dirs_only" "$__archaic_max_completions" "$PWD" "$resolved" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
     end
 
     if test -z "$results"
-        # Helper not available, use CLI (forks but always works)
-        set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions 2>/dev/null)
+        set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions "$PWD" $dirs_only 2>/dev/null)
     end
 
-    # Parse output: "D /path" or "F /path" (one per line)
     set -l found 0
     for line in $results
-        set -l parts (string split " " "$line")
-        if test (count $parts) -ge 2
-            set -l type $parts[1]
-            set -l full_path $parts[2]
+        set -l type (string split -m 1 -f 1 " " -- "$line")
+        set -l full_path (string split -m 1 -f 2 " " -- "$line")
+        if test -z "$full_path"
+            continue
+        end
 
-            # Skip files for directory-only commands
+        if test "$dirs_only" -eq 1 -a "$type" != "D"
+            continue
+        end
+
+        set -l display_path "$full_path"
+        if test -z "$prefix"
+            set display_path (basename "$full_path")
+        else if not string match -q '/*' -- "$prefix"
+            set display_path (string replace "$norm_resolved" "" "$full_path")
+            set display_path "$norm_prefix$display_path"
+        end
+
+        if test "$type" = "D"
+            echo "$display_path"\tdirectory
+        else
+            echo "$display_path"\tfile
+        end
+        set found 1
+    end
+
+    if test $found -eq 0
+        set -l fuzzy_q "$resolved"
+        set -l fuzzy_token 0
+        if not string match -q '*/*' -- "$prefix"; and test -n "$prefix"
+            set fuzzy_q "$prefix"
+            set fuzzy_token 1
+        end
+        set -l fuzzy_results ""
+        if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
+            set fuzzy_results (echo "fuzzy $fuzzy_q $__archaic_max_completions" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
+        end
+        if test -z "$fuzzy_results"
+            set fuzzy_results (command $archaic_cli_path fuzzy "$fuzzy_q" $__archaic_max_completions 2>/dev/null)
+        end
+
+        for line in $fuzzy_results
+            set -l type (string split -m 1 -f 1 " " -- "$line")
+            set -l full_path (string split -m 1 -f 2 " " -- "$line")
+            if test -z "$full_path"
+                continue
+            end
+
+            if test "$fuzzy_token" -eq 0; and string match -q '/*' -- "$resolved"
+                if not string match -q "$norm_resolved/*" -- "$full_path"
+                    continue
+                end
+                set -l remainder (string replace "$norm_resolved/" "" "$full_path")
+                if string match -q '*/*' -- "$remainder"
+                    continue
+                end
+            end
+
             if test "$dirs_only" -eq 1 -a "$type" != "D"
                 continue
             end
 
-            # Convert to relative/basename for display
             set -l display_path "$full_path"
-            if test -z "$prefix"
+            if test "$fuzzy_token" -eq 1
+                set display_path (string replace "$PWD/" "" "$full_path")
+            else if test -z "$prefix"
                 set display_path (basename "$full_path")
             else if not string match -q '/*' -- "$prefix"
-                set display_path (string replace "$norm_resolved" "" "$full_path")
-                set display_path "$norm_prefix$display_path"
+                set -l parent_dir (dirname "$norm_resolved")
+                set display_path (string replace "$parent_dir/" "" "$full_path")
             end
 
-            # Completion output: plain text only, no ANSI codes.
-            # Fish wraps descriptions in () automatically, so we use bare words
-            # to avoid double-parentheses like ((dir)).
             if test "$type" = "D"
                 echo "$display_path"\tdirectory
             else
@@ -296,61 +391,14 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             set found 1
         end
     end
-
-    if test $found -eq 0
-        # Try fuzzy matching
-        set -l fuzzy_results ""
-        if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-            set fuzzy_results (echo "fuzzy $resolved $__archaic_max_completions" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
-        end
-        if test -z "$fuzzy_results"
-            set fuzzy_results (command $archaic_cli_path fuzzy "$resolved" $__archaic_max_completions 2>/dev/null)
-        end
-
-        for line in $fuzzy_results
-            set -l parts (string split " " "$line")
-            if test (count $parts) -ge 2
-                set -l type $parts[1]
-                set -l full_path $parts[2]
-
-                if test "$dirs_only" -eq 1 -a "$type" != "D"
-                    continue
-                end
-
-                set -l display_path "$full_path"
-                if test -z "$prefix"
-                    set display_path (basename "$full_path")
-                else if not string match -q '/*' -- "$prefix"
-                    set -l parent_dir (dirname "$norm_resolved")
-                    set display_path (string replace "$parent_dir/" "" "$full_path")
-                end
-
-                # Plain text fuzzy completions (no ANSI codes)
-                if test "$type" = "D"
-                    echo "$display_path"\tdirectory
-                else
-                    echo "$display_path"\tfile
-                end
-                set found 1
-            end
-        end
-    end
-
-    if test $found -eq 0
-        set -g __archaic_daemon_healthy 0
-        return
-    end
-    set -g __archaic_daemon_healthy 1
 end
 
 # ── Register completions for configured commands ────────────────────────────────
 for cmd in $__archaic_commands
-    complete -e -c $cmd
-    complete -c $cmd -f -a "(__archaic_do_complete)"
+    complete -c $cmd -k -a "(__archaic_do_complete)"
 end
 
-# Catch-all for path-like arguments
-complete -c "" -f -a "(__archaic_do_complete)"
+complete -c git -n '__fish_seen_subcommand_from add checkout restore diff rm mv show' -k -a "(__archaic_do_complete)"
 
 # ── Inline autosuggestion via fish_right_prompt ────────────────────────────────
 set -g __archaic_suggestion ""
@@ -433,17 +481,21 @@ function __archaic_right_prompt -d "Show archaic autosuggestion"
 end
 
 # Append to existing fish_right_prompt if it exists, otherwise define it
-if functions -q fish_right_prompt
-    if not functions -q __archaic_orig_right_prompt
+if not set -q __archaic_prompt_wrapped
+    if functions -q __archaic_orig_right_prompt
+        set -g __archaic_prompt_wrapped 1
+    else if functions -q fish_right_prompt
         functions --copy fish_right_prompt __archaic_orig_right_prompt
-    end
-    function fish_right_prompt
-        __archaic_orig_right_prompt
-        __archaic_right_prompt
-    end
-else
-    function fish_right_prompt
-        __archaic_right_prompt
+        function fish_right_prompt
+            __archaic_orig_right_prompt
+            __archaic_right_prompt
+        end
+        set -g __archaic_prompt_wrapped 1
+    else
+        function fish_right_prompt
+            __archaic_right_prompt
+        end
+        set -g __archaic_prompt_wrapped 1
     end
 end
 
@@ -671,16 +723,21 @@ function __archaic_user_key_bindings
 end
 
 # Register to run after Fish's default key bindings are loaded
-if functions -q fish_user_key_bindings
-    # User already has fish_user_key_bindings - wrap it
-    functions --copy fish_user_key_bindings __archaic_orig_user_key_bindings
-    function fish_user_key_bindings
-        __archaic_orig_user_key_bindings
-        __archaic_user_key_bindings
-    end
-else
-    function fish_user_key_bindings
-        __archaic_user_key_bindings
+if not set -q __archaic_bindings_wrapped
+    if functions -q __archaic_orig_user_key_bindings
+        set -g __archaic_bindings_wrapped 1
+    else if functions -q fish_user_key_bindings
+        functions --copy fish_user_key_bindings __archaic_orig_user_key_bindings
+        function fish_user_key_bindings
+            __archaic_orig_user_key_bindings
+            __archaic_user_key_bindings
+        end
+        set -g __archaic_bindings_wrapped 1
+    else
+        function fish_user_key_bindings
+            __archaic_user_key_bindings
+        end
+        set -g __archaic_bindings_wrapped 1
     end
 end
 

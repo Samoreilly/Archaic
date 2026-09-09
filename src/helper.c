@@ -507,12 +507,33 @@ int main(int argc, char* argv[]) {
             char dirs_only_str[8] = {0};
             uint32_t limit = 50;
             int dirs_only = 0;
-            int n =
-                sscanf(line, "%*s %4095s %u %4095s %7s", prefix, &limit, cwd_path, dirs_only_str);
-            if (n >= 4 && (strcmp(dirs_only_str, "1") == 0 || strcmp(dirs_only_str, "true") == 0))
-                dirs_only = 1;
-            if (n >= 1) {
-                rc = cmd_complete(&conn, prefix, limit, cwd_path, dirs_only);
+            if (strchr(line, '\t')) {
+                char* save = NULL;
+                char buf[8192];
+                strncpy(buf, line, sizeof(buf) - 1);
+                buf[sizeof(buf) - 1] = '\0';
+                strtok_r(buf, "\t", &save);
+                char* d_tok = strtok_r(NULL, "\t", &save);
+                char* l_tok = strtok_r(NULL, "\t", &save);
+                char* c_tok = strtok_r(NULL, "\t", &save);
+                char* p_tok = strtok_r(NULL, "\t", &save);
+                if (d_tok && (strcmp(d_tok, "1") == 0 || strcmp(d_tok, "true") == 0))
+                    dirs_only = 1;
+                if (l_tok)
+                    limit = (uint32_t) atoi(l_tok);
+                if (c_tok)
+                    strncpy(cwd_path, c_tok, sizeof(cwd_path) - 1);
+                if (p_tok)
+                    strncpy(prefix, p_tok, sizeof(prefix) - 1);
+                if (p_tok)
+                    rc = cmd_complete(&conn, prefix, limit, cwd_path, dirs_only);
+            } else {
+                int n = sscanf(line, "%*s %4095s %u %4095s %7s", prefix, &limit, cwd_path,
+                               dirs_only_str);
+                if (n >= 4 && (strcmp(dirs_only_str, "1") == 0 || strcmp(dirs_only_str, "true") == 0))
+                    dirs_only = 1;
+                if (n >= 1)
+                    rc = cmd_complete(&conn, prefix, limit, cwd_path, dirs_only);
             }
         } else if (strcmp(cmd, "suggest") == 0) {
             char prefix[4096] = {0};

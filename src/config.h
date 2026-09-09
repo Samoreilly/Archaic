@@ -31,6 +31,7 @@ typedef struct {
     uint32_t recent_files_capacity;
     bool case_insensitive;
     uint32_t max_total_nodes;
+    uint32_t max_memory_mb;
 } config_storage;
 
 typedef struct {
@@ -40,6 +41,7 @@ typedef struct {
     double weight_type;
     double weight_cwd_proximity;
     double min_score_threshold;
+    double hidden_file_penalty;
 } config_scoring;
 
 typedef struct {

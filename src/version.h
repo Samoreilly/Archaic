@@ -1,0 +1,17 @@
+#ifndef ARCHAIC_VERSION_H
+#define ARCHAIC_VERSION_H
+
+#define ARCHAIC_VERSION "0.9.0"
+#define ARCHAIC_VERSION_MAJOR 0
+#define ARCHAIC_VERSION_MINOR 9
+#define ARCHAIC_VERSION_PATCH 0
+
+#ifndef ARCHAIC_COMMIT
+#define ARCHAIC_COMMIT "unknown"
+#endif
+
+#ifndef ARCHAIC_BUILD_DATE
+#define ARCHAIC_BUILD_DATE __DATE__
+#endif
+
+#endif /* ARCHAIC_VERSION_H */

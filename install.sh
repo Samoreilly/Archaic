@@ -45,6 +45,8 @@ if [[ "$CURRENT_SHELL" == "fish" ]]; then
     SHELL_TYPE="fish"
 elif [[ "$CURRENT_SHELL" == "bash" ]]; then
     SHELL_TYPE="bash"
+elif [[ "$CURRENT_SHELL" == "zsh" ]]; then
+    SHELL_TYPE="zsh"
 else
     warn "Unsupported shell: $CURRENT_SHELL. Installing anyway — manual sourcing required."
     SHELL_TYPE="unknown"
@@ -97,16 +99,20 @@ case "$SHELL_TYPE" in
         ln -sf "$SCRIPT_DIR/fish/archaic.fish" "$FISH_CONF_DIR/archaic.fish"
         info "Fish plugin installed."
 
-        # Source immediately if running in fish
-        if [[ "$CURRENT_SHELL" == "fish" ]]; then
-            fish -c "source $FISH_CONF_DIR/archaic.fish" 2>/dev/null || true
-            info "Fish plugin sourced."
-        fi
+        # Source immediately for new sessions; current session gets auto-reload
+        fish -c "source $FISH_CONF_DIR/archaic.fish" 2>/dev/null || true
 
-        # User must re-source in current Fish session to pick up pager color overrides
-        echo ""
-        info "IMPORTANT: Run this in your current Fish session to apply changes:"
-        info "  source ~/.config/fish/conf.d/archaic.fish"
+        # For the current fish session, write a reload script that fish will pick up
+        RELOAD_SCRIPT="$FISH_CONF_DIR/99-archaic-reload.fish"
+        cat > "$RELOAD_SCRIPT" <<'FISHRELOAD'
+# Auto-remove after first load
+if set -q __archaic_reload_done
+    exit
+end
+set -g __archaic_reload_done 1
+source ~/.config/fish/conf.d/archaic.fish
+FISHRELOAD
+        info "Fish plugin will auto-reload on next prompt."
         ;;
     bash)
         BASH_COMP_DIR="$HOME/.local/share/bash-completion/completions"
@@ -114,10 +120,22 @@ case "$SHELL_TYPE" in
         ln -sf "$SCRIPT_DIR/bash/archaic.bash" "$BASH_COMP_DIR/archaic.bash"
         info "Bash completion installed."
 
-        # Source immediately if running in bash
+        # Source immediately in current bash session
         if [[ "$CURRENT_SHELL" == "bash" ]]; then
             source "$BASH_COMP_DIR/archaic.bash" 2>/dev/null || true
-            info "Bash completion sourced."
+            info "Bash completion sourced in current session."
+        fi
+        ;;
+    zsh)
+        ZSH_CONF_DIR="$HOME/.config/zsh"
+        mkdir -p "$ZSH_CONF_DIR"
+        ln -sf "$SCRIPT_DIR/zsh/archaic.zsh" "$ZSH_CONF_DIR/archaic.zsh"
+        info "Zsh completion installed."
+
+        # Source immediately in current zsh session
+        if [[ "$CURRENT_SHELL" == "zsh" ]]; then
+            source "$ZSH_CONF_DIR/archaic.zsh" 2>/dev/null || true
+            info "Zsh completion sourced in current session."
         fi
         ;;
     *)

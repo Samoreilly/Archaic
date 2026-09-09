@@ -118,6 +118,8 @@ static void* watcher_thread_linux(void* arg) {
         if (len < 0) {
             if (errno == EINTR)
                 continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
             if (!atomic_load(&w->running))
                 break;
             LOG_WARN("watcher", "inotify read error: %s", strerror(errno));

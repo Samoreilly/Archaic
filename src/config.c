@@ -81,6 +81,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->storage.recent_files_capacity = 50;
     cfg->storage.case_insensitive = false;
     cfg->storage.max_total_nodes = 0;
+    cfg->storage.max_memory_mb = 512;
 
     cfg->scoring.weight_frequency = 0.40;
     cfg->scoring.weight_recency = 0.30;
@@ -88,6 +89,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->scoring.weight_type = 0.10;
     cfg->scoring.weight_cwd_proximity = 0.05;
     cfg->scoring.min_score_threshold = 0.0;
+    cfg->scoring.hidden_file_penalty = 0.50;
 
     cfg->fish.command_count = 0;
 
@@ -127,6 +129,10 @@ void config_sandbox_validate(archaic_config* cfg) {
         cfg->storage.cache_ttl_seconds = 1;
     if (cfg->storage.cache_ttl_seconds > 300)
         cfg->storage.cache_ttl_seconds = 300;
+    if (cfg->storage.max_memory_mb < 64)
+        cfg->storage.max_memory_mb = 64;
+    if (cfg->storage.max_memory_mb > 8192)
+        cfg->storage.max_memory_mb = 8192;
     if (cfg->scoring.weight_frequency < 0.0)
         cfg->scoring.weight_frequency = 0.0;
     if (cfg->scoring.weight_frequency > 1.0)
@@ -489,6 +495,7 @@ static const field_map storage_map[] = {
     {"recent_files_capacity", TYPE_INT, FOFFSET(storage, recent_files_capacity)},
     {"case_insensitive", TYPE_BOOL, FOFFSET(storage, case_insensitive)},
     {"max_total_nodes", TYPE_INT, FOFFSET(storage, max_total_nodes)},
+    {"max_memory_mb", TYPE_INT, FOFFSET(storage, max_memory_mb)},
 };
 
 static const field_map scoring_map[] = {
@@ -498,6 +505,7 @@ static const field_map scoring_map[] = {
     {"weight_type", TYPE_DOUBLE, FOFFSET(scoring, weight_type)},
     {"weight_cwd_proximity", TYPE_DOUBLE, FOFFSET(scoring, weight_cwd_proximity)},
     {"min_score_threshold", TYPE_DOUBLE, FOFFSET(scoring, min_score_threshold)},
+    {"hidden_file_penalty", TYPE_DOUBLE, FOFFSET(scoring, hidden_file_penalty)},
 };
 
 static const field_map fish_map[] = {

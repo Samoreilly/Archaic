@@ -11,6 +11,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "ignore-file.h"
 #include "log.h"
 #include "scanner.h"
 #include "threadmanager.h"
@@ -35,6 +36,18 @@ static int should_ignore_file(parallel_scanner* scanner, const char* name) {
             return 1;
     }
     return 0;
+}
+
+static int should_ignore_dir_local(const ignore_file* local, const char* name) {
+    if (!local || local->count == 0)
+        return 0;
+    return ignore_file_should_ignore(local, name, true) ? 1 : 0;
+}
+
+static int should_ignore_file_local(const ignore_file* local, const char* name) {
+    if (!local || local->count == 0)
+        return 0;
+    return ignore_file_should_ignore(local, name, false) ? 1 : 0;
 }
 
 void scan_queue_init(scan_queue* q) {
@@ -184,8 +197,16 @@ static void* scanner_worker(void* arg) {
         } entries[512];
         int entry_count = 0;
 
+        ignore_file local_ignore;
+        ignore_file_clear(&local_ignore);
+        char ignore_path[4096];
+        snprintf(ignore_path, sizeof(ignore_path), "%s/.gitignore", path);
+        ignore_file_load(&local_ignore, ignore_path);
+        snprintf(ignore_path, sizeof(ignore_path), "%s/.archaicignore", path);
+        ignore_file_load(&local_ignore, ignore_path);
+
         struct dirent* entry;
-        while ((entry = readdir(dir)) && entry_count < 512) {
+        while ((entry = readdir(dir)) && entry_count < 8192) {
             if (scanner->dir_timeout_ms > 0) {
                 struct timespec now;
                 clock_gettime(CLOCK_MONOTONIC, &now);
@@ -250,6 +271,10 @@ static void* scanner_worker(void* arg) {
                 continue;
             if (!is_dir && should_ignore_file(scanner, entry->d_name))
                 continue;
+            if (is_dir && should_ignore_dir_local(&local_ignore, entry->d_name))
+                continue;
+            if (!is_dir && should_ignore_file_local(&local_ignore, entry->d_name))
+                continue;
 
             strncpy(entries[entry_count].name, entry->d_name, 255);
             entries[entry_count].name[255] = '\0';
@@ -279,12 +304,13 @@ static void* scanner_worker(void* arg) {
 
             store_lock(scanner->lfu);
             t_bucket* bucket = find_bucket(scanner->lfu, child_path, child_path, 3, false);
+            if (bucket && bucket->dir_count >= scanner->lfu->max_nodes_per_bucket)
+                bucket = NULL;
+            else if (bucket)
+                atomic_fetch_add(&bucket->refcount, 1);
+            store_unlock(scanner->lfu);
+
             if (bucket) {
-                if (bucket->dir_count >= scanner->lfu->max_nodes_per_bucket) {
-                    trie_unlock(bucket);
-                    store_unlock(scanner->lfu);
-                    continue;
-                }
                 trie_lock(bucket);
                 if (entries[i].is_dir) {
                     size_t path_len = strlen(child_path);
@@ -299,8 +325,8 @@ static void* scanner_worker(void* arg) {
                 bucket->dir_count++;
                 atomic_fetch_add(&scanner->lfu->total_nodes, 1);
                 trie_unlock(bucket);
+                bucket_release(bucket);
             }
-            store_unlock(scanner->lfu);
 
             if (entries[i].is_dir && depth < scanner->max_depth) {
                 scan_queue_push(scanner->queue, child_path, depth + 1);

@@ -399,7 +399,7 @@ static void test_cache_put_get(void) {
     scored_completions* sc = scored_completions_create(10);
     ASSERT_NOT_NULL(sc, "scored_completions_create failed");
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions_collect(root, "/test", sc, now, "/test");
+    scored_completions_collect(root, "/test", sc, now, "/test", "", 0.0, 0);
 
     /* Even if no results (trie is empty at this prefix), put/get should work */
     cache_put(cache, "/test", sc);
@@ -433,7 +433,7 @@ static void test_cache_ttl_expiry(void) {
     insert(root, "/test/ttl_file.c");
     scored_completions* sc = scored_completions_create(10);
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions_collect(root, "/test", sc, now, "/test");
+    scored_completions_collect(root, "/test", sc, now, "/test", "", 0.0, 0);
 
     cache_put(cache, "/test", sc);
 
@@ -473,7 +473,7 @@ static void test_cache_eviction(void) {
         char key[64];
         snprintf(key, sizeof(key), "/test/evict%d", i);
         scored_completions* sc = scored_completions_create(10);
-        scored_completions_collect(root, key, sc, now, "/test");
+        scored_completions_collect(root, key, sc, now, "/test", "", 0.0, 0);
         cache_put(cache, key, sc);
         scored_completions_free(sc);
     }
@@ -494,7 +494,7 @@ static void test_cache_invalidate(void) {
 
     scored_completions* sc = scored_completions_create(10);
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions_collect(root, "/test", sc, now, "/test");
+    scored_completions_collect(root, "/test", sc, now, "/test", "", 0.0, 0);
     cache_put(cache, "/test", sc);
     cache_invalidate(cache);
 
@@ -515,7 +515,7 @@ static void test_cache_clear(void) {
 
     scored_completions* sc = scored_completions_create(10);
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions_collect(root, "/test", sc, now, "/test");
+    scored_completions_collect(root, "/test", sc, now, "/test", "", 0.0, 0);
     cache_put(cache, "/test", sc);
     cache_clear(cache);
 
@@ -963,7 +963,7 @@ static void test_scored_completions_with_limit(void) {
     ASSERT_NOT_NULL(sc, "scored_completions_create should succeed");
 
     uint64_t now = (uint64_t) time(NULL);
-    scored_completions_collect(root, "/home", sc, now, "/home");
+    scored_completions_collect(root, "/home", sc, now, "/home", "", 0.0, 0);
 
     /* Should return results, at most 20 */
     ASSERT_TRUE(sc->count >= 0 && sc->count <= 50, "should have 0-50 results");
@@ -1033,7 +1033,7 @@ static void* cache_worker(void* arg) {
         char key[64];
         snprintf(key, sizeof(key), "/test/concurrent%d", (ctx->thread_id * 13 + i) % 50);
         scored_completions* sc = scored_completions_create(10);
-        scored_completions_collect(ctx->root, key, sc, now, "/test");
+        scored_completions_collect(ctx->root, key, sc, now, "/test", "", 0.0, 0);
         cache_put(ctx->cache, key, sc);
         const scored_completions* found = cache_get(ctx->cache, key);
         if (!found)

@@ -76,7 +76,7 @@ typedef struct {
 } scored_result;
 
 scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit,
-                                            uint64_t now, const char* cwd);
+                                            uint64_t now, const char* cwd, int dirs_only);
 void daemon_release_scored(daemon_state* state, scored_result result);
 
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit);

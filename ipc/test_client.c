@@ -79,7 +79,7 @@ int main(int argc, char* argv[]) {
         uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
         const char* cwd = argc > 4 ? argv[4] : "";
         ipc_completions_resp resp;
-        int dirs_only = 0;
+        int dirs_only = argc > 5 ? atoi(argv[5]) : 0;
         rc = ipc_client_complete(client, argv[2], limit, cwd, dirs_only, &resp);
         if (rc == 0) {
             for (uint32_t i = 0; i < resp.count; i++) {

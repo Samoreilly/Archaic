@@ -1,5 +1,6 @@
 #include "mmap-state.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -350,6 +351,13 @@ int mmap_state_save(daemon_state* state, const char* path) {
     if (!state || !state->store || !path)
         return -1;
 
+    /* Build temp file path in the same directory for atomic rename */
+    size_t path_len = strlen(path);
+    char tmp_path[4096];
+    if (path_len + 5 >= sizeof(tmp_path))
+        return -1;
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+
     store_lock(state->store);
     uint32_t bucket_count = (uint32_t) state->store->right_index;
 
@@ -365,17 +373,24 @@ int mmap_state_save(daemon_state* state, const char* path) {
     if (total < 4 * sizeof(uint32_t))
         return -1;
 
-    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
+    /* Open temp file (not the final path) */
+    int fd = open(tmp_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        LOG_ERROR("mmap", "failed to create temp state file: %s (%s)", tmp_path, strerror(errno));
         return -1;
+    }
     if (ftruncate(fd, (off_t) total) != 0) {
+        LOG_ERROR("mmap", "ftruncate failed: %s", strerror(errno));
         close(fd);
+        unlink(tmp_path);
         return -1;
     }
 
     void* mapped = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mapped == MAP_FAILED) {
+        LOG_ERROR("mmap", "mmap failed: %s", strerror(errno));
         close(fd);
+        unlink(tmp_path);
         return -1;
     }
 
@@ -407,15 +422,28 @@ int mmap_state_save(daemon_state* state, const char* path) {
     }
     store_unlock(state->store);
 
+    /* Sync data to disk before rename */
     if (msync(mapped, total, MS_SYNC) != 0)
         goto err;
+    if (fsync(fd) != 0)
+        goto err;
+
     munmap(mapped, total);
     close(fd);
+
+    /* Atomic rename: temp -> final path */
+    if (rename(tmp_path, path) != 0) {
+        LOG_ERROR("mmap", "rename failed: %s -> %s (%s)", tmp_path, path, strerror(errno));
+        unlink(tmp_path);
+        return -1;
+    }
+
     return 0;
 
 err:
     munmap(mapped, total);
     close(fd);
+    unlink(tmp_path);
     return -1;
 }
 

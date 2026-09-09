@@ -25,10 +25,13 @@ weight_depth = 0.20
 weight_type = 0.10
 
 [fish]
-commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch"]
+commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch", "head", "tail", "chmod", "rg", "fd", "code", "hx", "grep", "find"]
 
 [bash]
-commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch"]
+commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch", "head", "tail", "chmod", "rg", "fd", "code", "hx", "grep", "find"]
+
+[zsh]
+commands = ["cd", "ls", "cat", "vim", "nvim", "less", "bat", "rm", "mv", "cp", "mkdir", "touch", "head", "tail", "chmod", "rg", "fd", "code", "hx", "grep", "find"]
 
 [scanner]
 ignore_dirs = [".git", ".svn", ".hg", "node_modules", ".next", "dist", "build", "target", "__pycache__", ".venv", "venv", ".tox", ".cache", ".cargo", "vendor", ".idea", ".vscode", ".eclipse"]

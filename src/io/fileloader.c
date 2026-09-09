@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "../../ipc/server.h"
@@ -1049,13 +1050,15 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
 }
 
 scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit,
-                                            uint64_t now, const char* cwd) {
+                                            uint64_t now, const char* cwd, int dirs_only) {
     scored_result empty = {NULL, false};
     if (!state || !state->store || !prefix) {
         return empty;
     }
 
-    const scored_completions* cached = cache_get(state->cache, prefix);
+    const scored_completions* cached = NULL;
+    if (!dirs_only)
+        cached = cache_get(state->cache, prefix);
     if (cached) {
         metrics_record_cache_hit(&state->metrics);
         scored_result result;
@@ -1070,6 +1073,14 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     scored_completions* out = scored_completions_create(limit > 0 ? limit : 50);
     if (!out)
         return empty;
+
+    static double hidden_file_penalty = -1.0;
+    if (hidden_file_penalty < 0.0) {
+        hidden_file_penalty = 0.50;
+        archaic_config cfg;
+        if (config_load_default(&cfg) == 0)
+            hidden_file_penalty = cfg.scoring.hidden_file_penalty;
+    }
 
     store_lock(state->store);
     size_t count = state->store->right_index;
@@ -1090,19 +1101,21 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     }
     store_unlock(state->store);
 
-    for (size_t i = 0; i < count && out->count < out->capacity; i++) {
+    for (size_t i = 0; i < count; i++) {
         t_bucket* bucket = snapshot[i];
         if (!bucket)
             continue;
 
         trie_lock(bucket);
-        scored_completions_collect(bucket->dir_trie, prefix, out, now, cwd);
+        scored_completions_collect(bucket->dir_trie, prefix, out, now, cwd, NULL,
+                                   hidden_file_penalty, dirs_only);
         trie_unlock(bucket);
         bucket_release(bucket);
     }
 
     free(snapshot);
-    cache_put(state->cache, prefix, out);
+    if (!dirs_only)
+        cache_put(state->cache, prefix, out);
     scored_result result;
     result.data = out;
     result.from_cache = false;
@@ -1172,7 +1185,7 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
     }
     int bucket_cap = (int) (limit > 0 ? limit : 50);
 
-    for (size_t i = 0; i < bucket_count && out->count < out->capacity; i++) {
+    for (size_t i = 0; i < bucket_count; i++) {
         t_bucket* bucket = snapshot[i];
         if (!bucket)
             continue;
@@ -1182,12 +1195,38 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
             trie_fuzzy_collect(bucket->dir_trie, qbase, bucket_paths, bucket_is_dirs, bucket_cap);
         trie_unlock(bucket);
 
-        for (int j = 0; j < n && out->count < out->capacity; j++) {
-            if (bucket_paths[j]) {
+        for (int j = 0; j < n; j++) {
+            if (!bucket_paths[j])
+                continue;
+            if (out->count < out->capacity) {
                 out->paths[out->count] = bucket_paths[j];
                 out->is_dirs[out->count] = bucket_is_dirs[j];
                 out->count++;
                 bucket_paths[j] = NULL;
+                continue;
+            }
+            size_t ql = strlen(qbase);
+            const char* nb = bucket_paths[j];
+            for (const char* p = bucket_paths[j]; *p; p++) {
+                if (*p == '/')
+                    nb = p + 1;
+            }
+            int better = (ql > 0 && strncasecmp(nb, qbase, ql) == 0);
+            if (!better)
+                continue;
+            for (size_t k = 0; k < out->count; k++) {
+                const char* ob = out->paths[k];
+                for (const char* p = out->paths[k]; *p; p++) {
+                    if (*p == '/')
+                        ob = p + 1;
+                }
+                if (ql == 0 || strncasecmp(ob, qbase, ql) != 0) {
+                    free(out->paths[k]);
+                    out->paths[k] = bucket_paths[j];
+                    out->is_dirs[k] = bucket_is_dirs[j];
+                    bucket_paths[j] = NULL;
+                    break;
+                }
             }
         }
 
@@ -1239,7 +1278,7 @@ void daemon_prefetch_common_prefixes(daemon_state* state) {
 
     uint64_t now = (uint64_t) time(NULL);
     for (int i = 0; prefixes[i]; i++) {
-        scored_result sr = daemon_get_scored_completions(state, prefixes[i], 10, now, "/");
+        scored_result sr = daemon_get_scored_completions(state, prefixes[i], 10, now, "/", 0);
         if (sr.data)
             daemon_release_scored(state, sr);
     }

@@ -344,6 +344,54 @@ void store_set_max_nodes(t_bucket_store* store, size_t max_nodes) {
         store->max_total_nodes = max_nodes;
 }
 
+void store_set_max_memory(t_bucket_store* store, size_t max_bytes) {
+    if (store)
+        store->max_memory_bytes = max_bytes;
+}
+
+size_t store_calculate_memory_bytes(t_bucket_store* store) {
+    if (!store)
+        return 0;
+
+    size_t total = 0;
+
+    /* Bucket store overhead */
+    total += sizeof(t_bucket_store);
+    total += store->right_index * sizeof(t_bucket*);
+
+    /* Per-bucket memory */
+    for (size_t i = 0; i < store->right_index; i++) {
+        t_bucket* bucket = store->buckets[i];
+        if (!bucket)
+            continue;
+        total += sizeof(t_bucket);
+        total += strlen(bucket->dir_name) + 1;
+        total += sizeof(pthread_mutex_t);
+
+        /* Trie nodes in this bucket */
+        size_t nodes = trie_node_count(bucket->dir_trie);
+        total += nodes * sizeof(RadixNode);
+        /* Approximate key storage: avg 64 bytes per node */
+        total += nodes * 64;
+        /* Child pointers: avg 2 children per node */
+        total += nodes * 2 * sizeof(RadixChild);
+    }
+
+    /* LRU list nodes */
+    total += store->lru_size * sizeof(node);
+
+    atomic_store(&store->estimated_memory_bytes, total);
+    return total;
+}
+
+int store_check_memory_budget(t_bucket_store* store) {
+    if (!store || store->max_memory_bytes == 0)
+        return 0;
+
+    size_t used = store_calculate_memory_bytes(store);
+    return (int) ((used * 100) / store->max_memory_bytes);
+}
+
 __attribute__((unused)) static size_t count_bucket_nodes(t_bucket* bucket) {
     if (!bucket || !bucket->dir_trie)
         return 0;
@@ -351,29 +399,50 @@ __attribute__((unused)) static size_t count_bucket_nodes(t_bucket* bucket) {
 }
 
 void store_enforce_budget(t_bucket_store* store) {
-    if (!store || store->max_total_nodes == 0)
+    if (!store)
         return;
 
-    size_t total = atomic_load(&store->total_nodes);
-    if (total <= store->max_total_nodes)
+    bool node_budget_exceeded = store->max_total_nodes > 0 &&
+                                atomic_load(&store->total_nodes) > store->max_total_nodes;
+    bool memory_budget_exceeded = store->max_memory_bytes > 0 &&
+                                  store_calculate_memory_bytes(store) > store->max_memory_bytes;
+
+    if (!node_budget_exceeded && !memory_budget_exceeded)
         return;
 
-    LOG_WARN("store", "node budget exceeded (%zu > %zu), evicting low-frequency entries", total,
-             store->max_total_nodes);
+    if (memory_budget_exceeded) {
+        size_t used = atomic_load(&store->estimated_memory_bytes);
+        LOG_WARN("store", "memory budget exceeded (%zu > %zu), evicting LRU entries",
+                 used, store->max_memory_bytes);
+    } else {
+        size_t total = atomic_load(&store->total_nodes);
+        LOG_WARN("store", "node budget exceeded (%zu > %zu), evicting low-frequency entries", total,
+                 store->max_total_nodes);
+    }
 
     store_lock(store);
-    for (size_t b = 0; b < store->right_index; b++) {
-        t_bucket* bucket = store->buckets[b];
-        if (!bucket || !bucket->dir_trie)
-            continue;
 
-        total = atomic_load(&store->total_nodes);
-        if (total <= store->max_total_nodes)
+    /* Evict least-recently-used buckets from the tail of the LRU list */
+    while (store->lru_size > 0) {
+        if (store->max_total_nodes > 0 &&
+            atomic_load(&store->total_nodes) <= store->max_total_nodes &&
+            store->max_memory_bytes > 0 &&
+            store_calculate_memory_bytes(store) <= store->max_memory_bytes)
             break;
 
-        trie_compact(bucket->dir_trie);
-    }
-    store_unlock(store);
+        t_bucket* victim = remove_last(store);
+        if (!victim)
+            break;
 
+        size_t removal_index = victim->array_index;
+        if (removal_index < store->right_index) {
+            shift_left(store, removal_index, store->right_index - 1);
+            store->buckets[store->right_index - 1] = NULL;
+        }
+        store->right_index--;
+        destroy_bucket(victim);
+    }
+
+    store_unlock(store);
     update_memory_estimate(store);
 }

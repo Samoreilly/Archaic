@@ -16,6 +16,7 @@ add_executable(
     src/lru.c
     src/io/fileloader.c
     src/scanner.c
+    src/ignore-file.c
     src/hashset.c
     test/test.c
     test/perf.c
@@ -121,6 +122,7 @@ add_executable(
     src/lru.c
     src/io/fileloader.c
     src/scanner.c
+    src/ignore-file.c
     src/hashset.c
     src/threadpool.c
     src/metrics.c

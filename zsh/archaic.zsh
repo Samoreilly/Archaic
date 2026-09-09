@@ -1,4 +1,4 @@
-#compdef cd ls cat vim nvim less bat rm mv cp mkdir touch
+#compdef cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod rg fd code hx grep find
 
 # archaic.zsh - ZSH shell integration for archaic autocomplete daemon
 #
@@ -209,6 +209,10 @@ _archaic_do_complete() {
     local cur="${words[CURRENT]}"
     local cmd="${words[1]}"
 
+    if [[ "$cur" == -* ]]; then
+        return
+    fi
+
     # Expand environment variables and ~user/ syntax
     local expanded_cur=$(_archaic_expand_path "$cur")
 
@@ -237,28 +241,37 @@ _archaic_do_complete() {
         while [[ "$resolved" == */../* ]]; do
             resolved="$(echo "$resolved" | sed 's|/[^/]*/\.\./|/|')"
         done
+        while [[ "$resolved" == */.. ]]; do
+            resolved="$(echo "$resolved" | sed 's|/[^/]*/\.\.$|/|')"
+        done
         resolved="${resolved%/./}"
         resolved="$(echo "$resolved" | sed 's|//\+|/|g')"
+        if [[ "$resolved" != "/" ]]; then
+            resolved="${resolved%/}"
+        fi
         norm_prefix="${expanded_cur%/}"
     fi
 
     local norm_resolved="${resolved%/}"
     local results=""
-
-    _archaic_ensure_helper
-
-    # Query with command context for scoring
-    if [[ -n "$_archaic_helper_pid" && -n "$_archaic_helper" ]]; then
-        results="$(echo "complete $resolved 50 $PWD $cmd" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
-    fi
-
-    if [[ -z "$results" ]]; then
-        results="$("$_archaic_cli" complete "$resolved" 50 2>/dev/null)"
-    fi
-
     local found=0
     local -a matches=()
     local line
+
+    _archaic_ensure_helper
+
+    if [[ -n "$expanded_cur" && "$expanded_cur" != */ && -d "$resolved" ]]; then
+        matches+=("${expanded_cur%/}/\tdir")
+        found=1
+    fi
+
+    if [[ -n "$_archaic_helper_pid" && -n "$_archaic_helper" ]]; then
+        results="$(printf 'complete\t%s\t%s\t%s\t%s\n' "$dirs_only" 50 "$PWD" "$resolved" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
+    fi
+
+    if [[ -z "$results" ]]; then
+        results="$("$_archaic_cli" complete "$resolved" 50 "$PWD" "$dirs_only" 2>/dev/null)"
+    fi
 
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
@@ -290,12 +303,18 @@ _archaic_do_complete() {
     done <<< "$results"
 
     if [[ "$found" -eq 0 ]]; then
+        local fuzzy_q="$resolved"
+        local fuzzy_token=0
+        if [[ -n "$expanded_cur" && "$expanded_cur" != */* ]]; then
+            fuzzy_q="$expanded_cur"
+            fuzzy_token=1
+        fi
         local fuzzy_results=""
         if [[ -n "$_archaic_helper_pid" && -n "$_archaic_helper" ]]; then
-            fuzzy_results="$(echo "fuzzy $resolved 50 $cmd" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
+            fuzzy_results="$(echo "fuzzy $fuzzy_q 50" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
         fi
         if [[ -z "$fuzzy_results" ]]; then
-            fuzzy_results="$("$_archaic_cli" fuzzy "$resolved" 50 2>/dev/null)"
+            fuzzy_results="$("$_archaic_cli" fuzzy "$fuzzy_q" 50 2>/dev/null)"
         fi
 
         while IFS= read -r line; do
@@ -303,19 +322,30 @@ _archaic_do_complete() {
             local type="${line%% *}"
             local full_path="${line#* }"
 
+            if [[ "$fuzzy_token" -eq 0 && "$resolved" == /* ]]; then
+                if [[ "$full_path" != "$norm_resolved"/* ]]; then
+                    continue
+                fi
+                local remainder="${full_path#"$norm_resolved"/}"
+                if [[ "$remainder" == */* ]]; then
+                    continue
+                fi
+            fi
+
             if [[ "$dirs_only" -eq 1 && "$type" != "D" ]]; then
                 continue
             fi
 
             local display_path="$full_path"
-            if [[ -z "$expanded_cur" ]]; then
+            if [[ "$fuzzy_token" -eq 1 ]]; then
+                display_path="${full_path#"$PWD"/}"
+            elif [[ -z "$expanded_cur" ]]; then
                 display_path="$(basename "$full_path")"
             elif [[ "$expanded_cur" != /* ]]; then
                 display_path="${full_path#"$norm_resolved"}"
                 display_path="$norm_prefix$display_path"
             fi
 
-            # Rich metadata in fuzzy descriptions
             local desc=""
             if [[ "$type" == "D" ]]; then
                 desc="$(_archaic_dir_info "$full_path")"
@@ -329,17 +359,15 @@ _archaic_do_complete() {
     fi
 
     if [[ "$found" -eq 0 ]]; then
-        _archaic_daemon_healthy=0
         return
     fi
-    _archaic_daemon_healthy=1
 
     # Use _describe for rich descriptions
     _describe 'archaic' matches -Q
 }
 
 # ── Default command list ─────────────────────────────────────────────────────
-_archaic_commands=(cd ls cat vim nvim less bat rm mv cp mkdir touch)
+_archaic_commands=(cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod chown ln tar unzip gzip diff open xdg-open code cursor hx nano emacs rg fd eza exa grep find file stat wc python python3 node bun cargo go make cmake scp rsync jq more)
 
 _archaic_load_commands() {
     local config_file=""

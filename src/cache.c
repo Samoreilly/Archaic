@@ -207,6 +207,8 @@ const scored_completions* cache_get(query_cache* cache, const char* prefix) {
 
     shard_lru_move_to_front(s, entry);
     atomic_fetch_add(&entry->refs, 1);
+    entry->value->cache_shard = (int) si;
+    entry->value->cache_slot = (size_t) (entry - s->table);
     s->hits++;
     pthread_mutex_unlock(&s->lock);
 
@@ -217,26 +219,26 @@ void cache_release(query_cache* cache, const scored_completions* sc) {
     if (!cache || !sc)
         return;
 
-    for (int i = 0; i < CACHE_NUM_SHARDS; i++) {
-        cache_shard* s = &cache->shards[i];
-        pthread_mutex_lock(&s->lock);
-        for (size_t j = 0; j < s->capacity; j++) {
-            cache_entry* entry = &s->table[j];
-            if (entry->occupied && !entry->deleted && entry->value == sc) {
-                int old = atomic_fetch_sub(&entry->refs, 1);
-                if (old == 1 && entry->deleted) {
-                    shard_free_entry_value(entry);
-                    entry->occupied = false;
-                    entry->deleted = false;
-                    shard_lru_detach(entry);
-                    s->count--;
-                }
-                pthread_mutex_unlock(&s->lock);
-                return;
+    int si = sc->cache_shard;
+    if (si < 0 || si >= CACHE_NUM_SHARDS)
+        return;
+
+    cache_shard* s = &cache->shards[si];
+    pthread_mutex_lock(&s->lock);
+    if (sc->cache_slot < s->capacity) {
+        cache_entry* entry = &s->table[sc->cache_slot];
+        if (entry->occupied && entry->value == sc) {
+            int old = atomic_fetch_sub(&entry->refs, 1);
+            if (old == 1 && entry->deleted) {
+                shard_free_entry_value(entry);
+                entry->occupied = false;
+                entry->deleted = false;
+                shard_lru_detach(entry);
+                s->count--;
             }
         }
-        pthread_mutex_unlock(&s->lock);
     }
+    pthread_mutex_unlock(&s->lock);
 }
 
 void cache_put(query_cache* cache, const char* prefix, const scored_completions* sc) {

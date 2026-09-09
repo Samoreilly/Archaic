@@ -156,7 +156,7 @@ static void tcp_handle_complete(tcp_server* srv, int fd, uint32_t req_id,
 
     uint64_t now = (uint64_t) time(NULL);
     scored_result sr =
-        daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now, req->cwd);
+        daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now, req->cwd, 0);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -170,12 +170,48 @@ static void tcp_handle_complete(tcp_server* srv, int fd, uint32_t req_id,
     if (sc) {
         uint32_t n = sc->count < 50 ? sc->count : 50;
         uint32_t out_idx = 0;
+        size_t prefix_len = strlen(req->prefix);
+        /* Normalize: strip trailing '/' for filter logic */
+        int prefix_had_slash = 0;
+        if (prefix_len > 1 && req->prefix[prefix_len - 1] == '/') {
+            prefix_len--;
+            prefix_had_slash = 1;
+        }
         for (uint32_t i = 0; i < n && out_idx < 50; i++) {
             if (req->dirs_only && !sc->entries[i].is_dir)
                 continue;
 
             const char* p = sc->entries[i].path;
-            size_t plen = strlen(p);
+            size_t path_len = strlen(p);
+            /* Strip trailing '/' from path for comparison */
+            size_t effective_path_len = path_len;
+            if (effective_path_len > 1 && p[effective_path_len - 1] == '/')
+                effective_path_len--;
+
+            if (prefix_len > 0) {
+                if (effective_path_len <= prefix_len)
+                    continue;
+                if (strncmp(p, req->prefix, prefix_len) != 0 || p[prefix_len] != '/')
+                    continue;
+                if (memchr(p + prefix_len + 1, '/', effective_path_len - prefix_len - 1) != NULL)
+                    continue;
+            }
+
+            /* Exclude the current working directory from results */
+            if (req->cwd[0] != '\0') {
+                size_t cwd_len = strlen(req->cwd);
+                int match = 0;
+                if (effective_path_len == cwd_len && strncmp(p, req->cwd, cwd_len) == 0)
+                    match = 1;
+                else if (path_len == cwd_len + 1 && p[cwd_len] == '/' && strncmp(p, req->cwd, cwd_len) == 0)
+                    match = 1;
+                else if (cwd_len == effective_path_len + 1 && req->cwd[effective_path_len] == '/' && strncmp(p, req->cwd, effective_path_len) == 0)
+                    match = 1;
+                if (match)
+                    continue;
+            }
+
+            size_t plen = path_len;
             char clean[4096];
             if (plen > 0 && p[plen - 1] == '/') {
                 memcpy(clean, p, plen - 1);
@@ -215,7 +251,7 @@ static void tcp_handle_suggest(tcp_server* srv, int fd, uint32_t req_id,
     }
 
     uint64_t now = (uint64_t) time(NULL);
-    scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now, req->cwd);
+    scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now, req->cwd, 0);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -355,10 +391,27 @@ static void tcp_handle_fuzzy_complete(tcp_server* srv, int fd, uint32_t req_id,
 
     if (fc) {
         uint32_t n = fc->count < 50 ? fc->count : 50;
-        resp.count = n;
-        for (uint32_t i = 0; i < n; i++) {
+        uint32_t out_idx = 0;
+        size_t prefix_len = strlen(req->prefix);
+        if (prefix_len > 1 && req->prefix[prefix_len - 1] == '/')
+            prefix_len--;
+        for (uint32_t i = 0; i < n && out_idx < 50; i++) {
             const char* p = fc->paths[i];
-            size_t plen = strlen(p);
+            size_t path_len = strlen(p);
+            size_t effective_path_len = path_len;
+            if (effective_path_len > 1 && p[effective_path_len - 1] == '/')
+                effective_path_len--;
+
+            if (prefix_len > 0) {
+                if (effective_path_len <= prefix_len)
+                    continue;
+                if (strncmp(p, req->prefix, prefix_len) != 0 || p[prefix_len] != '/')
+                    continue;
+                if (memchr(p + prefix_len + 1, '/', effective_path_len - prefix_len - 1) != NULL)
+                    continue;
+            }
+
+            size_t plen = path_len;
             char clean[4096];
             if (plen > 0 && p[plen - 1] == '/') {
                 memcpy(clean, p, plen - 1);
@@ -367,9 +420,11 @@ static void tcp_handle_fuzzy_complete(tcp_server* srv, int fd, uint32_t req_id,
                 strncpy(clean, p, sizeof(clean) - 1);
                 clean[sizeof(clean) - 1] = '\0';
             }
-            strncpy(resp.paths[i], clean, sizeof(resp.paths[i]) - 1);
-            resp.is_dirs[i] = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
+            strncpy(resp.paths[out_idx], clean, sizeof(resp.paths[out_idx]) - 1);
+            resp.is_dirs[out_idx] = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
+            out_idx++;
         }
+        resp.count = out_idx;
         completions_free(fc);
     }
 

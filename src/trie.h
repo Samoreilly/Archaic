@@ -56,6 +56,8 @@ typedef struct {
     scored_entry* entries;
     size_t count;
     size_t capacity;
+    int cache_shard;
+    size_t cache_slot;
 } scored_completions;
 
 /*
@@ -74,7 +76,8 @@ void completions_collect(Trie* root, const char* prefix, completions* out);
 scored_completions* scored_completions_create(size_t capacity);
 void scored_completions_free(scored_completions* sc);
 void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out,
-                                uint64_t now, const char* cwd);
+                                uint64_t now, const char* cwd, const char* command,
+                                double hidden_file_penalty, int dirs_only);
 
 int trie_fuzzy_collect(Trie* root, const char* query, char** paths, bool* is_dirs, int capacity);
 

@@ -1,0 +1,66 @@
+{
+  "name": "archaic-autocomplete",
+  "displayName": "Archaic Autocomplete",
+  "description": "Blazing-fast file path autocomplete using archaic daemon",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Archaic Autocomplete",
+      "properties": {
+        "archaic.socketPath": {
+          "type": "string",
+          "default": "/tmp/archaic-daemon.sock",
+          "description": "Path to the archaic daemon Unix socket"
+        },
+        "archaic.timeoutMs": {
+          "type": "number",
+          "default": 100,
+          "description": "Timeout in milliseconds for daemon queries"
+        },
+        "archaic.maxResults": {
+          "type": "number",
+          "default": 50,
+          "description": "Maximum number of completion results to request"
+        },
+        "archaic.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable archaic autocomplete"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "archaic.toggle",
+        "title": "Archaic: Toggle Autocomplete"
+      },
+      {
+        "command": "archaic.status",
+        "title": "Archaic: Show Daemon Status"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.3.0"
+  }
+}

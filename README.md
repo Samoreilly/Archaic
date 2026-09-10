@@ -58,6 +58,13 @@ On Linux the user systemd unit starts the daemon at login.
 Optional. Copy [config.example.toml](config.example.toml) to
 `~/.config/archaic/config.toml`.
 
+Default index is `~/src`, `~/projects`, `~/dev`, `~/code`, `~/git`, `~/samdev`, `~/work` if those directories exist — not all of `$HOME`. Add more without reinstalling:
+
+```bash
+archaic-cli watch ~/whatever
+archaic-cli roots
+```
+
 - Socket: `$XDG_RUNTIME_DIR/archaic.sock` (else `/tmp/archaic-$UID.sock`)
 - State: `$XDG_CACHE_HOME/archaic/state.bin` (else `~/.cache/archaic/state.bin`)
 - `cd` / `mkdir` complete directories only

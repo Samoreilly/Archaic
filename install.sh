@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
-SCAN_PATH="${1:-$HOME}"
-if [[ ! -d "$SCAN_PATH" ]]; then
+SCAN_PATH="${1:-}"
+if [[ -n "$SCAN_PATH" && ! -d "$SCAN_PATH" ]]; then
     echo "Scan path does not exist: $SCAN_PATH" >&2
     exit 1
 fi
@@ -116,15 +116,23 @@ esac
 USER_BUS="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
 if command -v systemctl >/dev/null 2>&1 && [[ -S "$USER_BUS" ]]; then
     info "Enabling user service (login autostart)..."
-    "$SCRIPT_DIR/run.sh" enable-service "$SCAN_PATH"
+    if [[ -n "$SCAN_PATH" ]]; then
+        "$SCRIPT_DIR/run.sh" enable-service "$SCAN_PATH"
+    else
+        "$SCRIPT_DIR/run.sh" enable-service
+    fi
 else
     if [[ -S "$SOCK_PATH" ]]; then
         "$BUILD_DIR/archaic-cli" --sock "$SOCK_PATH" shutdown 2>/dev/null || true
         sleep 0.5
         rm -f "$SOCK_PATH" "${SOCK_PATH}.pid"
     fi
-    info "Starting daemon, scanning: $SCAN_PATH"
-    "$BUILD_DIR/archaic" --daemon "$SCAN_PATH" "$SOCK_PATH" &
+    if [[ -n "$SCAN_PATH" ]]; then
+        mkdir -p "$HOME/.config/archaic"
+        grep -qxF "$SCAN_PATH" "$HOME/.config/archaic/roots" 2>/dev/null || echo "$SCAN_PATH" >> "$HOME/.config/archaic/roots"
+    fi
+    info "Starting daemon"
+    "$BUILD_DIR/archaic" --daemon "$SOCK_PATH" &
     echo $! > "${SOCK_PATH}.pid"
     disown $! 2>/dev/null || true
 fi
@@ -143,7 +151,7 @@ if [[ "$ok" -ne 1 ]]; then
 fi
 
 echo ""
-info "Ready. Indexed: $SCAN_PATH"
+info "Ready. Add trees with: archaic-cli watch ~/src"
 info "Socket: $SOCK_PATH"
 echo ""
 info "Open a new terminal, type:  cd "

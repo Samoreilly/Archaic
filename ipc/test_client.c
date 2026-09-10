@@ -41,7 +41,43 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  reindex [path]\n");
         fprintf(stderr, "  shutdown\n");
         fprintf(stderr, "  doctor\n");
+        fprintf(stderr, "  watch <path>\n");
+        fprintf(stderr, "  unwatch <path>\n");
+        fprintf(stderr, "  roots\n");
         return 1;
+    }
+
+    if (strcmp(argv[1], "watch") == 0 || strcmp(argv[1], "unwatch") == 0 ||
+        strcmp(argv[1], "roots") == 0) {
+        if (strcmp(argv[1], "roots") == 0) {
+            archaic_config cfg;
+            config_init_defaults(&cfg);
+            config_load_default(&cfg);
+            if (cfg.daemon.scan_path[0])
+                printf("%s\n", cfg.daemon.scan_path);
+            for (int i = 0; i < cfg.daemon.scan_path_count; i++)
+                printf("%s\n", cfg.daemon.scan_paths[i]);
+            return 0;
+        }
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s %s <path>\n", argv[0], argv[1]);
+            return 1;
+        }
+        int wr = strcmp(argv[1], "watch") == 0 ? config_roots_add(argv[2])
+                                               : config_roots_remove(argv[2]);
+        if (wr != 0) {
+            fprintf(stderr, "Failed to %s %s\n", argv[1], argv[2]);
+            return 1;
+        }
+        printf("%s %s\n", argv[1], argv[2]);
+        ipc_client* client =
+            sock_override ? ipc_client_connect(sock_override) : ipc_client_connect_default();
+        if (client) {
+            if (strcmp(argv[1], "watch") == 0)
+                ipc_client_scan(client, argv[2]);
+            ipc_client_disconnect(client);
+        }
+        return 0;
     }
 
     if (strcmp(argv[1], "doctor") == 0) {
@@ -56,6 +92,8 @@ int main(int argc, char* argv[]) {
         int sock_ok = (stat(sock, &st) == 0 && S_ISSOCK(st.st_mode));
         printf("  sock_exists:%s\n", sock_ok ? " yes" : " no");
         printf("  scan_path:  %s\n", cfg.daemon.scan_path[0] ? cfg.daemon.scan_path : "(none)");
+        for (int i = 0; i < cfg.daemon.scan_path_count; i++)
+            printf("  scan_paths: %s\n", cfg.daemon.scan_paths[i]);
         ipc_client* client =
             sock_override ? ipc_client_connect(sock_override) : ipc_client_connect_default();
         if (!client) {

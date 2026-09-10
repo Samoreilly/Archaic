@@ -85,6 +85,11 @@ void config_init_defaults(archaic_config* cfg);
 void config_default_socket_path(char* buf, size_t n);
 void config_default_state_path(char* buf, size_t n);
 void config_ensure_parent_dir(const char* file);
+void config_default_roots_path(char* buf, size_t n);
+void config_pick_workspace_roots(archaic_config* cfg);
+void config_load_roots_file(archaic_config* cfg);
+int config_roots_add(const char* path);
+int config_roots_remove(const char* path);
 
 /* Load .archaicignore from a directory, merging patterns into the scanner config.
    Searches upward from start_path for .archaicignore until root or max_depth.

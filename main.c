@@ -124,9 +124,19 @@ int main(int argc, char* argv[]) {
         config_expand_vars(&cfg);
         config_sandbox_validate(&cfg);
 
-        /* CLI args override config */
-        const char* scan_path = (argc > 2 && argv[2][0] != '\0') ? argv[2] : NULL;
-        const char* sock_path = argc > 3 ? argv[3] : cfg.daemon.socket_path;
+        const char* scan_path = NULL;
+        const char* sock_path = cfg.daemon.socket_path;
+        if (argc == 3 && argv[2][0] != '\0') {
+            struct stat st;
+            if (stat(argv[2], &st) == 0 && S_ISDIR(st.st_mode))
+                scan_path = argv[2];
+            else
+                sock_path = argv[2];
+        } else if (argc > 3) {
+            if (argv[2][0] != '\0')
+                scan_path = argv[2];
+            sock_path = argv[3];
+        }
 
         const char* scan_roots[CONFIG_MAX_ROOTS];
         int scan_root_count = 0;
@@ -300,7 +310,8 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    fprintf(stderr, "Usage: archaic --daemon [scan_path] [socket]\n");
+    fprintf(stderr, "Usage: archaic --daemon [scan_path|socket]\n");
+    fprintf(stderr, "       archaic --daemon <scan_path> <socket>\n");
     fprintf(stderr, "       archaic --version\n");
     return 1;
 }

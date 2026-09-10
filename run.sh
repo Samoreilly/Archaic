@@ -214,8 +214,7 @@ uninstall_zsh() {
 install_user_service() {
     local bin="$SCRIPT_DIR/build/archaic"
     local cli="$SCRIPT_DIR/build/archaic-cli"
-    local scan="${1:-$HOME}"
-    [ -d "$scan" ] || scan="$HOME"
+    local scan="${1:-}"
 
     if [ ! -x "$bin" ]; then
         echo "Build the daemon first (cmake --build build --target archaic)"
@@ -235,6 +234,13 @@ install_user_service() {
         sock="/tmp/archaic-$(id -u).sock"
     fi
 
+    if [ -n "$scan" ] && [ -d "$scan" ]; then
+        mkdir -p "$HOME/.config/archaic"
+        if ! grep -qxF "$scan" "$HOME/.config/archaic/roots" 2>/dev/null; then
+            echo "$scan" >> "$HOME/.config/archaic/roots"
+        fi
+    fi
+
     cat > "$HOME/.config/systemd/user/archaic.service" <<EOF
 [Unit]
 Description=Archaic path-complete daemon
@@ -242,7 +248,7 @@ Documentation=https://github.com/Samoreilly/Archaic
 
 [Service]
 Type=simple
-ExecStart=$HOME/.local/bin/archaic --daemon $scan $sock
+ExecStart=$HOME/.local/bin/archaic --daemon $sock
 ExecStop=$HOME/.local/bin/archaic-cli --sock $sock shutdown
 Restart=on-failure
 RestartSec=2

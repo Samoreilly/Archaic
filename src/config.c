@@ -104,6 +104,176 @@ void config_ensure_parent_dir(const char* file) {
     }
 }
 
+void config_default_roots_path(char* buf, size_t n) {
+    if (!buf || n == 0)
+        return;
+    const char* xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg && xdg[0]) {
+        snprintf(buf, n, "%s/archaic/roots", xdg);
+        return;
+    }
+    const char* home = getenv("HOME");
+    if (home && home[0]) {
+        snprintf(buf, n, "%s/.config/archaic/roots", home);
+        return;
+    }
+    snprintf(buf, n, "/tmp/archaic-%d.roots", (int) getuid());
+}
+
+static int config_has_root(const archaic_config* cfg, const char* path) {
+    if (!cfg || !path || path[0] == '\0')
+        return 0;
+    if (cfg->daemon.scan_path[0] && strcmp(cfg->daemon.scan_path, path) == 0)
+        return 1;
+    for (int i = 0; i < cfg->daemon.scan_path_count; i++) {
+        if (strcmp(cfg->daemon.scan_paths[i], path) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int config_append_root(archaic_config* cfg, const char* path) {
+    if (!cfg || !path || path[0] == '\0' || config_has_root(cfg, path))
+        return 0;
+    if (cfg->daemon.scan_path_count >= CONFIG_MAX_ROOTS)
+        return -1;
+    strncpy(cfg->daemon.scan_paths[cfg->daemon.scan_path_count], path, CONFIG_MAX_STRING - 1);
+    cfg->daemon.scan_paths[cfg->daemon.scan_path_count][CONFIG_MAX_STRING - 1] = '\0';
+    cfg->daemon.scan_path_count++;
+    return 0;
+}
+
+void config_pick_workspace_roots(archaic_config* cfg) {
+    if (!cfg)
+        return;
+    const char* home = getenv("HOME");
+    if (!home || home[0] == '\0') {
+        strncpy(cfg->daemon.scan_path, "/", sizeof(cfg->daemon.scan_path) - 1);
+        cfg->daemon.scan_path_count = 0;
+        return;
+    }
+    static const char* const names[] = {"src",     "projects", "project", "dev", "code",
+                                        "git",     "repos",    "samdev",  "work"};
+    cfg->daemon.scan_path[0] = '\0';
+    cfg->daemon.scan_path_count = 0;
+    char buf[4096];
+    struct stat st;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        int n = snprintf(buf, sizeof(buf), "%s/%s", home, names[i]);
+        if (n < 0 || (size_t) n >= sizeof(buf))
+            continue;
+        if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode))
+            config_append_root(cfg, buf);
+    }
+    if (cfg->daemon.scan_path_count == 0)
+        strncpy(cfg->daemon.scan_path, home, sizeof(cfg->daemon.scan_path) - 1);
+}
+
+void config_load_roots_file(archaic_config* cfg) {
+    if (!cfg)
+        return;
+    char path[4096];
+    config_default_roots_path(path, sizeof(path));
+    FILE* f = fopen(path, "r");
+    if (!f)
+        return;
+    char line[4096];
+    while (fgets(line, sizeof(line), f)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0' || *p == '#' || *p == '\n')
+            continue;
+        size_t n = strlen(p);
+        while (n > 0 && (p[n - 1] == '\n' || p[n - 1] == '\r' || p[n - 1] == ' '))
+            p[--n] = '\0';
+        if (n == 0)
+            continue;
+        config_append_root(cfg, p);
+        if (cfg->daemon.scan_path[0] && strcmp(cfg->daemon.scan_path, p) == 0)
+            continue;
+    }
+    fclose(f);
+}
+
+int config_roots_add(const char* path) {
+    if (!path || path[0] == '\0')
+        return -1;
+    char resolved[4096];
+    if (!realpath(path, resolved))
+        strncpy(resolved, path, sizeof(resolved) - 1);
+    resolved[sizeof(resolved) - 1] = '\0';
+    struct stat st;
+    if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
+        return -1;
+
+    char list[4096];
+    config_default_roots_path(list, sizeof(list));
+    config_ensure_parent_dir(list);
+
+    FILE* in = fopen(list, "r");
+    if (in) {
+        char line[4096];
+        while (fgets(line, sizeof(line), in)) {
+            size_t n = strlen(line);
+            while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+                line[--n] = '\0';
+            if (strcmp(line, resolved) == 0) {
+                fclose(in);
+                return 0;
+            }
+        }
+        fclose(in);
+    }
+    FILE* out = fopen(list, "a");
+    if (!out)
+        return -1;
+    fprintf(out, "%s\n", resolved);
+    fclose(out);
+    return 0;
+}
+
+int config_roots_remove(const char* path) {
+    if (!path || path[0] == '\0')
+        return -1;
+    char resolved[4096];
+    if (!realpath(path, resolved))
+        strncpy(resolved, path, sizeof(resolved) - 1);
+    resolved[sizeof(resolved) - 1] = '\0';
+
+    char list[4096];
+    config_default_roots_path(list, sizeof(list));
+    FILE* in = fopen(list, "r");
+    if (!in)
+        return 0;
+    char tmp[4104];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", list);
+    FILE* out = fopen(tmp, "w");
+    if (!out) {
+        fclose(in);
+        return -1;
+    }
+    char line[4096];
+    while (fgets(line, sizeof(line), in)) {
+        char keep[4096];
+        strncpy(keep, line, sizeof(keep) - 1);
+        keep[sizeof(keep) - 1] = '\0';
+        size_t n = strlen(keep);
+        while (n > 0 && (keep[n - 1] == '\n' || keep[n - 1] == '\r'))
+            keep[--n] = '\0';
+        if (strcmp(keep, resolved) == 0 || strcmp(keep, path) == 0)
+            continue;
+        fputs(line, out);
+    }
+    fclose(in);
+    fclose(out);
+    if (rename(tmp, list) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
 void config_init_defaults(archaic_config* cfg) {
     memset(cfg, 0, sizeof(*cfg));
 
@@ -112,12 +282,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->daemon.rescan_interval_seconds = 300;
     cfg->daemon.log_level = 1;
     cfg->daemon.colored_output = true;
-    const char* home = getenv("HOME");
-    if (home && home[0])
-        strncpy(cfg->daemon.scan_path, home, sizeof(cfg->daemon.scan_path) - 1);
-    else
-        strncpy(cfg->daemon.scan_path, "/", sizeof(cfg->daemon.scan_path) - 1);
-    cfg->daemon.scan_path_count = 0;
+    config_pick_workspace_roots(cfg);
     config_default_socket_path(cfg->daemon.socket_path, sizeof(cfg->daemon.socket_path));
 
     cfg->storage.max_buckets = 65536;
@@ -674,31 +839,27 @@ int config_load(archaic_config* cfg, const char* path) {
 /* ── Default search paths ────────────────────────────────────────────────── */
 
 int config_load_default(archaic_config* cfg) {
-    /* 1. $ARCHAIC_CONFIG */
+    int found = -1;
     const char* env = getenv("ARCHAIC_CONFIG");
-    if (env && *env) {
-        if (config_load(cfg, env) == 0)
-            return 0;
-    }
+    if (env && *env && config_load(cfg, env) == 0)
+        found = 0;
 
-    /* 2. ~/.config/archaic/config.toml */
     const char* home = getenv("HOME");
-    if (home && *home) {
+    if (found != 0 && home && *home) {
         char path[4096];
         int n = snprintf(path, sizeof(path), "%s/.config/archaic/config.toml", home);
-        if (n > 0 && n < (int) sizeof(path)) {
-            if (config_load(cfg, path) == 0)
-                return 0;
-        }
+        if (n > 0 && n < (int) sizeof(path) && config_load(cfg, path) == 0)
+            found = 0;
     }
 
-    /* 3. /etc/archaic/config.toml */
-    if (config_load(cfg, "/etc/archaic/config.toml") == 0)
-        return 0;
+    if (found != 0 && config_load(cfg, "/etc/archaic/config.toml") == 0)
+        found = 0;
 
-    /* None found — use defaults */
-    config_init_defaults(cfg);
-    return -1;
+    if (found != 0)
+        config_init_defaults(cfg);
+
+    config_load_roots_file(cfg);
+    return found;
 }
 
 void config_expand_vars(archaic_config* cfg) {

@@ -881,9 +881,20 @@ void daemon_run_scan(daemon_state* state, const char* path) {
     if (atomic_load(&state->scanning))
         return;
 
-    state->last_scan_path_count = 1;
-    strncpy(state->last_scan_paths[0], path, sizeof(state->last_scan_paths[0]) - 1);
-    state->last_scan_paths[0][sizeof(state->last_scan_paths[0]) - 1] = '\0';
+    int known = 0;
+    for (int i = 0; i < state->last_scan_path_count; i++) {
+        if (strcmp(state->last_scan_paths[i], path) == 0) {
+            known = 1;
+            break;
+        }
+    }
+    if (!known && state->last_scan_path_count < CONFIG_MAX_ROOTS) {
+        strncpy(state->last_scan_paths[state->last_scan_path_count], path,
+                sizeof(state->last_scan_paths[0]) - 1);
+        state->last_scan_paths[state->last_scan_path_count][sizeof(state->last_scan_paths[0]) - 1] =
+            '\0';
+        state->last_scan_path_count++;
+    }
 
     scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
     if (!ctx)

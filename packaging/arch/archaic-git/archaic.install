@@ -1,7 +1,9 @@
 post_install() {
   echo
-  echo "  Enable the user daemon (indexes \$HOME):"
+  echo "  Enable the user daemon:"
   echo "    systemctl --user enable --now archaic.service"
+  echo "  It indexes ~/src, ~/projects, ~/dev, … if they exist, not all of \$HOME."
+  echo "  Add a tree:  archaic-cli watch ~/code"
   echo
   echo "  Fish: open a new terminal, type  cd  then Tab."
   echo "  Bash: source /usr/share/archaic/archaic.bash  (add to ~/.bashrc)"

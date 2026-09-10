@@ -560,18 +560,9 @@ function __archaic_is_tool_path_token -d "Token looks like a path (for git/docke
     string match -qr -- '^(\.|~|/)|/' -- "$tok"
 end
 
-function __archaic_record_preexec --on-event fish_preexec -d "Learn paths from executed commands"
-    for tok in (commandline -o)
-        if string match -q -- '-*' "$tok"
-            continue
-        end
-        set -l p "$tok"
-        if not string match -q '/*' -- "$p"
-            set p "$PWD/$p"
-        end
-        if test -e "$p"
-            __archaic_helper_query "select $p" >/dev/null 2>&1
-        end
+function __archaic_on_pwd --on-variable PWD -d "Learn from cd"
+    if test -d "$PWD"
+        __archaic_helper_query "select $PWD" >/dev/null 2>&1
     end
 end
 

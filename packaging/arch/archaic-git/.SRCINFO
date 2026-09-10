@@ -1,0 +1,22 @@
+pkgbase = archaic-git
+	pkgdesc = Path-complete daemon for Fish, Bash, and Zsh
+	pkgver = r0.0
+	pkgrel = 1
+	url = https://github.com/Samoreilly/Archaic
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cmake
+	makedepends = git
+	makedepends = gcc
+	depends = fmt
+	depends = glibc
+	optdepends = fish: tab completion (auto-loaded)
+	optdepends = bash: tab completion (source /usr/share/archaic/archaic.bash)
+	optdepends = zsh: tab completion (source /usr/share/archaic/archaic.zsh)
+	provides = archaic
+	conflicts = archaic
+	source = archaic-git::git+https://github.com/Samoreilly/Archaic.git
+	sha256sums = SKIP
+
+pkgname = archaic-git

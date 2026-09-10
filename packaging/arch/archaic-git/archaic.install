@@ -1,0 +1,20 @@
+post_install() {
+  echo
+  echo "  Enable the user daemon (indexes \$HOME):"
+  echo "    systemctl --user enable --now archaic.service"
+  echo
+  echo "  Fish: open a new terminal, type  cd  then Tab."
+  echo "  Bash: source /usr/share/archaic/archaic.bash  (add to ~/.bashrc)"
+  echo "  Zsh:  source /usr/share/archaic/archaic.zsh   (add to ~/.zshrc)"
+  echo
+  echo "  Check: archaic-cli doctor"
+  echo
+}
+
+post_upgrade() {
+  echo "  Restart the daemon: systemctl --user restart archaic.service"
+}
+
+post_remove() {
+  echo "  Disable leftover unit: systemctl --user disable --now archaic.service"
+}

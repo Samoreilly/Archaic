@@ -5,6 +5,23 @@ tree once and answers Tab over a Unix socket.
 
 ## Install
 
+### Arch / CachyOS
+
+```bash
+git clone https://github.com/Samoreilly/Archaic.git
+cd Archaic/packaging/arch/archaic-git
+makepkg -si
+systemctl --user enable --now archaic.service
+```
+
+If you previously used `./install.sh`, run `./run.sh disable-service` first so the pacman unit is not shadowed.
+
+Then open a **new** terminal, type `cd ` and press Tab.
+
+To publish on the AUR later: push `packaging/arch/archaic-git` to `ssh://aur@aur.archlinux.org/archaic-git.git`. After that: `paru -S archaic-git`.
+
+### Anywhere else
+
 Needs CMake 3.22+, a C23 compiler, and [libfmt](https://fmt.dev).
 
 ```bash
@@ -18,13 +35,11 @@ cd Archaic
 # ./install.sh ~/projects # or a specific tree
 ```
 
-Open a **new** terminal, type `cd ` and press Tab.
+Keep the clone if you use `./install.sh` (the shell plugin is a symlink into it).
 
 ```bash
-archaic-cli doctor        # socket, ping, scan path
+archaic-cli doctor
 ```
-
-Keep the clone. The shell plugin is a symlink into it.
 
 ## After install
 

@@ -4,8 +4,8 @@ Documentation=https://github.com/Samoreilly/Archaic
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/archaic --daemon %h %t/archaic.sock
-ExecStop=%h/.local/bin/archaic-cli --sock %t/archaic.sock shutdown
+ExecStart=/usr/bin/archaic --daemon %h %t/archaic.sock
+ExecStop=/usr/bin/archaic-cli --sock %t/archaic.sock shutdown
 Restart=on-failure
 RestartSec=2
 

@@ -1,0 +1,43 @@
+# Maintainer: Samoreilly <https://github.com/Samoreilly>
+pkgname=archaic-git
+pkgver=r0.0
+pkgrel=1
+pkgdesc="Path-complete daemon for Fish, Bash, and Zsh"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Samoreilly/Archaic"
+license=('MIT')
+depends=('fmt' 'glibc')
+makedepends=('cmake' 'git' 'gcc')
+optdepends=(
+  'fish: tab completion (auto-loaded)'
+  'bash: tab completion (source /usr/share/archaic/archaic.bash)'
+  'zsh: tab completion (source /usr/share/archaic/archaic.zsh)'
+)
+provides=('archaic')
+conflicts=('archaic')
+install=archaic.install
+source=("$pkgname::git+https://github.com/Samoreilly/Archaic.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$pkgname"
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cmake -S "$srcdir/$pkgname" -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+  rm -f "$pkgdir/usr/lib/systemd/system/archaic.service"
+  install -Dm644 "$srcdir/$pkgname/LICENSE" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/$pkgname/zsh/archaic.zsh" \
+    "$pkgdir/usr/share/archaic/archaic.zsh"
+  install -Dm644 "$srcdir/$pkgname/bash/archaic.bash" \
+    "$pkgdir/usr/share/archaic/archaic.bash"
+}

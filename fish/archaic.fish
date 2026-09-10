@@ -13,9 +13,8 @@ else
 end
 set -g __archaic_daemon_healthy 1
 set -g __archaic_version_checked 0
-set -g __archaic_helper_pid ""
-set -g __archaic_cmd_fifo ""
-set -g __archaic_out_fifo ""
+set -g __archaic_query_timeout 0.4
+set -g __archaic_ping_timeout 0.3
 set -g __archaic_last_query_time 0
 set -g __archaic_debounce_ms 80
 set -g __archaic_suggestion ""
@@ -96,81 +95,47 @@ if test -n "$config_file"
     end
 end
 
-# ── Helper lifecycle ──────────────────────────────────────────────────────────
-function __archaic_helper_cleanup -d "Stop helper and remove fifos" --on-event fish_exit
-    if test -n "$__archaic_helper_pid"
-        kill $__archaic_helper_pid 2>/dev/null
-    end
-    set -g __archaic_helper_pid ""
-    if test -n "$__archaic_cmd_fifo"
-        rm -f $__archaic_cmd_fifo
-    end
-    if test -n "$__archaic_out_fifo"
-        rm -f $__archaic_out_fifo
-    end
-end
-
-function __archaic_ensure_helper -d "Start archaic-helper if not running"
-    if test -n "$__archaic_helper_pid"
-        if kill -0 $__archaic_helper_pid 2>/dev/null
-            return 0
-        end
-        set -g __archaic_helper_pid ""
-    end
-
+# ── Bounded daemon calls (Tab must never block) ───────────────────────────────
+# One-shot helper per query: no fifos, no persistent process, no fifo-open
+# deadlocks. Every call is capped so a wedged daemon degrades to Fish's
+# builtin completion instead of freezing the terminal.
+function __archaic_helper_query -a line -d "One-shot helper query with timeout"
     if not test -x "$archaic_helper_path"
         return 1
     end
-
-    set -g __archaic_cmd_fifo /tmp/archaic-h-cmd-$fish_pid
-    set -g __archaic_out_fifo /tmp/archaic-h-out-$fish_pid
-    rm -f $__archaic_cmd_fifo $__archaic_out_fifo
-    mkfifo $__archaic_cmd_fifo $__archaic_out_fifo
-    or return 1
-
-    $archaic_helper_path --cmd-fifo $__archaic_cmd_fifo --out-fifo $__archaic_out_fifo $archaic_sock_path >/dev/null 2>&1 &
-    set -g __archaic_helper_pid $last_pid
-    disown $__archaic_helper_pid 2>/dev/null
-    sleep 0.05
-    if kill -0 $__archaic_helper_pid 2>/dev/null
-        return 0
+    if command -sq timeout
+        printf '%s\n' "$line" | timeout $__archaic_query_timeout "$archaic_helper_path" "$archaic_sock_path" 2>/dev/null
+    else
+        printf '%s\n' "$line" | "$archaic_helper_path" "$archaic_sock_path" 2>/dev/null
     end
-    set -g __archaic_helper_pid ""
-    return 1
 end
 
-function __archaic_helper_query -a line -d "Send one command to the persistent helper"
-    if not __archaic_ensure_helper
-        return 1
+function __archaic_cli_query -d "Bounded archaic-cli call"
+    if command -sq timeout
+        timeout $__archaic_query_timeout command $archaic_cli_path $argv 2>/dev/null
+    else
+        command $archaic_cli_path $argv 2>/dev/null
+    end
+end
+
+function __archaic_ping -d "Bounded daemon ping"
+    if command -sq timeout
+        timeout $__archaic_ping_timeout command $archaic_cli_path ping 2>/dev/null
+    else
+        command $archaic_cli_path ping 2>/dev/null
+    end
+end
+
+function __archaic_learn_path -a p -d "Record accepted path without blocking"
+    if not test -x "$archaic_helper_path"
+        return
     end
     if command -sq timeout
-        timeout 0.15 /bin/sh -c 'printf "%s\n" "$1" > "$2"' sh "$line" $__archaic_cmd_fifo
-        or begin
-            kill $__archaic_helper_pid 2>/dev/null
-            set -g __archaic_helper_pid ""
-            return 1
-        end
+        printf 'select %s\n' "$p" | timeout 0.2 "$archaic_helper_path" "$archaic_sock_path" >/dev/null 2>&1 &
     else
-        printf '%s\n' "$line" > $__archaic_cmd_fifo
+        printf 'select %s\n' "$p" | "$archaic_helper_path" "$archaic_sock_path" >/dev/null 2>&1 &
     end
-    set -l acc
-    set -l got_end 0
-    while read -t 0.15 -l row
-        if test "$row" = "."
-            set got_end 1
-            break
-        end
-        set -a acc $row
-    end < $__archaic_out_fifo
-    if test $got_end -eq 0
-        kill $__archaic_helper_pid 2>/dev/null
-        set -g __archaic_helper_pid ""
-        return 1
-    end
-    if test (count $acc) -gt 0
-        printf '%s\n' $acc
-    end
-    return 0
+    disown 2>/dev/null
 end
 
 # ── Daemon health check ───────────────────────────────────────────────────────
@@ -234,7 +199,7 @@ function __archaic_cleanup_socket -d "Remove stale socket file if daemon is not 
     end
     if test -S "$archaic_sock_path"
         # Socket exists - try ping to verify daemon is alive
-        set -l ping_result (command $archaic_cli_path ping 2>/dev/null)
+        set -l ping_result (__archaic_ping)
         if test $status -ne 0
             # Daemon not responding - clean up stale socket
             rm -f "$archaic_sock_path" 2>/dev/null
@@ -250,7 +215,7 @@ function __archaic_check_version -d "Verify CLI/helper version compatibility"
     end
 
     # Quick ping to verify daemon responds
-    set -l ping_output (command $archaic_cli_path ping 2>/dev/null)
+    set -l ping_output (__archaic_ping)
     if test $status -ne 0
         # Daemon might be unreachable - try cleanup
         __archaic_cleanup_socket
@@ -434,7 +399,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     set -l req (printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" "$__archaic_max_completions" "$PWD" "$resolved")
     set -l results (__archaic_helper_query "$req")
     if test -z "$results"
-        set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions "$PWD" $dirs_only 2>/dev/null)
+        set results (__archaic_cli_query complete "$resolved" $__archaic_max_completions "$PWD" $dirs_only)
     end
 
     set -l scanning 0
@@ -478,7 +443,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         end
         set -l fuzzy_results (__archaic_helper_query "fuzzy $fuzzy_q $__archaic_max_completions")
         if test -z "$fuzzy_results"
-            set fuzzy_results (command $archaic_cli_path fuzzy "$fuzzy_q" $__archaic_max_completions 2>/dev/null)
+            set fuzzy_results (__archaic_cli_query fuzzy "$fuzzy_q" $__archaic_max_completions)
         end
 
         for line in $fuzzy_results
@@ -562,7 +527,7 @@ end
 
 function __archaic_on_pwd --on-variable PWD -d "Learn from cd"
     if test -d "$PWD"
-        __archaic_helper_query "select $PWD" >/dev/null 2>&1
+        __archaic_learn_path "$PWD"
     end
 end
 
@@ -613,7 +578,7 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     # Query: try helper first, fall back to CLI
     set -l output (__archaic_helper_query "complete $resolved 1 $PWD")
     if test -z "$output"
-        set output (command $archaic_cli_path complete "$resolved" 1 2>/dev/null)
+        set output (__archaic_cli_query complete "$resolved" 1)
     end
 
     if test $status -ne 0 -o -z "$output"
@@ -699,7 +664,7 @@ function __archaic_fetch_completions -d "Fetch completions for cycling"
 
     set -l results (__archaic_helper_query "complete $resolved $__archaic_max_completions $PWD")
     if test -z "$results"
-        set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions 2>/dev/null)
+        set results (__archaic_cli_query complete "$resolved" $__archaic_max_completions)
     end
 
     if test -z "$results"
@@ -871,7 +836,7 @@ function __archaic_accept_suggestion
         if not string match -q '/*' -- "$p"
             set p "$PWD/$p"
         end
-        __archaic_helper_query "select $p" >/dev/null 2>&1
+        __archaic_learn_path "$p"
         set -g __archaic_suggestion ""
         __archaic_reset_cycle
         commandline -f repaint
@@ -926,7 +891,7 @@ end
 # ── Debug/status function ─────────────────────────────────────────────────────
 function __archaic_status -d "Show archaic daemon status"
     if test -S "$archaic_sock_path"
-        set -l ping_output (command $archaic_cli_path ping 2>/dev/null)
+        set -l ping_output (__archaic_ping)
         if test $status -eq 0
             echo "Archaic daemon: running ($ping_output)"
         else
@@ -936,12 +901,7 @@ function __archaic_status -d "Show archaic daemon status"
         echo "Archaic daemon: not running"
     end
     echo "CLI: $archaic_cli_path"
-    echo "Helper: $archaic_helper_path"
-    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        echo "Helper PID: $__archaic_helper_pid (running)"
-    else
-        echo "Helper PID: (not running)"
-    end
+    echo "Helper: $archaic_helper_path (one-shot per Tab)"
     echo "Socket: $archaic_sock_path"
     echo "Commands: $__archaic_commands"
     echo "Version checked: $__archaic_version_checked"

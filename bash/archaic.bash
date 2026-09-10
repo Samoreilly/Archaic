@@ -71,6 +71,30 @@ _archaic_resolve_paths() {
 
 _archaic_resolve_paths
 
+# ── Bounded daemon calls (Tab must never block) ──────────────────────────────
+_archaic_to() {
+    local _t="$1"
+    shift
+    if command -v timeout &>/dev/null; then
+        timeout "$_t" "$@"
+    else
+        "$@"
+    fi
+}
+
+_archaic_q() {
+    [[ -x "${_archaic_helper:-}" ]] || return 1
+    printf '%s\n' "$1" | _archaic_to 0.4 "$_archaic_helper" "$_archaic_sock" 2>/dev/null
+}
+
+_archaic_c() {
+    _archaic_to 0.4 "$_archaic_cli" "$@" 2>/dev/null
+}
+
+_archaic_ping() {
+    _archaic_to 0.3 "$_archaic_cli" ping 2>/dev/null
+}
+
 # ── Environment variable & tilde expansion ────────────────────────────────────
 _archaic_expand_path() {
     local path="$1"
@@ -231,10 +255,10 @@ _archaic_do_complete() {
 
     local results=""
     if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-        results="$(printf 'complete\t%s\t%s\t%s\t%s\n' "$dirs_only" 50 "$PWD" "$resolved" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
+        results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" 50 "$PWD" "$resolved")")"
     fi
     if [[ -z "$results" ]]; then
-        results="$("$_archaic_cli" complete "$resolved" 50 "$PWD" "$dirs_only" 2>/dev/null)" || return
+        results="$(_archaic_c complete "$resolved" 50 "$PWD" "$dirs_only")" || return
     fi
 
     local found=0
@@ -288,10 +312,10 @@ _archaic_do_complete() {
         fi
         local fuzzy_results=""
         if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-            fuzzy_results="$(echo "fuzzy $fuzzy_q 50" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
+            fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q 50")"
         fi
         if [[ -z "$fuzzy_results" ]]; then
-            fuzzy_results="$("$_archaic_cli" fuzzy "$fuzzy_q" 50 2>/dev/null)" || return
+            fuzzy_results="$(_archaic_c fuzzy "$fuzzy_q" 50)" || return
         fi
 
         while IFS= read -r line; do
@@ -375,7 +399,7 @@ unset _archaic_cmd
 archaic-status() {
     if [[ -S "$_archaic_sock" ]]; then
         local ping_output
-        ping_output="$("$_archaic_cli" ping 2>/dev/null)"
+        ping_output="$(_archaic_ping)"
         if [[ $? -eq 0 ]]; then
             echo "Archaic daemon: running ($ping_output)"
         else
@@ -430,10 +454,10 @@ _archaic_get_suggestion() {
     # Query daemon (try helper first, then CLI)
     local output=""
     if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-        output="$(echo "complete $resolved 1 $PWD $cmd" | "$_archaic_helper" "$_archaic_sock" 2>/dev/null)"
+        output="$(_archaic_q "complete $resolved 1 $PWD $cmd")"
     fi
     if [[ -z "$output" ]]; then
-        output="$("$_archaic_cli" complete "$resolved" 1 2>/dev/null)" || return
+        output="$(_archaic_c complete "$resolved" 1)" || return
     fi
 
     # Parse result: "D /path" or "F /path"

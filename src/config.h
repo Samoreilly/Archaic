@@ -82,6 +82,9 @@ int config_load_default(archaic_config* cfg);
 
 /* Initialize config with defaults (no file parsing). */
 void config_init_defaults(archaic_config* cfg);
+void config_default_socket_path(char* buf, size_t n);
+void config_default_state_path(char* buf, size_t n);
+void config_ensure_parent_dir(const char* file);
 
 /* Load .archaicignore from a directory, merging patterns into the scanner config.
    Searches upward from start_path for .archaicignore until root or max_depth.

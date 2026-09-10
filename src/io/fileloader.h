@@ -50,6 +50,7 @@ typedef struct {
     fs_watcher* watcher;
     atomic_bool watcher_dirty;
     struct timespec start_time;
+    char state_path[4096];
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);
@@ -84,6 +85,7 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
 int daemon_get_recent_files(daemon_state* state, char** paths, bool* is_dirs, int n);
 
 void daemon_touch_recent(daemon_state* state, const char* path, bool is_dir);
+void daemon_record_selection(daemon_state* state, const char* path);
 
 int daemon_start_ipc(daemon_state* state, const char* sock_path);
 

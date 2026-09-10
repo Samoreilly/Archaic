@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SOCK_PATH="/tmp/archaic-daemon.sock"
 FISH_CONF_DIR="$HOME/.config/fish/conf.d"
 FISH_PLUGIN="$SCRIPT_DIR/fish/archaic.fish"
 
@@ -51,11 +50,15 @@ resolve_sock_path() {
         sock="$(toml_get "$config_file" daemon socket_path)"
         [ -n "$sock" ] && echo "$sock" && return
     fi
-    echo "/tmp/archaic-daemon.sock"
+    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        echo "$XDG_RUNTIME_DIR/archaic.sock"
+    else
+        echo "/tmp/archaic-$(id -u).sock"
+    fi
 }
 
 usage() {
-    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|install-bash|uninstall-bash|restart|rescan|install} [scan_path]"
+    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|install-bash|uninstall-bash|restart|rescan|install|enable-service|disable-service} [scan_path]"
     echo ""
     echo "Commands:"
     echo "  start [path]    Start the daemon scanning the given path (default: /home/sam/samdev)"
@@ -68,6 +71,8 @@ usage() {
     echo "  install-bash    Install bash completion script"
     echo "  uninstall-bash  Remove bash completion script"
     echo "  install         Build and install to system paths (requires sudo)"
+    echo "  enable-service  Install systemd --user unit so the daemon starts at login"
+    echo "  disable-service Remove the user systemd unit"
     echo ""
     echo "Quick start (build + install + run in one step):"
     echo "  ./install.sh [scan_path]"
@@ -191,6 +196,59 @@ uninstall_bash() {
     echo "Bash completion removed"
 }
 
+install_user_service() {
+    local bin="$SCRIPT_DIR/build/archaic"
+    local cli="$SCRIPT_DIR/build/archaic-cli"
+    local scan="${1:-$HOME}"
+    [ -d "$scan" ] || scan="$HOME"
+
+    if [ ! -x "$bin" ]; then
+        echo "Build the daemon first (cmake --build build --target archaic)"
+        return 1
+    fi
+
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$bin" "$HOME/.local/bin/archaic"
+    ln -sf "$cli" "$HOME/.local/bin/archaic-cli"
+    mkdir -p "$HOME/.config/systemd/user"
+
+    local sock
+    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+        sock="$XDG_RUNTIME_DIR/archaic.sock"
+    else
+        sock="/tmp/archaic-$(id -u).sock"
+    fi
+
+    cat > "$HOME/.config/systemd/user/archaic.service" <<EOF
+[Unit]
+Description=Archaic path-complete daemon
+Documentation=https://github.com/Samoreilly/Archaic
+
+[Service]
+Type=simple
+ExecStart=$HOME/.local/bin/archaic --daemon $scan $sock
+ExecStop=$HOME/.local/bin/archaic-cli --sock $sock shutdown
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+    systemctl --user daemon-reload
+    systemctl --user enable --now archaic.service
+    loginctl enable-linger "$USER" 2>/dev/null || true
+    echo "User service enabled (starts at login/boot)."
+    echo "  systemctl --user status archaic"
+}
+
+disable_user_service() {
+    systemctl --user disable --now archaic.service 2>/dev/null || true
+    rm -f "$HOME/.config/systemd/user/archaic.service"
+    systemctl --user daemon-reload 2>/dev/null || true
+    echo "User service disabled."
+}
+
 case "${1:-}" in
     start)
         start_daemon "${2:-}"
@@ -221,10 +279,17 @@ case "${1:-}" in
         echo "Installing archaic..."
         cd "$SCRIPT_DIR/build" && sudo make install
         echo "Installed. Enable with: sudo systemctl enable --now archaic@\$USER"
+        echo "Or user service: ./run.sh enable-service"
+        ;;
+    enable-service)
+        install_user_service "${2:-}"
+        ;;
+    disable-service)
+        disable_user_service
         ;;
     rescan)
         echo "Triggering rescan..."
-        "$SCRIPT_DIR/build/archaic-cli" scan "${2:-/home/sam/samdev}"
+        "$SCRIPT_DIR/build/archaic-cli" scan "${2:-$HOME}"
         ;;
     *)
         usage

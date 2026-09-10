@@ -4,7 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 SCAN_PATH="${1:-$HOME}"
-SOCK_PATH="/tmp/archaic-daemon.sock"
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    SOCK_PATH="$XDG_RUNTIME_DIR/archaic.sock"
+else
+    SOCK_PATH="/tmp/archaic-$(id -u).sock"
+fi
 
 # ── Color output ─────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -151,9 +155,12 @@ info "  Scan path: $SCAN_PATH"
 info "  Socket:    $SOCK_PATH"
 info "  Shell:     $SHELL_TYPE"
 echo ""
+"$SCRIPT_DIR/run.sh" enable-service "$SCAN_PATH" 2>/dev/null || true
+
 info "Commands:"
-info "  ./run.sh status    — Check daemon status"
-info "  ./run.sh stop      — Stop daemon"
-info "  ./run.sh restart   — Restart daemon"
-info "  ./run.sh rescan    — Trigger rescan"
+info "  ./run.sh status          — Check daemon status"
+info "  ./run.sh enable-service  — Start at login (systemd --user)"
+info "  ./run.sh stop            — Stop daemon"
+info "  ./run.sh restart         — Restart daemon"
+info "  ./run.sh rescan          — Trigger rescan"
 echo ""

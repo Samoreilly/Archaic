@@ -18,8 +18,6 @@ add_executable(
     src/scanner.c
     src/ignore-file.c
     src/hashset.c
-    test/test.c
-    test/perf.c
     ipc/server.c
     ipc/client.c
     src/threadpool.c

@@ -24,6 +24,7 @@
 static char g_git_root[4096] = {0};
 static pthread_mutex_t g_git_root_lock = PTHREAD_MUTEX_INITIALIZER;
 
+#if 0
 static bool dir_has_git(const char* dir) {
     char git_path[4096];
     int n = snprintf(git_path, sizeof(git_path), "%s/.git", dir);
@@ -61,8 +62,15 @@ static bool find_git_root(const char* path, char* root_out, size_t root_cap) {
     }
     return false;
 }
+#endif
 
 bool is_git_tracked(const char* path) {
+    (void) path;
+    return false;
+}
+
+#if 0
+bool is_git_tracked_popen(const char* path) {
     if (!path || path[0] == '\0')
         return false;
 
@@ -111,8 +119,8 @@ bool is_git_tracked(const char* path) {
     pclose(fp);
     return tracked;
 }
+#endif
 
-/* Reset the cached git root (call when scan path changes) */
 void git_root_reset(void) {
     pthread_mutex_lock(&g_git_root_lock);
     g_git_root[0] = '\0';
@@ -335,9 +343,9 @@ void session_reset(void) {
 }
 
 static inline RadixChild* find_child(RadixNode* node, char c) {
-    uint8_t n = node->child_count;
+    uint16_t n = node->child_count;
     if (n <= 8) {
-        for (uint8_t i = 0; i < n; i++) {
+        for (uint16_t i = 0; i < n; i++) {
             if (node->children[i].edge_char == c)
                 return &node->children[i];
         }
@@ -359,11 +367,11 @@ static inline RadixChild* find_child(RadixNode* node, char c) {
 
 static inline void add_child(RadixNode* node, char c, RadixNode* child) {
     if (node->child_count >= node->child_capacity) {
-        if (node->child_capacity >= 255)
+        if (node->child_capacity >= 65535)
             return;
         size_t new_cap = (size_t) node->child_capacity * 2;
-        if (new_cap > 255)
-            new_cap = 255;
+        if (new_cap > 65535)
+            new_cap = 65535;
         RadixChild* new_children = malloc(new_cap * sizeof(RadixChild));
         if (!new_children)
             return;
@@ -372,7 +380,7 @@ static inline void add_child(RadixNode* node, char c, RadixNode* child) {
             free(node->children);
         }
         node->children = new_children;
-        node->child_capacity = (uint8_t) new_cap;
+        node->child_capacity = (uint16_t) new_cap;
     }
 
     /* Find insertion position to maintain sorted order by edge_char */
@@ -399,10 +407,10 @@ static inline void add_child(RadixNode* node, char c, RadixNode* child) {
     node->child_count++;
 }
 
-__attribute__((unused)) static void remove_child_at(RadixNode* node, uint8_t idx) {
+__attribute__((unused)) static void remove_child_at(RadixNode* node, uint16_t idx) {
     if (idx >= node->child_count)
         return;
-    for (uint8_t i = idx; i < node->child_count - 1; i++) {
+    for (uint16_t i = idx; i < node->child_count - 1; i++) {
         node->children[i] = node->children[i + 1];
     }
     node->child_count--;
@@ -425,7 +433,7 @@ Trie* create_trie(void) {
 void trie_free_recursive(Trie* node) {
     if (!node)
         return;
-    for (uint8_t i = 0; i < node->child_count; i++) {
+    for (uint16_t i = 0; i < node->child_count; i++) {
         trie_free_recursive(node->children[i].node);
     }
     if (node->children != node->inline_storage) {
@@ -477,6 +485,9 @@ void insert(Trie* root, const char* str) {
 
             if (i == len) {
                 curr->is_leaf = true;
+                if (curr->freq < UINT64_MAX)
+                    curr->freq++;
+                curr->last_access = (uint64_t) time(NULL);
                 return;
             }
         } else if (match == 0) {
@@ -509,7 +520,7 @@ void insert(Trie* root, const char* str) {
             memmove(child_node->key, child_node->key + match, child_node->key_len - match + 1);
             child_node->key_len -= match;
 
-            uint8_t child_idx = 0;
+            uint16_t child_idx = 0;
             for (; child_idx < curr->child_count; child_idx++) {
                 if (&curr->children[child_idx] == child)
                     break;
@@ -672,7 +683,7 @@ static void collect_dfs(RadixNode* node, char* buffer, size_t depth, const char*
         }
     }
 
-    for (uint8_t i = 0; i < node->child_count; i++) {
+    for (uint16_t i = 0; i < node->child_count; i++) {
         RadixChild* child = &node->children[i];
         RadixNode* child_node = child->node;
         size_t klen = child_node->key_len;
@@ -899,6 +910,8 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
             score += (24.0 - age_hours) * (0.05 / 24.0);
     }
 
+    score += session_get_boost(path);
+
     if (hidden_file_penalty > 0.0 && is_hidden_path(path)) {
         int user_typed_dot = 0;
         if (prefix && prefix[0] != '\0') {
@@ -950,28 +963,23 @@ static int one_level_child(const char* prefix, size_t prefix_len, const char* fu
     return 1;
 }
 
+static int scored_grow(scored_completions* sc) {
+    size_t ncap = sc->capacity < 64 ? 64 : sc->capacity * 2;
+    scored_entry* n = realloc(sc->entries, ncap * sizeof(scored_entry));
+    if (!n)
+        return -1;
+    memset(n + sc->capacity, 0, (ncap - sc->capacity) * sizeof(scored_entry));
+    sc->entries = n;
+    sc->capacity = ncap;
+    return 0;
+}
+
 static void scored_insert(scored_completions* sc, const char* path, double score, uint64_t freq,
                           uint64_t last_access, bool is_dir) {
-    if (sc->count < sc->capacity) {
-        scored_fill(&sc->entries[sc->count], path, score, freq, last_access, is_dir);
-        if (sc->count == 0 || score < sc->entries[sc->min_idx].score)
-            sc->min_idx = sc->count;
-        sc->count++;
+    if (sc->count >= sc->capacity && scored_grow(sc) != 0)
         return;
-    }
-
-    size_t min_i = sc->min_idx;
-    if (min_i >= sc->count)
-        min_i = 0;
-    if (score <= sc->entries[min_i].score)
-        return;
-    scored_fill(&sc->entries[min_i], path, score, freq, last_access, is_dir);
-    min_i = 0;
-    for (size_t i = 1; i < sc->count; i++) {
-        if (sc->entries[i].score < sc->entries[min_i].score)
-            min_i = i;
-    }
-    sc->min_idx = min_i;
+    scored_fill(&sc->entries[sc->count], path, score, freq, last_access, is_dir);
+    sc->count++;
 }
 
 typedef struct {
@@ -1024,7 +1032,7 @@ static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
             return;
     }
 
-    for (uint8_t i = 0; i < node->child_count; i++) {
+    for (uint16_t i = 0; i < node->child_count; i++) {
         RadixChild* child = &node->children[i];
         RadixNode* child_node = child->node;
         size_t klen = child_node->key_len;
@@ -1451,7 +1459,7 @@ static void fuzzy_collect_dfs(RadixNode* node, char* buffer, size_t depth, fuzzy
         }
     }
 
-    for (uint8_t i = 0; i < node->child_count; i++) {
+    for (uint16_t i = 0; i < node->child_count; i++) {
         RadixChild* child = &node->children[i];
         RadixNode* child_node = child->node;
         size_t klen = child_node->key_len;
@@ -1527,7 +1535,7 @@ size_t trie_node_count(Trie* root) {
     if (!root)
         return 0;
     size_t count = 1;
-    for (uint8_t i = 0; i < root->child_count; i++) {
+    for (uint16_t i = 0; i < root->child_count; i++) {
         count += trie_node_count(root->children[i].node);
     }
     return count;
@@ -1538,7 +1546,7 @@ static void compact_node(RadixNode* node) {
         return;
 
     /* Recurse into children first */
-    for (uint8_t i = 0; i < node->child_count; i++) {
+    for (uint16_t i = 0; i < node->child_count; i++) {
         compact_node(node->children[i].node);
     }
 
@@ -1572,7 +1580,7 @@ static void compact_node(RadixNode* node) {
                 if (node->children != node->inline_storage)
                     free(node->children);
                 node->children = new_children;
-                node->child_capacity = (uint8_t) new_cap;
+        node->child_capacity = (uint16_t) new_cap;
             }
             memcpy(node->children, child_node->children,
                    child_node->child_count * sizeof(RadixChild));
@@ -1599,7 +1607,7 @@ void trie_compact(Trie* root) {
     if (!root)
         return;
     /* Compact children of root, but never compact root itself */
-    for (uint8_t i = 0; i < root->child_count; i++) {
+    for (uint16_t i = 0; i < root->child_count; i++) {
         compact_node(root->children[i].node);
     }
 }

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 /* ── Ignore helpers ──────────────────────────────────────────────────────── */
 
@@ -61,6 +62,48 @@ static void set_default_ignores(archaic_config* cfg) {
 
 /* ── Defaults ────────────────────────────────────────────────────────────── */
 
+void config_default_socket_path(char* buf, size_t n) {
+    if (!buf || n == 0)
+        return;
+    const char* rt = getenv("XDG_RUNTIME_DIR");
+    if (rt && rt[0]) {
+        snprintf(buf, n, "%s/archaic.sock", rt);
+        return;
+    }
+    snprintf(buf, n, "/tmp/archaic-%d.sock", (int) getuid());
+}
+
+void config_default_state_path(char* buf, size_t n) {
+    if (!buf || n == 0)
+        return;
+    const char* cache = getenv("XDG_CACHE_HOME");
+    if (cache && cache[0]) {
+        snprintf(buf, n, "%s/archaic/state.bin", cache);
+        return;
+    }
+    const char* home = getenv("HOME");
+    if (home && home[0]) {
+        snprintf(buf, n, "%s/.cache/archaic/state.bin", home);
+        return;
+    }
+    snprintf(buf, n, "/tmp/archaic-%d.state", (int) getuid());
+}
+
+void config_ensure_parent_dir(const char* file) {
+    if (!file || file[0] == '\0')
+        return;
+    char tmp[4096];
+    strncpy(tmp, file, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    for (char* p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
+    }
+}
+
 void config_init_defaults(archaic_config* cfg) {
     memset(cfg, 0, sizeof(*cfg));
 
@@ -69,10 +112,13 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->daemon.rescan_interval_seconds = 300;
     cfg->daemon.log_level = 1;
     cfg->daemon.colored_output = true;
-    strncpy(cfg->daemon.scan_path, "/home/sam/samdev", sizeof(cfg->daemon.scan_path) - 1);
+    const char* home = getenv("HOME");
+    if (home && home[0])
+        strncpy(cfg->daemon.scan_path, home, sizeof(cfg->daemon.scan_path) - 1);
+    else
+        strncpy(cfg->daemon.scan_path, "/", sizeof(cfg->daemon.scan_path) - 1);
     cfg->daemon.scan_path_count = 0;
-    strncpy(cfg->daemon.socket_path, "/tmp/archaic-daemon.sock",
-            sizeof(cfg->daemon.socket_path) - 1);
+    config_default_socket_path(cfg->daemon.socket_path, sizeof(cfg->daemon.socket_path));
 
     cfg->storage.max_buckets = 65536;
     cfg->storage.max_nodes_per_bucket = 100000;

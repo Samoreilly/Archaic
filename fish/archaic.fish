@@ -6,14 +6,20 @@
 #   3. Restart fish or run: source ~/.config/fish/conf.d/archaic.fish
 
 # ── Global state ──────────────────────────────────────────────────────────────
-set -g archaic_sock_path /tmp/archaic-daemon.sock
+if set -q XDG_RUNTIME_DIR; and test -n "$XDG_RUNTIME_DIR"
+    set -g archaic_sock_path "$XDG_RUNTIME_DIR/archaic.sock"
+else
+    set -g archaic_sock_path /tmp/archaic-(id -u).sock
+end
 set -g __archaic_daemon_healthy 1
 set -g __archaic_version_checked 0
 set -g __archaic_helper_pid ""
+set -g __archaic_cmd_fifo ""
+set -g __archaic_out_fifo ""
 set -g __archaic_last_query_time 0
 set -g __archaic_debounce_ms 80
 set -g __archaic_suggestion ""
-set -g __archaic_max_completions 50
+set -g __archaic_max_completions 256
 set -g __archaic_show_preview 0
 set -g __archaic_cycle_completions ""
 set -g __archaic_cycle_index 0
@@ -27,33 +33,26 @@ set -l plugin_path (status filename)
 if test -L "$plugin_path"
     set plugin_path (readlink -f "$plugin_path")
 end
-set -l repo_root (dirname (dirname "$plugin_path"))
-set -g archaic_cli_path "$repo_root/build/archaic-cli"
-set -g archaic_helper_path "$repo_root/build/archaic-helper"
+set -g __archaic_repo_root (dirname (dirname "$plugin_path"))
+if command -sq archaic-cli
+    set -g archaic_cli_path (command -s archaic-cli)
+else if test -x "$HOME/.local/bin/archaic-cli"
+    set -g archaic_cli_path "$HOME/.local/bin/archaic-cli"
+else
+    set -g archaic_cli_path "$__archaic_repo_root/build/archaic-cli"
+end
+if command -sq archaic-helper
+    set -g archaic_helper_path (command -s archaic-helper)
+else if test -x "$HOME/.local/bin/archaic-helper"
+    set -g archaic_helper_path "$HOME/.local/bin/archaic-helper"
+else
+    set -g archaic_helper_path "$__archaic_repo_root/build/archaic-helper"
+end
 
-# ── Completion pager colors ────────────────────────────────────────────────────
-# Fish's completion pager applies set_color calls (e.g. set_color --bold blue for
-# directories) when rendering completions. These ANSI escape codes (\033[1;34m etc.)
-# can appear as raw visible text in some terminal/pager configurations, including
-# kitty. Setting pager color variables to empty strings tells Fish to skip set_color
-# calls entirely, producing zero ANSI escape codes in completion output.
-# This affects ALL Fish completions, not just archaic's. To restore colors:
-#   set -g fish_pager_color_completion cyan
-#   set -g fish_pager_color_description yellow
-#   set -g fish_pager_color_prefix --bold --underline
-set -g fish_pager_color_completion ""
-set -g fish_pager_color_description ""
-set -g fish_pager_color_prefix ""
-set -g fish_pager_color_selected_completion ""
-set -g fish_pager_color_selected_description ""
-set -g fish_pager_color_selected_prefix ""
-set -g fish_pager_color_selected_background ""
-set -g fish_pager_color_background ""
-set -g fish_pager_color_secondary ""
-set -g fish_pager_color_progress ""
-
-# ── Default command list ──────────────────────────────────────────────────────
-set -g __archaic_commands cd ls ll la l cat vim nvim lvim hx helix kak micro nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown chgrp ln tar unzip zip gzip bzip2 xz 7z diff patch open xdg-open code cursor codium zed subl rg ag ack fd eza exa lsd tree dust tokei ncdu grep find file stat wc du realpath readlink dirname basename python python3 pytest lua ruby perl php node bun deno cargo rustc go gcc g++ clang clang++ make cmake ninja meson just scp sftp rsync rclone sshfs jq yq sqlite3 hexdump xxd strings pandoc ffmpeg ffplay mpv vlc feh zathura convert curl wget aria2c pip uv npx yarn pnpm sudo doas env nohup timeout watch xargs tee strace gdb lldb objdump readelf nm install strip man which type source docker podman kubectl terraform ansible-playbook gh git
+# Empty <Tab> lists files. Other commands only if the token looks like a path.
+set -g __archaic_file_cmds cd ls ll la l cat vim nvim lvim hx helix kak micro nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown chgrp ln tar unzip zip gzip bzip2 xz 7z diff patch open xdg-open code cursor codium zed subl rg ag ack fd eza exa lsd tree dust tokei ncdu grep find file stat wc du realpath readlink dirname basename scp sftp rsync rclone sshfs
+set -g __archaic_exec_cmds python python3 pytest lua ruby perl php node bun deno rustc go gcc g++ clang clang++ make cmake ninja meson just jq yq sqlite3 hexdump xxd strings pandoc ffmpeg ffplay mpv vlc feh zathura convert curl wget aria2c pip uv sudo doas env nohup timeout watch xargs tee strace gdb lldb objdump readelf nm install strip man which type source
+set -g __archaic_commands $__archaic_file_cmds $__archaic_exec_cmds
 
 # ── Load config (socket path + command list) ─────────────────────────────────
 set -l config_file ""
@@ -87,7 +86,7 @@ if test -n "$config_file"
     # Extract max_completions from [daemon] section
     set -l cfg_max (grep -A10 '^\[daemon\]' "$config_file" 2>/dev/null | grep 'max_completions' | string replace -r '.*=\s*([0-9]+)' '$1')
     if test -n "$cfg_max"
-        set -g __archaic_max_completions (math "max(1, min(100, $cfg_max))")
+        set -g __archaic_max_completions (math "max(1, min(256, $cfg_max))")
     end
 
     # Extract show_preview from [fish] section
@@ -98,49 +97,128 @@ if test -n "$config_file"
 end
 
 # ── Helper lifecycle ──────────────────────────────────────────────────────────
+function __archaic_helper_cleanup -d "Stop helper and remove fifos" --on-event fish_exit
+    if test -n "$__archaic_helper_pid"
+        kill $__archaic_helper_pid 2>/dev/null
+    end
+    set -g __archaic_helper_pid ""
+    if test -n "$__archaic_cmd_fifo"
+        rm -f $__archaic_cmd_fifo
+    end
+    if test -n "$__archaic_out_fifo"
+        rm -f $__archaic_out_fifo
+    end
+end
+
 function __archaic_ensure_helper -d "Start archaic-helper if not running"
-    # Already running?
     if test -n "$__archaic_helper_pid"
         if kill -0 $__archaic_helper_pid 2>/dev/null
-            return
+            return 0
         end
-        # PID stale, clear
         set -g __archaic_helper_pid ""
     end
 
-    # Helper binary must exist
     if not test -x "$archaic_helper_path"
-        return
+        return 1
     end
 
-    # Start helper with retry (3 attempts, exponential backoff)
-    set -l max_retries 3
-    set -l retry_delay 0.1
-    for i in (seq 1 $max_retries)
-        $archaic_helper_path "$archaic_sock_path" </dev/null >/dev/null 2>&1 &
-        set -g __archaic_helper_pid $last_pid
-        sleep $retry_delay
-        if kill -0 $__archaic_helper_pid 2>/dev/null
-            return
-        end
-        set retry_delay (math "$retry_delay * 2")
-        echo "archaic: helper start attempt $i failed, retrying..." >&2
+    set -g __archaic_cmd_fifo /tmp/archaic-h-cmd-$fish_pid
+    set -g __archaic_out_fifo /tmp/archaic-h-out-$fish_pid
+    rm -f $__archaic_cmd_fifo $__archaic_out_fifo
+    mkfifo $__archaic_cmd_fifo $__archaic_out_fifo
+    or return 1
+
+    $archaic_helper_path --cmd-fifo $__archaic_cmd_fifo --out-fifo $__archaic_out_fifo $archaic_sock_path >/dev/null 2>&1 &
+    set -g __archaic_helper_pid $last_pid
+    disown $__archaic_helper_pid 2>/dev/null
+    sleep 0.05
+    if kill -0 $__archaic_helper_pid 2>/dev/null
+        return 0
     end
-    echo "archaic: helper failed to start after $max_retries attempts" >&2
     set -g __archaic_helper_pid ""
+    return 1
+end
+
+function __archaic_helper_query -a line -d "Send one command to the persistent helper"
+    if not __archaic_ensure_helper
+        return 1
+    end
+    if command -sq timeout
+        timeout 0.15 /bin/sh -c 'printf "%s\n" "$1" > "$2"' sh "$line" $__archaic_cmd_fifo
+        or begin
+            kill $__archaic_helper_pid 2>/dev/null
+            set -g __archaic_helper_pid ""
+            return 1
+        end
+    else
+        printf '%s\n' "$line" > $__archaic_cmd_fifo
+    end
+    set -l acc
+    set -l got_end 0
+    while read -t 0.15 -l row
+        if test "$row" = "."
+            set got_end 1
+            break
+        end
+        set -a acc $row
+    end < $__archaic_out_fifo
+    if test $got_end -eq 0
+        kill $__archaic_helper_pid 2>/dev/null
+        set -g __archaic_helper_pid ""
+        return 1
+    end
+    if test (count $acc) -gt 0
+        printf '%s\n' $acc
+    end
+    return 0
 end
 
 # ── Daemon health check ───────────────────────────────────────────────────────
-function __archaic_check_daemon -d "Check if daemon socket exists and responds"
-    if test "$__archaic_daemon_healthy" -eq 0
-        return 1
-    end
+function __archaic_try_start_daemon -d "Start daemon in background if it is down"
     if test -S "$archaic_sock_path"
         return 0
     end
-    # Daemon not running - show notification once
+    if set -q __archaic_start_attempted
+        return 1
+    end
+    set -g __archaic_start_attempted 1
+    set -l bin ""
+    if command -sq archaic
+        set bin (command -s archaic)
+    else if test -x "$HOME/.local/bin/archaic"
+        set bin "$HOME/.local/bin/archaic"
+    else
+        set bin (dirname "$archaic_cli_path")/archaic
+    end
+    if not test -x "$bin"
+        return 1
+    end
+    set -l scan "$HOME"
+    $bin --daemon $scan $archaic_sock_path >/dev/null 2>&1 &
+    disown 2>/dev/null
+    for i in 1 2 3 4 5 6 7 8
+        if test -S "$archaic_sock_path"
+            set -g __archaic_daemon_healthy 1
+            return 0
+        end
+        sleep 0.05
+    end
+    return 1
+end
+
+function __archaic_check_daemon -d "Check if daemon socket exists and responds"
+    if test -S "$archaic_sock_path"
+        set -g __archaic_daemon_healthy 1
+        return 0
+    end
+    if test "$__archaic_daemon_healthy" -eq 0
+        return 1
+    end
+    if __archaic_try_start_daemon
+        return 0
+    end
     if not set -q __archaic_notified_down
-        echo "archaic: daemon not running (completions unavailable). Start with: ./run.sh start" >&2
+        echo "archaic: daemon not running. Start with: systemctl --user start archaic  (or ./run.sh start)" >&2
         set -g __archaic_notified_down 1
     end
     set -g __archaic_daemon_healthy 0
@@ -219,9 +297,59 @@ function __archaic_parse_line -d "Split 'D /path with spaces' into type and path
     echo "$rest"
 end
 
+function __archaic_canon_path -d "Expand ~ so token rewriting can strip the resolved prefix"
+    set -l p $argv[1]
+    if test "$p" = "~"
+        echo "$HOME"
+        return
+    end
+    if string match -q '~/*' -- "$p"
+        echo "$HOME"(string sub -s 2 -- "$p")
+        return
+    end
+    echo "$p"
+end
+
+function __archaic_token_path -d "Turn an absolute result into the token the user should insert"
+    set -l full (__archaic_canon_path $argv[1])
+    set -l prefix $argv[2]
+    set -l resolved $argv[3]
+    set -l norm_prefix $argv[4]
+    if test -z "$prefix"
+        basename "$full"
+        return
+    end
+    if string match -q '~*' -- "$prefix"
+        if test "$full" = "$HOME"
+            echo "~"
+            return
+        end
+        if string match -q "$HOME/*" -- "$full"
+            echo "~"(string replace -- "$HOME" "" "$full")
+            return
+        end
+        echo "$full"
+        return
+    end
+    if string match -q '/*' -- "$prefix"
+        echo "$full"
+        return
+    end
+    if test "$full" = "$resolved"
+        echo "$norm_prefix"
+        return
+    end
+    if string match -q "$resolved/*" -- "$full"
+        echo "$norm_prefix"(string replace -- "$resolved" "" "$full")
+        return
+    end
+    echo "$full"
+end
+
 # ── Core completion function ──────────────────────────────────────────────────
 function __archaic_do_complete -d "Query archaic daemon for completions"
-    set -l prefix (commandline -ct)
+    set -l typed (commandline -ct)
+    set -l prefix $typed
 
     # Detect command being completed
     set -l cmd_tokens (commandline -co)
@@ -253,11 +381,15 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     # Version check on first use
     __archaic_check_version
 
-    set prefix (__archaic_expand_path "$prefix")
+    set prefix (__archaic_expand_path "$typed")
+    set -l typed_norm $typed
+    if test -n "$typed_norm"; and test "$typed_norm" != "/"
+        set typed_norm (string replace -r '/+$' '' -- "$typed")
+    end
 
     # Resolve prefix to absolute path
     set -l resolved ""
-    set -l norm_prefix ""
+    set -l norm_prefix $typed_norm
     if test -z "$prefix"
         set resolved (pwd)
         set norm_prefix ""
@@ -291,28 +423,34 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         else
             set resolved (string replace -r '/+$' '' "$resolved")
         end
-        set norm_prefix (string replace -r '/+$' '' "$prefix")
     end
 
     set -l norm_resolved (string replace -r '/+$' '' "$resolved")
 
-    if test -n "$prefix"; and not string match -q '*/' -- "$prefix"; and test -d "$resolved"
-        echo "$prefix/"\tdirectory
+    if test -n "$typed"; and not string match -q '*/' -- "$typed"; and test -d "$resolved"
+        echo "$typed/"\tdirectory
     end
 
-    set -l results ""
-    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set results (printf 'complete\t%s\t%s\t%s\t%s\n' "$dirs_only" "$__archaic_max_completions" "$PWD" "$resolved" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
-    end
-
+    set -l req (printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" "$__archaic_max_completions" "$PWD" "$resolved")
+    set -l results (__archaic_helper_query "$req")
     if test -z "$results"
         set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions "$PWD" $dirs_only 2>/dev/null)
+    end
+
+    set -l scanning 0
+    if test (count $results) -gt 0; and test "$results[1]" = "#scanning"
+        set scanning 1
+        set -e results[1]
     end
 
     set -l found 0
     for line in $results
         set -l type (string split -m 1 -f 1 " " -- "$line")
         set -l full_path (string split -m 1 -f 2 " " -- "$line")
+        if test "$type" = "#scanning" -o "$type" = "#"
+            set scanning 1
+            continue
+        end
         if test -z "$full_path"
             continue
         end
@@ -321,13 +459,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             continue
         end
 
-        set -l display_path "$full_path"
-        if test -z "$prefix"
-            set display_path (basename "$full_path")
-        else if not string match -q '/*' -- "$prefix"
-            set display_path (string replace "$norm_resolved" "" "$full_path")
-            set display_path "$norm_prefix$display_path"
-        end
+        set -l display_path (__archaic_token_path "$full_path" "$typed" "$norm_resolved" "$norm_prefix")
 
         if test "$type" = "D"
             echo "$display_path"\tdirectory
@@ -344,10 +476,7 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             set fuzzy_q "$prefix"
             set fuzzy_token 1
         end
-        set -l fuzzy_results ""
-        if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-            set fuzzy_results (echo "fuzzy $fuzzy_q $__archaic_max_completions" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
-        end
+        set -l fuzzy_results (__archaic_helper_query "fuzzy $fuzzy_q $__archaic_max_completions")
         if test -z "$fuzzy_results"
             set fuzzy_results (command $archaic_cli_path fuzzy "$fuzzy_q" $__archaic_max_completions 2>/dev/null)
         end
@@ -355,6 +484,10 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         for line in $fuzzy_results
             set -l type (string split -m 1 -f 1 " " -- "$line")
             set -l full_path (string split -m 1 -f 2 " " -- "$line")
+            if test "$type" = "#scanning" -o "$type" = "#"
+                set scanning 1
+                continue
+            end
             if test -z "$full_path"
                 continue
             end
@@ -373,14 +506,9 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
                 continue
             end
 
-            set -l display_path "$full_path"
+        set -l display_path (__archaic_token_path "$full_path" "$typed" "$norm_resolved" "$norm_prefix")
             if test "$fuzzy_token" -eq 1
-                set display_path (string replace "$PWD/" "" "$full_path")
-            else if test -z "$prefix"
-                set display_path (basename "$full_path")
-            else if not string match -q '/*' -- "$prefix"
-                set -l parent_dir (dirname "$norm_resolved")
-                set display_path (string replace "$parent_dir/" "" "$full_path")
+                set display_path (string replace -- "$PWD/" "" (__archaic_canon_path "$full_path"))
             end
 
             if test "$type" = "D"
@@ -391,23 +519,77 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
             set found 1
         end
     end
+
+    if test $found -eq 0 -a $scanning -eq 1
+        echo "indexing…"\tarchaic is still scanning
+    end
+end
+
+function __archaic_is_path_token -d "Current token is not a flag"
+    set -l tok (commandline -ct)
+    if string match -q -- '-*' "$tok"
+        return 1
+    end
+    return 0
+end
+
+function __archaic_complete_ok -d "File cmds allow empty token; others need a path-like token"
+    set -l tok (commandline -ct)
+    if string match -q -- '-*' "$tok"
+        return 1
+    end
+    set -l cmd ""
+    set -l toks (commandline -co)
+    if test (count $toks) -gt 0
+        set cmd $toks[1]
+    end
+    if contains -- $cmd $__archaic_file_cmds
+        return 0
+    end
+    __archaic_is_tool_path_token
+end
+
+function __archaic_is_tool_path_token -d "Token looks like a path (for git/docker/etc)"
+    set -l tok (commandline -ct)
+    if test -z "$tok"
+        return 1
+    end
+    if string match -q -- '-*' "$tok"
+        return 1
+    end
+    string match -qr -- '^(\.|~|/)|/' -- "$tok"
+end
+
+function __archaic_record_preexec --on-event fish_preexec -d "Learn paths from executed commands"
+    for tok in (commandline -o)
+        if string match -q -- '-*' "$tok"
+            continue
+        end
+        set -l p "$tok"
+        if not string match -q '/*' -- "$p"
+            set p "$PWD/$p"
+        end
+        if test -e "$p"
+            __archaic_helper_query "select $p" >/dev/null 2>&1
+        end
+    end
 end
 
 # ── Register completions for configured commands ────────────────────────────────
 for cmd in $__archaic_commands
-    complete -c $cmd -k -a "(__archaic_do_complete)"
+    complete -c $cmd -n '__archaic_complete_ok' -k -a "(__archaic_do_complete)"
 end
 
-complete -c git -n '__fish_seen_subcommand_from add checkout switch restore diff rm mv show reset commit blame log grep apply am archive mergetool clean stash' -k -a "(__archaic_do_complete)"
-complete -c docker -n '__fish_seen_subcommand_from build cp run save load import export' -k -a "(__archaic_do_complete)"
-complete -c podman -n '__fish_seen_subcommand_from build cp run save load import export' -k -a "(__archaic_do_complete)"
-complete -c kubectl -n '__fish_seen_subcommand_from apply create delete replace diff kustomize' -k -a "(__archaic_do_complete)"
-complete -c cargo -n '__fish_seen_subcommand_from run build test bench install rustc' -k -a "(__archaic_do_complete)"
-complete -c npm -n '__fish_seen_subcommand_from run test exec pack publish' -k -a "(__archaic_do_complete)"
-complete -c pnpm -n '__fish_seen_subcommand_from run test exec' -k -a "(__archaic_do_complete)"
-complete -c yarn -n '__fish_seen_subcommand_from run test' -k -a "(__archaic_do_complete)"
-complete -c terraform -n '__fish_seen_subcommand_from apply plan destroy validate fmt' -k -a "(__archaic_do_complete)"
-complete -c gh -n '__fish_seen_subcommand_from repo gist pr issue' -k -a "(__archaic_do_complete)"
+complete -c git -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from add checkout switch restore diff rm mv show reset commit blame log grep apply am archive mergetool clean stash' -k -a "(__archaic_do_complete)"
+complete -c docker -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from build cp run save load import export' -k -a "(__archaic_do_complete)"
+complete -c podman -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from build cp run save load import export' -k -a "(__archaic_do_complete)"
+complete -c kubectl -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from apply create delete replace diff kustomize' -k -a "(__archaic_do_complete)"
+complete -c cargo -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from run build test bench install rustc' -k -a "(__archaic_do_complete)"
+complete -c npm -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from run test exec pack publish' -k -a "(__archaic_do_complete)"
+complete -c pnpm -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from run test exec' -k -a "(__archaic_do_complete)"
+complete -c yarn -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from run test' -k -a "(__archaic_do_complete)"
+complete -c terraform -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from apply plan destroy validate fmt' -k -a "(__archaic_do_complete)"
+complete -c gh -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from repo gist pr issue' -k -a "(__archaic_do_complete)"
 
 # ── Inline autosuggestion via fish_right_prompt ────────────────────────────────
 set -g __archaic_suggestion ""
@@ -438,10 +620,7 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     set -l norm_resolved (string replace -r '/+$' '' "$resolved")
 
     # Query: try helper first, fall back to CLI
-    set -l output ""
-    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set output (echo "complete $resolved 1 $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
-    end
+    set -l output (__archaic_helper_query "complete $resolved 1 $PWD")
     if test -z "$output"
         set output (command $archaic_cli_path complete "$resolved" 1 2>/dev/null)
     end
@@ -527,10 +706,7 @@ function __archaic_fetch_completions -d "Fetch completions for cycling"
     end
     set resolved (string replace -r '/+$' '' "$resolved")
 
-    set -l results ""
-    if test -n "$__archaic_helper_pid" -a -d "/proc/$__archaic_helper_pid"
-        set results (echo "complete $resolved $__archaic_max_completions $PWD" | $archaic_helper_path "$archaic_sock_path" 2>/dev/null)
-    end
+    set -l results (__archaic_helper_query "complete $resolved $__archaic_max_completions $PWD")
     if test -z "$results"
         set results (command $archaic_cli_path complete "$resolved" $__archaic_max_completions 2>/dev/null)
     end
@@ -698,7 +874,13 @@ function __archaic_get_preview -d "Get file preview for current completion"
 end
 function __archaic_accept_suggestion
     if test -n "$__archaic_suggestion"
-        commandline -t (commandline -t)"$__archaic_suggestion"
+        set -l tok (commandline -t)"$__archaic_suggestion"
+        commandline -t $tok
+        set -l p $tok
+        if not string match -q '/*' -- "$p"
+            set p "$PWD/$p"
+        end
+        __archaic_helper_query "select $p" >/dev/null 2>&1
         set -g __archaic_suggestion ""
         __archaic_reset_cycle
         commandline -f repaint

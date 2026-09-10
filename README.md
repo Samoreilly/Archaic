@@ -59,8 +59,13 @@ cd Archaic
 ./install.sh ~/projects
 ```
 
-This builds the project, starts the daemon, and installs shell integration for your
-current shell (Fish, Bash, or Zsh) — no further steps required.
+This builds the project, starts the daemon, installs shell integration, and
+enables a **systemd user service** so the daemon comes back after reboot.
+
+```bash
+./run.sh enable-service ~/samdev   # login/boot autostart
+systemctl --user status archaic
+```
 
 ### Homebrew (macOS)
 

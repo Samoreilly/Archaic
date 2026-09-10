@@ -19,8 +19,8 @@ typedef struct RadixNode {
     size_t key_len;
     RadixChild inline_storage[RADIX_INLINE_CHILDREN];
     RadixChild* children;
-    uint8_t child_count;
-    uint8_t child_capacity;
+    uint16_t child_count;
+    uint16_t child_capacity;
     uint64_t freq;
     uint64_t last_access;
     bool is_leaf;

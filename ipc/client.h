@@ -33,7 +33,7 @@ int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
     Returns 0 on success.
 */
 int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, const char* cwd,
-                        int dirs_only, ipc_completions_resp* out);
+                        int dirs_only, ipc_completion_list* out);
 
 /*
     Get the single best suggestion for a prefix.
@@ -60,7 +60,9 @@ int ipc_client_metrics(ipc_client* client, ipc_metrics_resp* out);
 int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out);
 
 int ipc_client_fuzzy(ipc_client* client, const char* query, uint32_t limit,
-                     ipc_completions_resp* out);
+                     ipc_completion_list* out);
+
+int ipc_client_select(ipc_client* client, const char* path);
 
 int ipc_client_bookmarks(ipc_client* client, uint32_t limit, ipc_bookmarks_resp* out);
 

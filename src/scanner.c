@@ -56,14 +56,13 @@ void scan_queue_init(scan_queue* q) {
     q->queue_count = 0;
     pthread_mutex_init(&q->queue_lock, NULL);
     pthread_cond_init(&q->queue_not_empty, NULL);
+    pthread_cond_init(&q->queue_not_full, NULL);
 }
 
 int scan_queue_push(scan_queue* q, const char* path, int depth) {
     pthread_mutex_lock(&q->queue_lock);
-    if (q->queue_count >= SCANNER_QUEUE_SIZE) {
-        pthread_mutex_unlock(&q->queue_lock);
-        return -1;
-    }
+    while (q->queue_count >= SCANNER_QUEUE_SIZE)
+        pthread_cond_wait(&q->queue_not_full, &q->queue_lock);
     scan_work_item* item = &q->queue[q->queue_tail];
     item->path = strdup(path);
     item->depth = depth;
@@ -105,9 +104,10 @@ typedef struct {
     pthread_mutex_t lock;
 } symlink_dedup_set;
 
-static void symlink_dedup_init(symlink_dedup_set* set) {
-    memset(set, 0, sizeof(*set));
-    pthread_mutex_init(&set->lock, NULL);
+static void symlink_dedup_reset(symlink_dedup_set* set) {
+    pthread_mutex_lock(&set->lock);
+    set->count = 0;
+    pthread_mutex_unlock(&set->lock);
 }
 
 __attribute__((unused)) static void symlink_dedup_free(symlink_dedup_set* set) {
@@ -131,7 +131,7 @@ static int symlink_dedup_check_and_add(symlink_dedup_set* set, dev_t dev, ino_t 
     return 0;
 }
 
-static symlink_dedup_set g_symlink_seen;
+static symlink_dedup_set g_symlink_seen = {.lock = PTHREAD_MUTEX_INITIALIZER};
 
 static void* scanner_worker(void* arg) {
     parallel_scanner* scanner = (parallel_scanner*) arg;
@@ -161,6 +161,7 @@ static void* scanner_worker(void* arg) {
         item->path = NULL;
         scanner->queue->queue_head = (scanner->queue->queue_head + 1) % SCANNER_QUEUE_SIZE;
         scanner->queue->queue_count--;
+        pthread_cond_signal(&scanner->queue->queue_not_full);
 
         atomic_fetch_add(&scanner->active_workers, 1);
         pthread_mutex_unlock(&scanner->queue->queue_lock);
@@ -191,10 +192,22 @@ static void* scanner_worker(void* arg) {
             continue;
         }
 
-        struct {
+        typedef struct {
             char name[256];
             bool is_dir;
-        } entries[512];
+        } scan_ent;
+        size_t entries_cap = 256;
+        scan_ent* entries = malloc(entries_cap * sizeof(scan_ent));
+        if (!entries) {
+            closedir(dir);
+            int prev = atomic_fetch_sub(&scanner->active_workers, 1);
+            if (prev == 1) {
+                pthread_mutex_lock(&scanner->queue->queue_lock);
+                pthread_cond_broadcast(&scanner->queue->queue_not_empty);
+                pthread_mutex_unlock(&scanner->queue->queue_lock);
+            }
+            continue;
+        }
         int entry_count = 0;
 
         ignore_file local_ignore;
@@ -206,7 +219,7 @@ static void* scanner_worker(void* arg) {
         ignore_file_load(&local_ignore, ignore_path);
 
         struct dirent* entry;
-        while ((entry = readdir(dir)) && entry_count < 8192) {
+        while ((entry = readdir(dir))) {
             if (scanner->dir_timeout_ms > 0) {
                 struct timespec now;
                 clock_gettime(CLOCK_MONOTONIC, &now);
@@ -276,6 +289,14 @@ static void* scanner_worker(void* arg) {
             if (!is_dir && should_ignore_file_local(&local_ignore, entry->d_name))
                 continue;
 
+            if ((size_t) entry_count >= entries_cap) {
+                size_t ncap = entries_cap * 2;
+                scan_ent* nent = realloc(entries, ncap * sizeof(scan_ent));
+                if (!nent)
+                    break;
+                entries = nent;
+                entries_cap = ncap;
+            }
             strncpy(entries[entry_count].name, entry->d_name, 255);
             entries[entry_count].name[255] = '\0';
             entries[entry_count].is_dir = is_dir;
@@ -300,6 +321,8 @@ static void* scanner_worker(void* arg) {
                 break;
 
             char child_path[4096];
+            if (strlen(path) + 1 + strlen(entries[i].name) + 2 >= sizeof(child_path))
+                continue;
             snprintf(child_path, sizeof(child_path), "%s/%s", path, entries[i].name);
 
             store_lock(scanner->lfu);
@@ -314,6 +337,11 @@ static void* scanner_worker(void* arg) {
                 trie_lock(bucket);
                 if (entries[i].is_dir) {
                     size_t path_len = strlen(child_path);
+                    if (path_len + 2 > sizeof(child_path)) {
+                        trie_unlock(bucket);
+                        bucket_release(bucket);
+                        continue;
+                    }
                     char dir_path[4096];
                     memcpy(dir_path, child_path, path_len);
                     dir_path[path_len] = '/';
@@ -332,6 +360,7 @@ static void* scanner_worker(void* arg) {
                 scan_queue_push(scanner->queue, child_path, depth + 1);
             }
         }
+        free(entries);
 
         int prev = atomic_fetch_sub(&scanner->active_workers, 1);
         if (prev == 1) {
@@ -396,7 +425,7 @@ void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {
     atomic_store(&scanner->stop, false);
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_joined, false);
-    symlink_dedup_init(&g_symlink_seen);
+    symlink_dedup_reset(&g_symlink_seen);
 
     scan_queue_push(scanner->queue, root_path, 0);
 
@@ -409,7 +438,7 @@ void parallel_scanner_start_multi(parallel_scanner* scanner, const char** roots,
     atomic_store(&scanner->stop, false);
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_joined, false);
-    symlink_dedup_init(&g_symlink_seen);
+    symlink_dedup_reset(&g_symlink_seen);
 
     for (int i = 0; i < root_count; i++) {
         scan_queue_push(scanner->queue, roots[i], 0);

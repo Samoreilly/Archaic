@@ -3,10 +3,11 @@
 
 [daemon]
 # Single root (default):
-scan_path = "/home/user/projects"
+scan_path = "/home/user"
 # Multiple roots (uncomment to use instead of scan_path):
 # scan_paths = ["/home/user/projects", "/home/user/work", "/home/user/docs"]
-socket_path = "/tmp/archaic-daemon.sock"
+# Default socket is $XDG_RUNTIME_DIR/archaic.sock
+# socket_path = "/run/user/1000/archaic.sock"
 scan_threads = 4
 max_depth = 10
 rescan_interval_seconds = 300

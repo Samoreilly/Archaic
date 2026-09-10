@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef __linux__
@@ -59,7 +60,7 @@ static int watcher_add_tree_linux(fs_watcher* w, const char* root) {
         return -1;
 
     int wd = inotify_add_watch(w->fd, root,
-                               IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MODIFY |
+                               IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
                                    IN_DELETE_SELF | IN_MOVE_SELF);
     if (wd < 0) {
         LOG_WARN("watcher", "inotify_add_watch failed for %s: %s", root, strerror(errno));
@@ -118,8 +119,11 @@ static void* watcher_thread_linux(void* arg) {
         if (len < 0) {
             if (errno == EINTR)
                 continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct timespec ts = {.tv_sec = 0, .tv_nsec = 50 * 1000 * 1000};
+                nanosleep(&ts, NULL);
                 continue;
+            }
             if (!atomic_load(&w->running))
                 break;
             LOG_WARN("watcher", "inotify read error: %s", strerror(errno));
@@ -361,7 +365,7 @@ int watcher_start(fs_watcher* w, watcher_cb_ctx cb) {
     int started = 0;
 
 #ifdef __linux__
-    w->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    w->fd = inotify_init1(IN_CLOEXEC);
     if (w->fd >= 0) {
         LOG_INFO("watcher", "using inotify for filesystem watching");
         if (pthread_create(&w->thread, NULL, watcher_thread_linux, w) == 0) {

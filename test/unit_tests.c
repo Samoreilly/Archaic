@@ -252,6 +252,36 @@ static void test_trie_many_inserts(void) {
     PASS();
 }
 
+static void test_listing_wide_dir(void) {
+    TEST(listing_wide_dir);
+    Trie* root = create_trie();
+    char buf[256];
+    for (int i = 0; i < 600; i++) {
+        snprintf(buf, sizeof(buf), "/wide/f%03d.c", i);
+        insert(root, buf);
+    }
+    insert(root, "/wide/sub/");
+    insert(root, "/wide/sub/nested.c");
+    scored_completions* sc = scored_completions_create(32);
+    scored_completions_collect(root, "/wide/", sc, 0, "/", NULL, 0.0, 0);
+    ASSERT_TRUE(sc->count == 601, "one-level listing keeps all siblings");
+    int saw0 = 0, saw599 = 0, saw_nested = 0, saw_sub = 0;
+    for (size_t i = 0; i < sc->count; i++) {
+        if (strstr(sc->entries[i].path, "f000.c"))
+            saw0 = 1;
+        if (strstr(sc->entries[i].path, "f599.c"))
+            saw599 = 1;
+        if (strstr(sc->entries[i].path, "nested"))
+            saw_nested = 1;
+        if (strstr(sc->entries[i].path, "/wide/sub"))
+            saw_sub = 1;
+    }
+    ASSERT_TRUE(saw0 && saw599 && saw_sub && !saw_nested, "siblings kept, nested excluded");
+    scored_completions_free(sc);
+    trie_free_recursive(root);
+    PASS();
+}
+
 static void test_trie_compact(void) {
     TEST(trie_compact);
     Trie* root = create_trie();
@@ -865,6 +895,29 @@ static void test_protocol_header_validation(void) {
     ipc_write_header(&hdr, IPC_MSG_COMPLETE, IPC_MAX_PAYLOAD + 1, 1);
     ASSERT_TRUE(!ipc_validate_header(&hdr), "oversized payload should fail validation");
 
+    PASS();
+}
+
+static void test_protocol_packed_completions(void) {
+    TEST(protocol_packed_completions);
+    uint8_t buf[4096];
+    size_t pos = ipc_pack_completions_begin(buf, sizeof(buf), 1);
+    uint32_t count = 0;
+    ASSERT_TRUE(ipc_pack_completions_add(buf, sizeof(buf), &pos, &count, "/wide/f000.c", 0, 1.5f) ==
+                    0,
+                "pack file");
+    ASSERT_TRUE(ipc_pack_completions_add(buf, sizeof(buf), &pos, &count, "/wide/sub", 1, 2.0f) == 0,
+                "pack dir");
+    ipc_pack_completions_finish(buf, count);
+    ipc_completion_list* list = calloc(1, sizeof(*list));
+    ASSERT_TRUE(list && ipc_unpack_completions(buf, pos, list) == 0, "unpack");
+    ASSERT_EQ_INT(2, (int) list->count, "count");
+    ASSERT_EQ_INT(1, (int) list->scanning, "scanning flag");
+    ASSERT_TRUE(strcmp(list->paths[0], "/wide/f000.c") == 0, "path 0");
+    ASSERT_EQ_INT(0, (int) list->is_dirs[0], "file");
+    ASSERT_TRUE(strcmp(list->paths[1], "/wide/sub") == 0, "path 1");
+    ASSERT_EQ_INT(1, (int) list->is_dirs[1], "dir");
+    free(list);
     PASS();
 }
 
@@ -1518,6 +1571,7 @@ int main(int argc, char* argv[]) {
     test_trie_insert_long_path();
     test_trie_insert_duplicate();
     test_trie_many_inserts();
+    test_listing_wide_dir();
     test_trie_compact();
 
     /* Group 2: Scoring */
@@ -1577,6 +1631,7 @@ int main(int argc, char* argv[]) {
     /* Group 10: Protocol Validation */
     printf("\n--- Protocol ---\n");
     test_protocol_header_validation();
+    test_protocol_packed_completions();
     test_protocol_rle_roundtrip();
     test_protocol_rle_incompressible();
     test_protocol_empty_payload();

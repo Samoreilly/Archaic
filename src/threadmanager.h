@@ -38,6 +38,7 @@ typedef struct {
     int queue_count;
     pthread_mutex_t queue_lock;
     pthread_cond_t queue_not_empty;
+    pthread_cond_t queue_not_full;
 } scan_queue;
 
 typedef struct {

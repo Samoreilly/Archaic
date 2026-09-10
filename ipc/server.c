@@ -6,6 +6,7 @@
 #include "../src/trie.h"
 #include <errno.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,6 +220,12 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     char expanded_tmp[4096];
     char expanded_prefix[4096];
     path_expand_abbrev(expanded_tmp, req->prefix, sizeof(expanded_tmp));
+    if (expanded_tmp[0] != '/' && req->cwd[0] == '/') {
+        char joined[4096];
+        int n = snprintf(joined, sizeof(joined), "%s/%s", req->cwd, expanded_tmp);
+        if (n > 0 && (size_t) n < sizeof(joined))
+            memcpy(expanded_tmp, joined, (size_t) n + 1);
+    }
     size_t tmp_len = strlen(expanded_tmp);
     int explicit_slash = (tmp_len > 0 && expanded_tmp[tmp_len - 1] == '/');
     const char* keep_dot = strrchr(expanded_tmp, '/');
@@ -236,8 +243,8 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
 
     uint64_t now = (uint64_t) time(NULL);
     uint32_t want = req->limit > 0 ? req->limit : 50;
-    if (want > 50)
-        want = 50;
+    if (want > IPC_COMPLETE_MAX)
+        want = IPC_COMPLETE_MAX;
 
     scored_result sr_dirs = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now,
                                                           req->cwd, 1);
@@ -246,13 +253,18 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         sr_files = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now, req->cwd,
                                                  0);
 
-    ipc_header hdr;
-    ipc_completions_resp resp;
-    resp.count = 0;
-    memset(resp.paths, 0, sizeof(resp.paths));
-    memset(resp.scores, 0, sizeof(resp.scores));
-    memset(resp.freqs, 0, sizeof(resp.freqs));
-    memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
+    uint8_t* packed = malloc(IPC_MAX_PAYLOAD);
+    if (!packed) {
+        send_error(fd, req_id, -7, "out of memory");
+        if (sr_dirs.data)
+            daemon_release_scored(srv->daemon, sr_dirs);
+        if (sr_files.data)
+            daemon_release_scored(srv->daemon, sr_files);
+        return;
+    }
+    uint8_t scanning = atomic_load(&srv->daemon->scanning) ? 1 : 0;
+    size_t pack_pos = ipc_pack_completions_begin(packed, IPC_MAX_PAYLOAD, scanning);
+    uint32_t packed_count = 0;
 
     const scored_completions* sources[2];
     int nsrc = 0;
@@ -332,24 +344,26 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
                 continue;
             dedup_insert(&seen, clean);
 
-            strncpy(resp.paths[out_idx], clean, sizeof(resp.paths[out_idx]) - 1);
-            resp.scores[out_idx] = sc->entries[i].score;
-            resp.freqs[out_idx] = sc->entries[i].freq;
-            resp.is_dirs[out_idx] = sc->entries[i].is_dir ? 1 : 0;
+            if (ipc_pack_completions_add(packed, IPC_MAX_PAYLOAD, &pack_pos, &packed_count, clean,
+                                         sc->entries[i].is_dir ? 1 : 0,
+                                         (float) sc->entries[i].score) != 0)
+                break;
             out_idx++;
         }
     }
-    resp.count = out_idx;
+    ipc_pack_completions_finish(packed, packed_count);
     if (sr_dirs.data)
         daemon_release_scored(srv->daemon, sr_dirs);
     if (sr_files.data)
         daemon_release_scored(srv->daemon, sr_files);
 
-    daemon_log_query(srv->daemon, req->prefix, req->cwd, resp.count);
+    daemon_log_query(srv->daemon, req->prefix, req->cwd, packed_count);
 
-    ipc_write_header(&hdr, IPC_MSG_COMPLETIONS, sizeof(resp), req_id);
+    ipc_header hdr;
+    ipc_write_header(&hdr, IPC_MSG_COMPLETIONS, (uint32_t) pack_pos, req_id);
     write_exact(fd, &hdr, sizeof(hdr));
-    write_exact(fd, &resp, sizeof(resp));
+    write_exact(fd, packed, pack_pos);
+    free(packed);
 }
 
 static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_suggest_req* req) {
@@ -505,22 +519,27 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
         return;
     }
 
-    completions* fc = daemon_get_fuzzy_completions(srv->daemon, req->prefix, req->limit);
+    uint32_t want = req->limit > 0 ? req->limit : 50;
+    if (want > IPC_COMPLETE_MAX)
+        want = IPC_COMPLETE_MAX;
+    completions* fc = daemon_get_fuzzy_completions(srv->daemon, req->prefix, want);
 
-    ipc_header hdr;
-    ipc_completions_resp resp;
-    resp.count = 0;
-    memset(resp.paths, 0, sizeof(resp.paths));
-    memset(resp.scores, 0, sizeof(resp.scores));
-    memset(resp.freqs, 0, sizeof(resp.freqs));
-    memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
+    uint8_t* packed = malloc(IPC_MAX_PAYLOAD);
+    if (!packed) {
+        if (fc)
+            completions_free(fc);
+        send_error(fd, req_id, -7, "out of memory");
+        return;
+    }
+    uint8_t scanning = atomic_load(&srv->daemon->scanning) ? 1 : 0;
+    size_t pack_pos = ipc_pack_completions_begin(packed, IPC_MAX_PAYLOAD, scanning);
+    uint32_t packed_count = 0;
 
     if (fc) {
-        uint32_t n = fc->count < 50 ? (uint32_t) fc->count : 50;
-        uint32_t out_idx = 0;
+        uint32_t n = (uint32_t) fc->count;
         dedup_set seen;
         dedup_init(&seen);
-        for (uint32_t i = 0; i < n && out_idx < 50; i++) {
+        for (uint32_t i = 0; i < n && packed_count < want; i++) {
             const char* p = fc->paths[i];
             if (!p)
                 continue;
@@ -539,17 +558,29 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
                 continue;
             dedup_insert(&seen, clean);
 
-            strncpy(resp.paths[out_idx], clean, sizeof(resp.paths[out_idx]) - 1);
-            resp.is_dirs[out_idx] = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
-            out_idx++;
+            uint8_t is_dir = (fc->is_dirs && fc->is_dirs[i]) ? 1 : 0;
+            if (ipc_pack_completions_add(packed, IPC_MAX_PAYLOAD, &pack_pos, &packed_count, clean,
+                                         is_dir, 0.0f) != 0)
+                break;
         }
-        resp.count = out_idx;
         completions_free(fc);
     }
 
-    ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS, sizeof(resp), req_id);
+    ipc_pack_completions_finish(packed, packed_count);
+    ipc_header hdr;
+    ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS, (uint32_t) pack_pos, req_id);
     write_exact(fd, &hdr, sizeof(hdr));
-    write_exact(fd, &resp, sizeof(resp));
+    write_exact(fd, packed, pack_pos);
+    free(packed);
+}
+
+static void handle_select(ipc_server* srv, int fd, uint32_t req_id, const ipc_select_req* req) {
+    if (validate_string_field(req->path, sizeof(req->path)) != 0) {
+        send_error(fd, req_id, -6, "invalid path: not null-terminated");
+        return;
+    }
+    daemon_record_selection(srv->daemon, req->path);
+    send_ok(fd, req_id);
 }
 
 static void handle_client(ipc_server* srv, int fd) {
@@ -650,6 +681,15 @@ static void handle_client(ipc_server* srv, int fd) {
             handle_fuzzy_complete(srv, fd, hdr.request_id, &req);
             break;
         }
+        case IPC_MSG_SELECT: {
+            ipc_select_req req;
+            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+                send_error(fd, hdr.request_id, -3, "invalid select payload");
+                break;
+            }
+            handle_select(srv, fd, hdr.request_id, &req);
+            break;
+        }
         case IPC_MSG_RECENT: {
             ipc_recent_req req;
             if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
@@ -703,6 +743,20 @@ static void handle_client(ipc_server* srv, int fd) {
             clock_gettime(CLOCK_MONOTONIC, &now);
             resp.uptime_seconds = (uint64_t) (now.tv_sec - srv->daemon->start_time.tv_sec);
             resp.estimated_memory_bytes = atomic_load(&srv->daemon->store->estimated_memory_bytes);
+#ifdef __linux__
+            {
+                FILE* mf = fopen("/proc/self/statm", "r");
+                if (mf) {
+                    unsigned long rss_pages = 0;
+                    if (fscanf(mf, "%*u %lu", &rss_pages) == 1) {
+                        long pg = sysconf(_SC_PAGESIZE);
+                        if (pg > 0)
+                            resp.estimated_memory_bytes = (uint64_t) rss_pages * (uint64_t) pg;
+                    }
+                    fclose(mf);
+                }
+            }
+#endif
             resp.daemon_pid = (int32_t) getpid();
             resp.active_connections = atomic_load(&srv->active_connections);
             strncpy(resp.socket_path, srv->sock_path, sizeof(resp.socket_path) - 1);

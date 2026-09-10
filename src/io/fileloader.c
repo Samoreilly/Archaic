@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "../../ipc/server.h"
@@ -34,7 +35,7 @@
  *     Per node (DFS pre-order, index = serialization order):
  *       key_len      uint32
  *       key          char[key_len]
- *       child_count  uint8
+ *       child_count  uint16
  *       freq         uint64
  *       last_access  uint64
  *       is_leaf      uint8
@@ -43,7 +44,7 @@
  * ────────────────────────────────────────────────────────────────── */
 
 #define STATE_MAGIC 0x41525354U
-#define STATE_VERSION 2U
+#define STATE_VERSION 3U
 
 /* Simple FNV-1a hash for state file integrity checking */
 __attribute__((unused)) static uint32_t fnv1a_hash(const void* data, size_t len) {
@@ -60,7 +61,7 @@ static size_t count_trie_nodes(const RadixNode* node) {
     if (!node)
         return 0;
     size_t count = 1;
-    for (uint8_t i = 0; i < node->child_count; i++)
+    for (uint16_t i = 0; i < node->child_count; i++)
         count += count_trie_nodes(node->children[i].node);
     return count;
 }
@@ -76,7 +77,7 @@ static void assign_indices_dfs(const RadixNode* node, IndexedNode* arr, uint32_t
     arr[*idx].node = node;
     arr[*idx].index = *idx;
     (*idx)++;
-    for (uint8_t i = 0; i < node->child_count; i++)
+    for (uint16_t i = 0; i < node->child_count; i++)
         assign_indices_dfs(node->children[i].node, arr, idx);
 }
 
@@ -91,6 +92,7 @@ int save_trie(daemon_state* state, const char* path) {
     if (!state || !state->store || !path)
         return -1;
 
+    config_ensure_parent_dir(path);
     FILE* f = fopen(path, "wb");
     if (!f)
         return -1;
@@ -159,7 +161,7 @@ int save_trie(daemon_state* state, const char* path) {
                     goto werr;
                 }
 
-                uint8_t cc = nd->child_count;
+                uint16_t cc = nd->child_count;
                 if (fwrite(&cc, sizeof(cc), 1, f) != 1) {
                     free(indexed);
                     trie_unlock(bucket);
@@ -188,7 +190,7 @@ int save_trie(daemon_state* state, const char* path) {
                     goto werr;
                 }
 
-                for (uint8_t c = 0; c < nd->child_count; c++) {
+                for (uint16_t c = 0; c < nd->child_count; c++) {
                     uint8_t ec = (uint8_t) nd->children[c].edge_char;
                     if (fwrite(&ec, sizeof(ec), 1, f) != 1) {
                         free(indexed);
@@ -225,7 +227,7 @@ typedef struct {
 
 typedef struct {
     ChildRef* refs;
-    uint8_t count;
+    uint16_t count;
 } ChildRefs;
 
 int load_trie(daemon_state* state, const char* path) {
@@ -321,7 +323,7 @@ int load_trie(daemon_state* state, const char* path) {
             }
             nd->key_len = kl;
 
-            uint8_t cc;
+            uint16_t cc;
             if (fread(&cc, sizeof(cc), 1, f) != 1)
                 goto bucket_err;
             nd->child_count = cc;
@@ -350,7 +352,7 @@ int load_trie(daemon_state* state, const char* path) {
                     goto bucket_err;
                 crefs[i].count = cc;
 
-                for (uint8_t c = 0; c < cc; c++) {
+                for (uint16_t c = 0; c < cc; c++) {
                     uint8_t ec;
                     uint32_t ci;
                     if (fread(&ec, sizeof(ec), 1, f) != 1)
@@ -371,7 +373,7 @@ int load_trie(daemon_state* state, const char* path) {
         }
 
         for (uint32_t i = 0; i < node_count; i++) {
-            for (uint8_t c = 0; c < crefs[i].count; c++) {
+            for (uint16_t c = 0; c < crefs[i].count; c++) {
                 uint32_t ci = crefs[i].refs[c].child_index;
                 if (ci < node_count)
                     nodes[i]->children[c].node = nodes[ci];
@@ -446,7 +448,7 @@ static void collect_frequencies_dfs(RadixNode* node, char* buffer, size_t depth,
                 (unsigned long long) node->last_access, node->is_dir);
     }
 
-    for (uint8_t i = 0; i < node->child_count; i++) {
+    for (uint16_t i = 0; i < node->child_count; i++) {
         collect_frequencies_dfs(node->children[i].node, buffer, depth, f);
     }
 }
@@ -566,7 +568,7 @@ static void collect_json_dfs(RadixNode* node, char* buf, size_t pos, json_ctx* c
                 node->is_dir ? "true" : "false");
     }
 
-    for (uint8_t i = 0; i < node->child_count; i++)
+    for (uint16_t i = 0; i < node->child_count; i++)
         collect_json_dfs(node->children[i].node, buf, pos, ctx);
 }
 
@@ -729,14 +731,8 @@ daemon_state* daemon_init(void) {
         state->last_scan_paths[0][sizeof(state->last_scan_paths[0]) - 1] = '\0';
     }
 
-    const char* state_path = "/tmp/archaic-state.bin";
-    FILE* sf = fopen(state_path, "rb");
-    if (sf) {
-        fclose(sf);
-        LOG_INFO("daemon", "loading state from %s...", state_path);
-        if (load_trie(state, state_path) == 0)
-            LOG_INFO("daemon", "state loaded. %zu buckets restored.", state->store->right_index);
-    }
+    config_default_state_path(state->state_path, sizeof(state->state_path));
+    config_ensure_parent_dir(state->state_path);
 
     clock_gettime(CLOCK_MONOTONIC, &state->start_time);
 
@@ -764,6 +760,7 @@ void daemon_shutdown(daemon_state* state) {
     if (state->scanner.queue) {
         pthread_mutex_destroy(&state->scanner.queue->queue_lock);
         pthread_cond_destroy(&state->scanner.queue->queue_not_empty);
+        pthread_cond_destroy(&state->scanner.queue->queue_not_full);
         free(state->scanner.queue);
     }
 
@@ -772,9 +769,8 @@ void daemon_shutdown(daemon_state* state) {
         state->cache = NULL;
     }
 
-    const char* state_path = "/tmp/archaic-state.bin";
-    LOG_INFO("daemon", "saving state to %s...", state_path);
-    save_trie(state, state_path);
+    LOG_INFO("daemon", "saving state to %s...", state->state_path);
+    save_trie(state, state->state_path);
 
     if (state->store) {
         for (size_t i = 0; i < state->store->right_index; i++) {
@@ -1056,9 +1052,10 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
         return empty;
     }
 
-    const scored_completions* cached = NULL;
-    if (!dirs_only)
-        cached = cache_get(state->cache, prefix);
+    char cache_key[CACHE_MAX_KEY_LEN];
+    snprintf(cache_key, sizeof(cache_key), "%d|%zu|%s|%s", dirs_only, limit, cwd ? cwd : "",
+             prefix);
+    const scored_completions* cached = cache_get(state->cache, cache_key);
     if (cached) {
         metrics_record_cache_hit(&state->metrics);
         scored_result result;
@@ -1070,7 +1067,10 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
 
     metrics_record_completion(&state->metrics);
 
-    scored_completions* out = scored_completions_create(limit > 0 ? limit : 50);
+    size_t cap = limit;
+    if (cap < 512)
+        cap = 512;
+    scored_completions* out = scored_completions_create(cap);
     if (!out)
         return empty;
 
@@ -1124,8 +1124,7 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     }
 
     free(snapshot);
-    if (!dirs_only)
-        cache_put(state->cache, prefix, out);
+    cache_put(state->cache, cache_key, out);
     scored_result result;
     result.data = out;
     result.from_cache = false;
@@ -1264,9 +1263,61 @@ void daemon_touch_recent(daemon_state* state, const char* path, bool is_dir) {
     recent_files_touch(&state->recent, path, is_dir);
 }
 
+void daemon_record_selection(daemon_state* state, const char* path) {
+    if (!state || !path || path[0] == '\0')
+        return;
+
+    session_record_selection(path);
+
+    struct stat st;
+    bool is_dir = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+    daemon_touch_recent(state, path, is_dir);
+
+    if (!state->store)
+        return;
+
+    store_lock(state->store);
+    size_t n = state->store->right_index;
+    size_t plen = strlen(path);
+    t_bucket* best = NULL;
+    size_t best_len = 0;
+    for (size_t i = 0; i < n; i++) {
+        t_bucket* b = state->store->buckets[i];
+        if (!b || !b->dir_name || !b->dir_trie)
+            continue;
+        size_t bl = strlen(b->dir_name);
+        if (bl == 0 || bl > plen || bl < best_len)
+            continue;
+        if (strncmp(path, b->dir_name, bl) != 0)
+            continue;
+        if (path[bl] != '\0' && path[bl] != '/')
+            continue;
+        best = b;
+        best_len = bl;
+    }
+    if (best) {
+        atomic_fetch_add(&best->refcount, 1);
+        store_unlock(state->store);
+        trie_lock(best);
+        insert(best->dir_trie, path);
+        trie_unlock(best);
+        bucket_release(best);
+        return;
+    }
+    store_unlock(state->store);
+}
+
 int daemon_start_ipc(daemon_state* state, const char* sock_path) {
     if (!state)
         return -1;
+    config_ensure_parent_dir(state->state_path);
+    FILE* sf = fopen(state->state_path, "rb");
+    if (sf) {
+        fclose(sf);
+        LOG_INFO("daemon", "loading state from %s...", state->state_path);
+        if (load_trie(state, state->state_path) == 0)
+            LOG_INFO("daemon", "state loaded. %zu buckets restored.", state->store->right_index);
+    }
     state->ipc = ipc_server_start(state, sock_path);
     return state->ipc ? 0 : -1;
 }

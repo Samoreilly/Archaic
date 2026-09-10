@@ -24,13 +24,12 @@
 #include "src/io/fileloader.h"
 #include "src/log.h"
 #include "src/systemd_notify.h"
-#include "test/test.h"
 
-static volatile int running = 1;
-static volatile int sighup_received = 0;
-static volatile int sigterm_received = 0;
-static volatile int sigusr1_received = 0;
-static volatile int sigusr2_received = 0;
+static volatile sig_atomic_t running = 1;
+static volatile sig_atomic_t sighup_received = 0;
+static volatile sig_atomic_t sigterm_received = 0;
+static volatile sig_atomic_t sigusr1_received = 0;
+static volatile sig_atomic_t sigusr2_received = 0;
 static char pid_file_path[4096] = {0};
 
 static void cleanup_pid_file(void) {
@@ -59,7 +58,8 @@ static void* watchdog_thread_func(void* arg) {
         } else {
             sd_notify(0, "STATUS=idle\nWATCHDOG=1");
         }
-        sleep(15);
+        for (int i = 0; i < 15 && running; i++)
+            sleep(1);
     }
     return NULL;
 }
@@ -254,7 +254,7 @@ int main(int argc, char* argv[]) {
         daemon_prefetch_common_prefixes(daemon);
 
         pthread_t watchdog_thread;
-        pthread_create(&watchdog_thread, NULL, watchdog_thread_func, daemon);
+        int wd_ok = pthread_create(&watchdog_thread, NULL, watchdog_thread_func, daemon) == 0;
 
         LOG_INFO("main", "ready for queries. scan running in background.");
         LOG_INFO("main", "send SIGHUP to reload configuration");
@@ -270,22 +270,19 @@ int main(int argc, char* argv[]) {
             if (sigusr2_received) {
                 sigusr2_received = 0;
                 LOG_INFO("main", "SIGUSR2 received, dumping state...");
-                char state_path[4096];
-                snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
-                daemon_save_state(daemon, state_path);
-                LOG_INFO("main", "state saved to %s", state_path);
+                daemon_save_state(daemon, daemon->state_path);
+                LOG_INFO("main", "state saved to %s", daemon->state_path);
             }
             if (sigusr1_received) {
                 sigusr1_received = 0;
                 LOG_INFO("main", "SIGUSR1 received, saving state and continuing...");
-                char state_path[4096];
-                snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
-                daemon_save_state(daemon, state_path);
+                daemon_save_state(daemon, daemon->state_path);
             }
             sleep(1);
         }
 
-        pthread_join(watchdog_thread, NULL);
+        if (wd_ok)
+            pthread_join(watchdog_thread, NULL);
         LOG_INFO("main", "shutting down...");
 
         if (daemon->watcher) {
@@ -294,17 +291,8 @@ int main(int argc, char* argv[]) {
             daemon->watcher = NULL;
         }
 
-        if (sigterm_received) {
-            LOG_INFO("main", "signal-safe shutdown: saving state before exit...");
-            char state_path[4096];
-            snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
-            daemon_save_state(daemon, state_path);
-        } else {
-            LOG_INFO("main", "saving state before exit...");
-            char state_path[4096];
-            snprintf(state_path, sizeof(state_path), "%s.state", sock_path);
-            daemon_save_state(daemon, state_path);
-        }
+        LOG_INFO("main", "saving state before exit...");
+        daemon_save_state(daemon, daemon->state_path);
 
         daemon_shutdown(daemon);
         cleanup_pid_file();
@@ -312,11 +300,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    if (argc > 1) {
-        set_test_scan_path(argv[1]);
-    }
-    test_main();
-    perf_main(argc > 1 ? argv[1] : "/home/sam/samdev");
-
-    return 0;
+    fprintf(stderr, "Usage: archaic --daemon [scan_path] [socket]\n");
+    fprintf(stderr, "       archaic --version\n");
+    return 1;
 }

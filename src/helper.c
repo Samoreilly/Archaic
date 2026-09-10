@@ -20,6 +20,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,34 +36,6 @@
 /* ------------------------------------------------------------------ */
 /* Path abbreviation support                                           */
 /* ------------------------------------------------------------------ */
-
-static char* g_home_dir = NULL;
-static size_t g_home_len = 0;
-
-static void init_home_dir(void) {
-    if (g_home_dir)
-        return;
-    g_home_dir = getenv("HOME");
-    if (g_home_dir)
-        g_home_len = strlen(g_home_dir);
-}
-
-static void abbreviate_path(const char* path, char* out, size_t out_len) {
-    if (!g_home_dir || g_home_len == 0 || strncmp(path, g_home_dir, g_home_len) != 0) {
-        strncpy(out, path, out_len - 1);
-        out[out_len - 1] = '\0';
-        return;
-    }
-    if (path[g_home_len] == '\0') {
-        strncpy(out, "~", out_len - 1);
-        out[out_len - 1] = '\0';
-    } else if (path[g_home_len] == '/') {
-        snprintf(out, out_len, "~%s", path + g_home_len);
-    } else {
-        strncpy(out, path, out_len - 1);
-        out[out_len - 1] = '\0';
-    }
-}
 
 /* ------------------------------------------------------------------ */
 /* Color output support                                                */
@@ -86,25 +59,7 @@ static void check_color_env(void) {
 #define COLOR_RESET "\033[0m"
 
 static void print_colored(const char* type, const char* path) {
-    char abbr_path[4096];
-    abbreviate_path(path, abbr_path, sizeof(abbr_path));
-
-    if (!g_color_enabled) {
-        printf("%c %s\n", type[0], abbr_path);
-        return;
-    }
-
-    int is_dir = (type[0] == 'D');
-    int is_hidden = (abbr_path[0] == '.');
-
-    if (is_dir) {
-        printf("%s%c%s %s%s\n", COLOR_DIR, type[0], COLOR_RESET, abbr_path, COLOR_RESET);
-    } else if (is_hidden) {
-        printf("%s%c%s %s%s%s\n", COLOR_HIDDEN, type[0], COLOR_RESET, COLOR_HIDDEN, abbr_path,
-               COLOR_RESET);
-    } else {
-        printf("%c %s\n", type[0], abbr_path);
-    }
+    printf("%c %s\n", type[0], path);
 }
 
 /* ------------------------------------------------------------------ */
@@ -244,24 +199,45 @@ static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, c
     }
 
     ipc_header hdr;
-    ipc_completions_resp resp;
-    if (recv_response(conn, &hdr, &resp, sizeof(resp)) < 0) {
+    if (read_exact(conn->fd, &hdr, sizeof(hdr)) < 0) {
         helper_disconnect(conn);
         return -1;
     }
-
-    if (hdr.msg_type == IPC_MSG_COMPLETIONS) {
-        for (uint32_t i = 0; i < resp.count; i++) {
-            const char* type = resp.is_dirs[i] ? "D" : "F";
-            print_colored(type, resp.paths[i]);
-        }
-    } else if (hdr.msg_type == IPC_MSG_ERROR) {
-        ipc_error_resp err;
-        memcpy(&err, &resp, sizeof(err));
-        fprintf(stderr, "helper: complete error: %s\n", err.message);
+    if (!ipc_validate_header(&hdr)) {
+        helper_disconnect(conn);
         return -1;
     }
-    return 0;
+    uint8_t* buf = malloc(hdr.payload_len ? hdr.payload_len : 1);
+    if (!buf) {
+        helper_disconnect(conn);
+        return -1;
+    }
+    if (hdr.payload_len > 0 && read_exact(conn->fd, buf, hdr.payload_len) < 0) {
+        free(buf);
+        helper_disconnect(conn);
+        return -1;
+    }
+    int rc = 0;
+    if (hdr.msg_type == IPC_MSG_COMPLETIONS) {
+        ipc_completion_list* list = calloc(1, sizeof(*list));
+        if (list && ipc_unpack_completions(buf, hdr.payload_len, list) == 0) {
+            if (list->scanning)
+                printf("#scanning\n");
+            for (uint32_t i = 0; i < list->count; i++)
+                print_colored(list->is_dirs[i] ? "D" : "F", list->paths[i]);
+        } else {
+            rc = -1;
+        }
+        free(list);
+    } else if (hdr.msg_type == IPC_MSG_ERROR) {
+        ipc_error_resp err;
+        memset(&err, 0, sizeof(err));
+        memcpy(&err, buf, hdr.payload_len < sizeof(err) ? hdr.payload_len : sizeof(err));
+        fprintf(stderr, "helper: complete error: %s\n", err.message);
+        rc = -1;
+    }
+    free(buf);
+    return rc;
 }
 
 static int cmd_suggest(helper_conn* conn, const char* prefix, const char* cwd) {
@@ -431,24 +407,64 @@ static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
     }
 
     ipc_header hdr;
-    ipc_completions_resp resp;
+    if (read_exact(conn->fd, &hdr, sizeof(hdr)) < 0) {
+        helper_disconnect(conn);
+        return -1;
+    }
+    if (!ipc_validate_header(&hdr)) {
+        helper_disconnect(conn);
+        return -1;
+    }
+    uint8_t* buf = malloc(hdr.payload_len ? hdr.payload_len : 1);
+    if (!buf) {
+        helper_disconnect(conn);
+        return -1;
+    }
+    if (hdr.payload_len > 0 && read_exact(conn->fd, buf, hdr.payload_len) < 0) {
+        free(buf);
+        helper_disconnect(conn);
+        return -1;
+    }
+    int rc = 0;
+    if (hdr.msg_type == IPC_MSG_FUZZY_COMPLETIONS) {
+        ipc_completion_list* list = calloc(1, sizeof(*list));
+        if (list && ipc_unpack_completions(buf, hdr.payload_len, list) == 0) {
+            if (list->scanning)
+                printf("#scanning\n");
+            for (uint32_t i = 0; i < list->count; i++)
+                print_colored(list->is_dirs[i] ? "D" : "F", list->paths[i]);
+        } else {
+            rc = -1;
+        }
+        free(list);
+    } else if (hdr.msg_type == IPC_MSG_ERROR) {
+        ipc_error_resp err;
+        memset(&err, 0, sizeof(err));
+        memcpy(&err, buf, hdr.payload_len < sizeof(err) ? hdr.payload_len : sizeof(err));
+        fprintf(stderr, "helper: fuzzy error: %s\n", err.message);
+        rc = -1;
+    }
+    free(buf);
+    return rc;
+}
+
+static int cmd_select(helper_conn* conn, const char* path) {
+    if (helper_ensure_connected(conn) < 0)
+        return -1;
+    ipc_select_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.path, path, sizeof(req.path) - 1);
+    if (send_request(conn, IPC_MSG_SELECT, &req, sizeof(req)) < 0) {
+        helper_disconnect(conn);
+        return -1;
+    }
+    ipc_header hdr;
+    ipc_ok_resp resp;
     if (recv_response(conn, &hdr, &resp, sizeof(resp)) < 0) {
         helper_disconnect(conn);
         return -1;
     }
-
-    if (hdr.msg_type == IPC_MSG_FUZZY_COMPLETIONS) {
-        for (uint32_t i = 0; i < resp.count; i++) {
-            const char* type = resp.is_dirs[i] ? "D" : "F";
-            print_colored(type, resp.paths[i]);
-        }
-    } else if (hdr.msg_type == IPC_MSG_ERROR) {
-        ipc_error_resp err;
-        memcpy(&err, &resp, sizeof(err));
-        fprintf(stderr, "helper: fuzzy error: %s\n", err.message);
-        return -1;
-    }
-    return 0;
+    return hdr.msg_type == IPC_MSG_OK ? 0 : -1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -456,29 +472,59 @@ static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
 /* ------------------------------------------------------------------ */
 
 int main(int argc, char* argv[]) {
-    if (argc > 1 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
-        printf("archaic-helper 0.9.0\n");
-        return 0;
+    const char* sock_path = NULL;
+    const char* cmd_fifo = NULL;
+    const char* out_fifo = NULL;
+    int fifo_mode = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+            printf("archaic-helper 0.9.0\n");
+            return 0;
+        }
+        if (strcmp(argv[i], "--cmd-fifo") == 0 && i + 1 < argc) {
+            cmd_fifo = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--out-fifo") == 0 && i + 1 < argc) {
+            out_fifo = argv[++i];
+            continue;
+        }
+        if (argv[i][0] != '-')
+            sock_path = argv[i];
     }
 
-    /* Determine socket path: CLI arg > config > default */
-    const char* sock_path = IPC_SOCK_PATH;
-
-    if (argc > 1) {
-        sock_path = argv[1];
-    } else {
+    if (!sock_path) {
+        sock_path = IPC_SOCK_PATH;
         archaic_config cfg;
         config_init_defaults(&cfg);
         if (config_load_default(&cfg) == 0 && cfg.daemon.socket_path[0] != '\0') {
             sock_path = cfg.daemon.socket_path;
         }
-        /* Helper stdout is always piped by shell plugins, so never emit ANSI.
-         * colored_output config is intentionally ignored to prevent escape
-         * codes leaking into completions (Fish displays raw ESC bytes). */
+    }
+
+    if (cmd_fifo) {
+        int fd = open(cmd_fifo, O_RDWR);
+        if (fd < 0)
+            return 1;
+        if (dup2(fd, STDIN_FILENO) < 0)
+            return 1;
+        if (fd != STDIN_FILENO)
+            close(fd);
+        fifo_mode = 1;
+    }
+    if (out_fifo) {
+        int fd = open(out_fifo, O_RDWR);
+        if (fd < 0)
+            return 1;
+        if (dup2(fd, STDOUT_FILENO) < 0)
+            return 1;
+        if (fd != STDOUT_FILENO)
+            close(fd);
+        fifo_mode = 1;
     }
 
     check_color_env();
-    init_home_dir();
 
     helper_conn conn;
     helper_conn_init(&conn);
@@ -486,6 +532,7 @@ int main(int argc, char* argv[]) {
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
+    signal(SIGPIPE, SIG_IGN);
 
     char line[8192];
     while (running && fgets(line, sizeof(line), stdin)) {
@@ -572,6 +619,10 @@ int main(int argc, char* argv[]) {
             if (n >= 1) {
                 rc = cmd_fuzzy(&conn, prefix, limit);
             }
+        } else if (strcmp(cmd, "select") == 0) {
+            char path[4096] = {0};
+            if (sscanf(line, "%*s %4095s", path) >= 1)
+                rc = cmd_select(&conn, path);
         } else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
             break;
         } else {
@@ -582,6 +633,8 @@ int main(int argc, char* argv[]) {
         if (rc < 0) {
             fprintf(stderr, "helper: command '%s' failed\n", cmd);
         }
+        if (fifo_mode)
+            fputs(".\n", stdout);
         fflush(stdout);
     }
 

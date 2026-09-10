@@ -117,6 +117,8 @@ _archaic_file_info() {
 _archaic_resolve_paths() {
     if [[ -x "$(command -v archaic-cli 2>/dev/null)" ]]; then
         _archaic_cli="archaic-cli"
+    elif [[ -x "$HOME/.local/bin/archaic-cli" ]]; then
+        _archaic_cli="$HOME/.local/bin/archaic-cli"
     else
         local script_path="${(%):-%x}"
         if [[ -n "$script_path" ]]; then
@@ -130,6 +132,8 @@ _archaic_resolve_paths() {
 
     if [[ -x "$(command -v archaic-helper 2>/dev/null)" ]]; then
         _archaic_helper="archaic-helper"
+    elif [[ -x "$HOME/.local/bin/archaic-helper" ]]; then
+        _archaic_helper="$HOME/.local/bin/archaic-helper"
     else
         local script_path="${(%):-%x}"
         if [[ -n "$script_path" ]]; then
@@ -141,7 +145,11 @@ _archaic_resolve_paths() {
         fi
     fi
 
-    _archaic_sock="/tmp/archaic-daemon.sock"
+    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+        _archaic_sock="$XDG_RUNTIME_DIR/archaic.sock"
+    else
+        _archaic_sock="/tmp/archaic-$(id -u).sock"
+    fi
 
     local config_file=""
     local p
@@ -212,6 +220,19 @@ _archaic_do_complete() {
     if [[ "$cur" == -* ]]; then
         return
     fi
+
+    case "$cmd" in
+        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find)
+            ;;
+        *)
+            if [[ -z "$cur" ]]; then
+                return
+            fi
+            if [[ "$cur" != .* && "$cur" != ~* && "$cur" != /* && "$cur" != */* ]]; then
+                return
+            fi
+            ;;
+    esac
 
     # Expand environment variables and ~user/ syntax
     local expanded_cur=$(_archaic_expand_path "$cur")

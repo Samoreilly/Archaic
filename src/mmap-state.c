@@ -15,7 +15,7 @@
 #include "trie.h"
 
 #define STATE_MAGIC 0x41525354U
-#define STATE_VERSION 2U
+#define STATE_VERSION 3U
 
 typedef struct {
     uint8_t* base;
@@ -48,7 +48,7 @@ static size_t count_trie_nodes(const RadixNode* node) {
     if (!node)
         return 0;
     size_t count = 1;
-    for (uint8_t i = 0; i < node->child_count; i++)
+    for (uint16_t i = 0; i < node->child_count; i++)
         count += count_trie_nodes(node->children[i].node);
     return count;
 }
@@ -59,7 +59,7 @@ static void assign_indices_dfs(const RadixNode* node, IndexedNode* arr, uint32_t
     arr[*idx].node = node;
     arr[*idx].index = *idx;
     (*idx)++;
-    for (uint8_t i = 0; i < node->child_count; i++)
+    for (uint16_t i = 0; i < node->child_count; i++)
         assign_indices_dfs(node->children[i].node, arr, idx);
 }
 
@@ -91,7 +91,7 @@ static size_t bucket_serialized_size(const t_bucket* bucket) {
         const RadixNode* nd = indexed[i].node;
         sz += sizeof(uint32_t);
         sz += nd->key_len;
-        sz += sizeof(uint8_t);
+        sz += sizeof(uint16_t);
         sz += sizeof(uint64_t);
         sz += sizeof(uint64_t);
         sz += sizeof(uint8_t);
@@ -137,7 +137,7 @@ static int serialize_bucket(mmap_cursor* c, const t_bucket* bucket) {
             return -1;
         }
 
-        uint8_t cc = nd->child_count;
+        uint16_t cc = nd->child_count;
         if (cursor_write(c, &cc, sizeof(cc)) != 0) {
             free(indexed);
             return -1;
@@ -161,7 +161,7 @@ static int serialize_bucket(mmap_cursor* c, const t_bucket* bucket) {
             return -1;
         }
 
-        for (uint8_t cc2 = 0; cc2 < nd->child_count; cc2++) {
+        for (uint16_t cc2 = 0; cc2 < nd->child_count; cc2++) {
             uint8_t ec = (uint8_t) nd->children[cc2].edge_char;
             if (cursor_write(c, &ec, sizeof(ec)) != 0) {
                 free(indexed);
@@ -186,7 +186,7 @@ typedef struct {
 
 typedef struct {
     ChildRef* refs;
-    uint8_t count;
+    uint16_t count;
 } ChildRefs;
 
 static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
@@ -256,7 +256,7 @@ static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
         }
         nd->key_len = kl;
 
-        uint8_t cc;
+        uint16_t cc;
         if (cursor_read(c, &cc, sizeof(cc)) != 0)
             goto bucket_err;
         nd->child_count = cc;
@@ -285,7 +285,7 @@ static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
                 goto bucket_err;
             crefs[i].count = cc;
 
-            for (uint8_t cc2 = 0; cc2 < cc; cc2++) {
+            for (uint16_t cc2 = 0; cc2 < cc; cc2++) {
                 uint8_t ec;
                 uint32_t ci;
                 if (cursor_read(c, &ec, sizeof(ec)) != 0)
@@ -306,7 +306,7 @@ static int deserialize_bucket(mmap_cursor* c, daemon_state* state) {
     }
 
     for (uint32_t i = 0; i < node_count; i++) {
-        for (uint8_t cc2 = 0; cc2 < crefs[i].count; cc2++) {
+        for (uint16_t cc2 = 0; cc2 < crefs[i].count; cc2++) {
             uint32_t ci = crefs[i].refs[cc2].child_index;
             if (ci < node_count)
                 nodes[i]->children[cc2].node = nodes[ci];

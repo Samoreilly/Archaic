@@ -146,7 +146,7 @@ int ipc_client_query(ipc_client* client, const char* cwd, const char* input,
 }
 
 int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, const char* cwd,
-                        int dirs_only, ipc_completions_resp* out) {
+                         int dirs_only, ipc_completion_list* out) {
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, prefix, sizeof(req.prefix) - 1);
@@ -158,11 +158,20 @@ int ipc_client_complete(ipc_client* client, const char* prefix, uint32_t limit, 
         return -1;
 
     ipc_header hdr;
-    if (recv_response(client, &hdr, out, sizeof(*out)) < 0)
+    if (read_exact(client->fd, &hdr, sizeof(hdr)) < 0)
         return -1;
-    if (hdr.msg_type != IPC_MSG_COMPLETIONS)
+    if (!ipc_validate_header(&hdr) || hdr.msg_type != IPC_MSG_COMPLETIONS)
         return -1;
-    return 0;
+    uint8_t* buf = malloc(hdr.payload_len ? hdr.payload_len : 1);
+    if (!buf)
+        return -1;
+    if (hdr.payload_len > 0 && read_exact(client->fd, buf, hdr.payload_len) < 0) {
+        free(buf);
+        return -1;
+    }
+    int rc = ipc_unpack_completions(buf, hdr.payload_len, out);
+    free(buf);
+    return rc;
 }
 
 int ipc_client_suggest(ipc_client* client, const char* prefix, const char* cwd,
@@ -233,7 +242,7 @@ int ipc_client_scan_status(ipc_client* client, ipc_scan_status_resp* out) {
 }
 
 int ipc_client_fuzzy(ipc_client* client, const char* query, uint32_t limit,
-                     ipc_completions_resp* out) {
+                     ipc_completion_list* out) {
     ipc_complete_req req;
     memset(&req, 0, sizeof(req));
     strncpy(req.prefix, query, sizeof(req.prefix) - 1);
@@ -243,9 +252,33 @@ int ipc_client_fuzzy(ipc_client* client, const char* query, uint32_t limit,
         return -1;
 
     ipc_header hdr;
-    if (recv_response(client, &hdr, out, sizeof(*out)) < 0)
+    if (read_exact(client->fd, &hdr, sizeof(hdr)) < 0)
         return -1;
-    if (hdr.msg_type != IPC_MSG_FUZZY_COMPLETIONS)
+    if (!ipc_validate_header(&hdr) || hdr.msg_type != IPC_MSG_FUZZY_COMPLETIONS)
+        return -1;
+    uint8_t* buf = malloc(hdr.payload_len ? hdr.payload_len : 1);
+    if (!buf)
+        return -1;
+    if (hdr.payload_len > 0 && read_exact(client->fd, buf, hdr.payload_len) < 0) {
+        free(buf);
+        return -1;
+    }
+    int rc = ipc_unpack_completions(buf, hdr.payload_len, out);
+    free(buf);
+    return rc;
+}
+
+int ipc_client_select(ipc_client* client, const char* path) {
+    ipc_select_req req;
+    memset(&req, 0, sizeof(req));
+    strncpy(req.path, path, sizeof(req.path) - 1);
+    if (send_request(client, IPC_MSG_SELECT, &req, sizeof(req)) < 0)
+        return -1;
+    ipc_header hdr;
+    ipc_ok_resp resp;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_OK)
         return -1;
     return 0;
 }

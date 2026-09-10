@@ -2,10 +2,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define IPC_SOCK_PATH "/tmp/archaic-daemon.sock"
 #define IPC_MAX_PAYLOAD 262144
 #define IPC_COMPRESS_THRESHOLD 512
+#define IPC_COMPLETE_MAX 256
 
 /*
     Protocol versioning: magic = 0x4152VVVV where VVVV is the version.
@@ -13,7 +15,7 @@
     Lower 16 bits carry the protocol version for backward-compatible negotiation.
 */
 #define IPC_MAGIC_PREFIX 0x4152
-#define IPC_PROTOCOL_VERSION 1
+#define IPC_PROTOCOL_VERSION 2
 #define IPC_MAGIC ((IPC_MAGIC_PREFIX << 16) | IPC_PROTOCOL_VERSION)
 
 #define IPC_MSG_COMPRESSED 0x80000000U
@@ -33,6 +35,7 @@ typedef enum {
     IPC_MSG_SCAN_STATUS = 9,
     IPC_MSG_FUZZY_COMPLETE = 10,
     IPC_MSG_RECENT = 11,
+    IPC_MSG_SELECT = 12,
 
     IPC_MSG_OK = 100,
     IPC_MSG_ERROR = 101,
@@ -111,6 +114,78 @@ typedef struct {
     uint64_t freqs[50];
     uint32_t is_dirs[50];
 } __attribute__((packed)) ipc_completions_resp;
+
+typedef struct {
+    char path[4096];
+} __attribute__((packed)) ipc_select_req;
+
+typedef struct {
+    uint32_t count;
+    uint8_t scanning;
+    uint8_t is_dirs[IPC_COMPLETE_MAX];
+    float scores[IPC_COMPLETE_MAX];
+    char paths[IPC_COMPLETE_MAX][4096];
+} ipc_completion_list;
+
+static inline size_t ipc_pack_completions_begin(uint8_t* buf, size_t cap, uint8_t scanning) {
+    if (cap < 8)
+        return 0;
+    memset(buf, 0, 8);
+    buf[4] = scanning;
+    return 8;
+}
+
+static inline int ipc_pack_completions_add(uint8_t* buf, size_t cap, size_t* pos, uint32_t* count,
+                                           const char* path, uint8_t is_dir, float score) {
+    if (!buf || !pos || !count || !path || *count >= IPC_COMPLETE_MAX)
+        return -1;
+    size_t plen = strlen(path) + 1;
+    if (plen > 4096)
+        plen = 4096;
+    if (*pos + 8 + plen > cap)
+        return -1;
+    buf[*pos] = is_dir;
+    buf[*pos + 1] = 0;
+    uint16_t n = (uint16_t) plen;
+    memcpy(buf + *pos + 2, &n, sizeof(n));
+    memcpy(buf + *pos + 4, &score, sizeof(score));
+    memcpy(buf + *pos + 8, path, plen);
+    buf[*pos + 8 + plen - 1] = '\0';
+    *pos += 8 + plen;
+    (*count)++;
+    return 0;
+}
+
+static inline void ipc_pack_completions_finish(uint8_t* buf, uint32_t count) {
+    memcpy(buf, &count, sizeof(count));
+}
+
+static inline int ipc_unpack_completions(const uint8_t* buf, size_t len, ipc_completion_list* out) {
+    if (!buf || !out || len < 8)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    memcpy(&out->count, buf, sizeof(out->count));
+    out->scanning = buf[4];
+    if (out->count > IPC_COMPLETE_MAX)
+        out->count = IPC_COMPLETE_MAX;
+    size_t pos = 8;
+    uint32_t n = 0;
+    for (; n < out->count && pos + 8 <= len; n++) {
+        uint16_t plen = 0;
+        memcpy(&plen, buf + pos + 2, sizeof(plen));
+        if (plen == 0 || pos + 8 + plen > len)
+            break;
+        out->is_dirs[n] = buf[pos];
+        memcpy(&out->scores[n], buf + pos + 4, sizeof(float));
+        if (plen > 4096)
+            plen = 4096;
+        memcpy(out->paths[n], buf + pos + 8, plen);
+        out->paths[n][4095] = '\0';
+        pos += 8 + plen;
+    }
+    out->count = n;
+    return 0;
+}
 
 typedef struct {
     char path[4096];

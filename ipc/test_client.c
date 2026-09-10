@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
+#include "../src/config.h"
 #include "client.h"
 #include "protocol.h"
 
@@ -16,8 +18,15 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    const char* sock_override = NULL;
+    if (argc >= 3 && strcmp(argv[1], "--sock") == 0) {
+        sock_override = argv[2];
+        argv += 2;
+        argc -= 2;
+    }
+
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <command> [args...]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--sock PATH] <command> [args...]\n", argv[0]);
         fprintf(stderr, "Commands:\n");
         fprintf(stderr, "  scan <path>\n");
         fprintf(stderr, "  query <cwd> <input>\n");
@@ -31,10 +40,50 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  clear-cache\n");
         fprintf(stderr, "  reindex [path]\n");
         fprintf(stderr, "  shutdown\n");
+        fprintf(stderr, "  doctor\n");
         return 1;
     }
 
-    ipc_client* client = ipc_client_connect_default();
+    if (strcmp(argv[1], "doctor") == 0) {
+        archaic_config cfg;
+        config_init_defaults(&cfg);
+        config_load_default(&cfg);
+        const char* sock = sock_override ? sock_override : cfg.daemon.socket_path;
+        printf("archaic doctor\n");
+        printf("  cli:        %s\n", argv[0]);
+        printf("  socket:     %s\n", sock);
+        struct stat st;
+        int sock_ok = (stat(sock, &st) == 0 && S_ISSOCK(st.st_mode));
+        printf("  sock_exists:%s\n", sock_ok ? " yes" : " no");
+        printf("  scan_path:  %s\n", cfg.daemon.scan_path[0] ? cfg.daemon.scan_path : "(none)");
+        ipc_client* client =
+            sock_override ? ipc_client_connect(sock_override) : ipc_client_connect_default();
+        if (!client) {
+            printf("  daemon:     not connected\n");
+            return 1;
+        }
+        uint64_t uptime_ms = 0;
+        if (ipc_client_ping(client, &uptime_ms) == 0)
+            printf("  ping:       ok (uptime %lu ms)\n", (unsigned long) uptime_ms);
+        else
+            printf("  ping:       fail\n");
+        ipc_health_resp health;
+        memset(&health, 0, sizeof(health));
+        if (ipc_client_health(client, &health) == 0) {
+            printf("  pid:        %d\n", health.daemon_pid);
+            printf("  scanning:   %s\n", health.scanning ? "yes" : "no");
+            printf("  rss:        %lu bytes\n", (unsigned long) health.estimated_memory_bytes);
+            printf("  protocol:   %d\n", health.protocol_version);
+            printf("  daemon_sock:%s\n", health.socket_path);
+        } else {
+            printf("  health:     fail\n");
+        }
+        ipc_client_disconnect(client);
+        return 0;
+    }
+
+    ipc_client* client =
+        sock_override ? ipc_client_connect(sock_override) : ipc_client_connect_default();
     if (!client) {
         fprintf(stderr, "Failed to connect to daemon\n");
         return 1;
@@ -78,16 +127,19 @@ int main(int argc, char* argv[]) {
         }
         uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
         const char* cwd = argc > 4 ? argv[4] : "";
-        ipc_completions_resp resp;
+        ipc_completion_list* resp = calloc(1, sizeof(*resp));
         int dirs_only = argc > 5 ? atoi(argv[5]) : 0;
-        rc = ipc_client_complete(client, argv[2], limit, cwd, dirs_only, &resp);
+        rc = resp ? ipc_client_complete(client, argv[2], limit, cwd, dirs_only, resp) : -1;
         if (rc == 0) {
-            for (uint32_t i = 0; i < resp.count; i++) {
-                printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+            if (resp->scanning)
+                printf("#scanning\n");
+            for (uint32_t i = 0; i < resp->count; i++) {
+                printf("%c %s\n", resp->is_dirs[i] ? 'D' : 'F', resp->paths[i]);
             }
         } else {
             fprintf(stderr, "Completions failed\n");
         }
+        free(resp);
     } else if (strcmp(argv[1], "suggest") == 0) {
         if (argc < 3) {
             fprintf(stderr, "Usage: %s suggest <prefix> [cwd]\n", argv[0]);
@@ -110,19 +162,19 @@ int main(int argc, char* argv[]) {
         }
         uint32_t raw_limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 10;
         const char* raw_cwd = argc > 4 ? argv[4] : "";
-        ipc_completions_resp resp;
+        ipc_completion_list* resp = calloc(1, sizeof(*resp));
         int dirs_only = 0;
-        rc = ipc_client_complete(client, argv[2], raw_limit, raw_cwd, dirs_only, &resp);
+        rc = resp ? ipc_client_complete(client, argv[2], raw_limit, raw_cwd, dirs_only, resp) : -1;
         if (rc == 0) {
-            printf("Found %u completions:\n", resp.count);
-            for (uint32_t i = 0; i < resp.count; i++) {
-                printf("  [%d] score=%.4f freq=%lu dir=%s  %s\n", i, resp.scores[i],
-                       (unsigned long) resp.freqs[i], resp.is_dirs[i] ? "yes" : "no",
-                       resp.paths[i]);
+            printf("Found %u completions:\n", resp->count);
+            for (uint32_t i = 0; i < resp->count; i++) {
+                printf("  [%d] score=%.4f dir=%s  %s\n", i, resp->scores[i],
+                       resp->is_dirs[i] ? "yes" : "no", resp->paths[i]);
             }
         } else {
             fprintf(stderr, "Completions failed\n");
         }
+        free(resp);
     } else if (strcmp(argv[1], "save") == 0) {
         if (argc < 3) {
             fprintf(stderr, "Usage: %s save <path>\n", argv[0]);
@@ -180,15 +232,25 @@ int main(int argc, char* argv[]) {
             goto done;
         }
         uint32_t limit = argc > 3 ? (uint32_t) atoi(argv[3]) : 20;
-        ipc_completions_resp resp;
-        rc = ipc_client_fuzzy(client, argv[2], limit, &resp);
+        ipc_completion_list* resp = calloc(1, sizeof(*resp));
+        rc = resp ? ipc_client_fuzzy(client, argv[2], limit, resp) : -1;
         if (rc == 0) {
-            for (uint32_t i = 0; i < resp.count; i++) {
-                printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+            for (uint32_t i = 0; i < resp->count; i++) {
+                printf("%c %s\n", resp->is_dirs[i] ? 'D' : 'F', resp->paths[i]);
             }
         } else {
             fprintf(stderr, "Fuzzy completions failed\n");
         }
+        free(resp);
+    } else if (strcmp(argv[1], "select") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s select <path>\n", argv[0]);
+            rc = 1;
+            goto done;
+        }
+        rc = ipc_client_select(client, argv[2]);
+        if (rc != 0)
+            fprintf(stderr, "Select failed\n");
     } else if (strcmp(argv[1], "stats") == 0) {
         ipc_metrics_resp resp;
         rc = ipc_client_metrics(client, &resp);

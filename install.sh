@@ -4,24 +4,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 SCAN_PATH="${1:-$HOME}"
+if [[ ! -d "$SCAN_PATH" ]]; then
+    echo "Scan path does not exist: $SCAN_PATH" >&2
+    exit 1
+fi
 if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
     SOCK_PATH="$XDG_RUNTIME_DIR/archaic.sock"
 else
     SOCK_PATH="/tmp/archaic-$(id -u).sock"
 fi
 
-# ── Color output ─────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
-
 info()  { echo -e "${GREEN}[archaic]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[archaic]${NC} $*"; }
 error() { echo -e "${RED}[archaic]${NC} $*"; }
 
-# ── Prerequisites ────────────────────────────────────────────────────────────
-check_prereq() {
+need() {
     if ! command -v "$1" &>/dev/null; then
         error "$1 is required but not installed."
         exit 1
@@ -29,138 +30,124 @@ check_prereq() {
 }
 
 info "Checking prerequisites..."
-check_prereq cmake
-check_prereq make
-
+need cmake
+need make
 if command -v gcc &>/dev/null; then
     CC="gcc"
 elif command -v clang &>/dev/null; then
     CC="clang"
 else
-    error "No C compiler found (gcc or clang required)."
+    error "Need gcc or clang (C23)."
     exit 1
 fi
-info "Using C compiler: $CC"
-
-# ── Detect shell ─────────────────────────────────────────────────────────────
-CURRENT_SHELL="$(basename "$SHELL")"
-
-if [[ "$CURRENT_SHELL" == "fish" ]]; then
-    SHELL_TYPE="fish"
-elif [[ "$CURRENT_SHELL" == "bash" ]]; then
-    SHELL_TYPE="bash"
-elif [[ "$CURRENT_SHELL" == "zsh" ]]; then
-    SHELL_TYPE="zsh"
-else
-    warn "Unsupported shell: $CURRENT_SHELL. Installing anyway — manual sourcing required."
-    SHELL_TYPE="unknown"
+if ! pkg-config --exists fmt 2>/dev/null \
+    && [[ ! -f /usr/include/fmt/core.h ]] \
+    && [[ ! -f /usr/local/include/fmt/core.h ]] \
+    && [[ ! -d /opt/homebrew/include/fmt ]]; then
+    error "libfmt is required."
+    error "  Debian/Ubuntu: sudo apt install cmake g++ libfmt-dev"
+    error "  Fedora:        sudo dnf install cmake gcc fmt-devel"
+    error "  macOS:         brew install cmake fmt"
+    exit 1
 fi
-info "Detected shell: $SHELL_TYPE"
+info "Compiler: $CC"
 
-# ── Build ─────────────────────────────────────────────────────────────────────
-info "Building archaic..."
+CURRENT_SHELL="$(basename "${SHELL:-}")"
+case "$CURRENT_SHELL" in
+    fish) SHELL_TYPE="fish" ;;
+    bash) SHELL_TYPE="bash" ;;
+    zsh)  SHELL_TYPE="zsh" ;;
+    *)
+        warn "Unsupported shell: ${CURRENT_SHELL:-unknown}. Plugins still install; source them yourself."
+        SHELL_TYPE="unknown"
+        ;;
+esac
+info "Shell: $SHELL_TYPE"
+
+info "Building..."
 mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1
-make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)" >/dev/null 2>&1
+cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$BUILD_DIR" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 info "Build complete."
 
-# ── Check if daemon already running ──────────────────────────────────────────
-if [[ -S "$SOCK_PATH" ]] && kill -0 "$(cat "${SOCK_PATH}.pid" 2>/dev/null)" 2>/dev/null; then
-    info "Daemon already running. Restarting..."
-    "$BUILD_DIR/archaic-cli" shutdown 2>/dev/null || true
-    sleep 1
-    rm -f "$SOCK_PATH" "${SOCK_PATH}.pid"
+mkdir -p "$HOME/.local/bin"
+ln -sf "$BUILD_DIR/archaic" "$HOME/.local/bin/archaic"
+ln -sf "$BUILD_DIR/archaic-cli" "$HOME/.local/bin/archaic-cli"
+ln -sf "$BUILD_DIR/archaic-helper" "$HOME/.local/bin/archaic-helper"
+
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    warn "$HOME/.local/bin is not on PATH. Add it so archaic-cli works in new shells."
 fi
 
-# ── Start daemon ─────────────────────────────────────────────────────────────
-info "Starting daemon, scanning: $SCAN_PATH"
-"$BUILD_DIR/archaic" --daemon "$SCAN_PATH" "$SOCK_PATH" &
-echo $! > "${SOCK_PATH}.pid"
-
-# Wait for daemon to be ready
-for i in $(seq 1 10); do
-    if [[ -S "$SOCK_PATH" ]]; then
-        if "$BUILD_DIR/archaic-cli" ping &>/dev/null; then
-            break
-        fi
-    fi
-    sleep 0.5
-done
-
-if [[ -S "$SOCK_PATH" ]] && "$BUILD_DIR/archaic-cli" ping &>/dev/null; then
-    info "Daemon started (PID: $(cat "${SOCK_PATH}.pid"))"
-else
-    error "Daemon failed to start."
-    exit 1
-fi
-
-# ── Install shell plugin ─────────────────────────────────────────────────────
 case "$SHELL_TYPE" in
     fish)
         FISH_CONF_DIR="$HOME/.config/fish/conf.d"
         mkdir -p "$FISH_CONF_DIR"
         ln -sf "$SCRIPT_DIR/fish/archaic.fish" "$FISH_CONF_DIR/archaic.fish"
-        info "Fish plugin installed."
-
-        # Source immediately for new sessions; current session gets auto-reload
-        fish -c "source $FISH_CONF_DIR/archaic.fish" 2>/dev/null || true
-
-        # For the current fish session, write a reload script that fish will pick up
-        RELOAD_SCRIPT="$FISH_CONF_DIR/99-archaic-reload.fish"
-        cat > "$RELOAD_SCRIPT" <<'FISHRELOAD'
-# Auto-remove after first load
-if set -q __archaic_reload_done
-    exit
-end
-set -g __archaic_reload_done 1
-source ~/.config/fish/conf.d/archaic.fish
-FISHRELOAD
-        info "Fish plugin will auto-reload on next prompt."
+        rm -f "$FISH_CONF_DIR/99-archaic-reload.fish"
+        info "Fish plugin: $FISH_CONF_DIR/archaic.fish"
         ;;
     bash)
         BASH_COMP_DIR="$HOME/.local/share/bash-completion/completions"
         mkdir -p "$BASH_COMP_DIR"
         ln -sf "$SCRIPT_DIR/bash/archaic.bash" "$BASH_COMP_DIR/archaic.bash"
-        info "Bash completion installed."
-
-        # Source immediately in current bash session
-        if [[ "$CURRENT_SHELL" == "bash" ]]; then
-            source "$BASH_COMP_DIR/archaic.bash" 2>/dev/null || true
-            info "Bash completion sourced in current session."
+        if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'archaic.bash' "$HOME/.bashrc" 2>/dev/null; then
+            echo '' >> "$HOME/.bashrc"
+            echo 'source "$HOME/.local/share/bash-completion/completions/archaic.bash" 2>/dev/null' >> "$HOME/.bashrc"
+            info "Added source line to ~/.bashrc"
         fi
+        info "Bash plugin: $BASH_COMP_DIR/archaic.bash"
         ;;
     zsh)
         ZSH_CONF_DIR="$HOME/.config/zsh"
         mkdir -p "$ZSH_CONF_DIR"
         ln -sf "$SCRIPT_DIR/zsh/archaic.zsh" "$ZSH_CONF_DIR/archaic.zsh"
-        info "Zsh completion installed."
-
-        # Source immediately in current zsh session
-        if [[ "$CURRENT_SHELL" == "zsh" ]]; then
-            source "$ZSH_CONF_DIR/archaic.zsh" 2>/dev/null || true
-            info "Zsh completion sourced in current session."
+        if [[ -f "$HOME/.zshrc" ]] && ! grep -q 'archaic.zsh' "$HOME/.zshrc" 2>/dev/null; then
+            echo '' >> "$HOME/.zshrc"
+            echo 'source "$HOME/.config/zsh/archaic.zsh" 2>/dev/null' >> "$HOME/.zshrc"
+            info "Added source line to ~/.zshrc"
+        else
+            warn "Add this to ~/.zshrc: source $ZSH_CONF_DIR/archaic.zsh"
         fi
-        ;;
-    *)
-        warn "Shell plugin not installed for $CURRENT_SHELL."
-        warn "Manual setup required. See README.md for instructions."
+        info "Zsh plugin: $ZSH_CONF_DIR/archaic.zsh"
         ;;
 esac
 
-# ── Done ─────────────────────────────────────────────────────────────────────
-echo ""
-info "Archaic is ready!"
-info "  Scan path: $SCAN_PATH"
-info "  Socket:    $SOCK_PATH"
-info "  Shell:     $SHELL_TYPE"
-echo ""
-"$SCRIPT_DIR/run.sh" enable-service "$SCAN_PATH" 2>/dev/null || true
+USER_BUS="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
+if command -v systemctl >/dev/null 2>&1 && [[ -S "$USER_BUS" ]]; then
+    info "Enabling user service (login autostart)..."
+    "$SCRIPT_DIR/run.sh" enable-service "$SCAN_PATH"
+else
+    if [[ -S "$SOCK_PATH" ]]; then
+        "$BUILD_DIR/archaic-cli" --sock "$SOCK_PATH" shutdown 2>/dev/null || true
+        sleep 0.5
+        rm -f "$SOCK_PATH" "${SOCK_PATH}.pid"
+    fi
+    info "Starting daemon, scanning: $SCAN_PATH"
+    "$BUILD_DIR/archaic" --daemon "$SCAN_PATH" "$SOCK_PATH" &
+    echo $! > "${SOCK_PATH}.pid"
+    disown $! 2>/dev/null || true
+fi
 
-info "Commands:"
-info "  ./run.sh status          — Check daemon status"
-info "  ./run.sh enable-service  — Start at login (systemd --user)"
-info "  ./run.sh stop            — Stop daemon"
-info "  ./run.sh restart         — Restart daemon"
-info "  ./run.sh rescan          — Trigger rescan"
+ok=0
+for _ in $(seq 1 20); do
+    if "$BUILD_DIR/archaic-cli" --sock "$SOCK_PATH" ping &>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [[ "$ok" -ne 1 ]]; then
+    error "Daemon did not respond. Run: ./build/archaic-cli doctor"
+    exit 1
+fi
+
+echo ""
+info "Ready. Indexed: $SCAN_PATH"
+info "Socket: $SOCK_PATH"
+echo ""
+info "Open a new terminal, type:  cd "
+info "then press Tab."
+echo ""
+info "Check:  archaic-cli doctor"
 echo ""

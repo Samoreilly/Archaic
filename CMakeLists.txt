@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(archaic)
 set(CMAKE_C_STANDARD 23)
 
-find_package(fmt)
+find_package(fmt REQUIRED)
 find_package(PkgConfig QUIET)
 if(PKG_CONFIG_FOUND)
     pkg_check_modules(SYSTEMD libsystemd)

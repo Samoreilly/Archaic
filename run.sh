@@ -58,10 +58,10 @@ resolve_sock_path() {
 }
 
 usage() {
-    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|install-bash|uninstall-bash|restart|rescan|install|enable-service|disable-service} [scan_path]"
+    echo "Usage: $0 {start|stop|status|install-fish|uninstall-fish|install-bash|uninstall-bash|install-zsh|uninstall-zsh|restart|rescan|enable-service|disable-service} [scan_path]"
     echo ""
     echo "Commands:"
-    echo "  start [path]    Start the daemon scanning the given path (default: /home/sam/samdev)"
+    echo "  start [path]    Start the daemon (default scan path: \$HOME)"
     echo "  stop            Stop the running daemon"
     echo "  status          Check if daemon is running"
     echo "  restart [path]  Restart the daemon"
@@ -196,6 +196,21 @@ uninstall_bash() {
     echo "Bash completion removed"
 }
 
+ZSH_CONF_DIR="$HOME/.config/zsh"
+ZSH_PLUGIN="$SCRIPT_DIR/zsh/archaic.zsh"
+
+install_zsh() {
+    mkdir -p "$ZSH_CONF_DIR"
+    ln -sf "$ZSH_PLUGIN" "$ZSH_CONF_DIR/archaic.zsh"
+    echo "Zsh plugin installed: $ZSH_CONF_DIR/archaic.zsh -> $ZSH_PLUGIN"
+    echo "Add to ~/.zshrc: source $ZSH_CONF_DIR/archaic.zsh"
+}
+
+uninstall_zsh() {
+    rm -f "$ZSH_CONF_DIR/archaic.zsh"
+    echo "Zsh plugin removed"
+}
+
 install_user_service() {
     local bin="$SCRIPT_DIR/build/archaic"
     local cli="$SCRIPT_DIR/build/archaic-cli"
@@ -210,6 +225,7 @@ install_user_service() {
     mkdir -p "$HOME/.local/bin"
     ln -sf "$bin" "$HOME/.local/bin/archaic"
     ln -sf "$cli" "$HOME/.local/bin/archaic-cli"
+    ln -sf "$SCRIPT_DIR/build/archaic-helper" "$HOME/.local/bin/archaic-helper"
     mkdir -p "$HOME/.config/systemd/user"
 
     local sock
@@ -274,6 +290,12 @@ case "${1:-}" in
         ;;
     uninstall-bash)
         uninstall_bash
+        ;;
+    install-zsh)
+        install_zsh
+        ;;
+    uninstall-zsh)
+        uninstall_zsh
         ;;
     install)
         echo "Installing archaic..."

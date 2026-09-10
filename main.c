@@ -8,6 +8,9 @@
 #define ARCHAIC_BUILD_DATE __DATE__
 #endif
 
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -48,8 +51,91 @@ static void write_pid_file(const char* sock_path) {
     }
 }
 
+/* Loopback health check through the real IPC server path. A healthy daemon
+ * answers ping in milliseconds; the handler is lock-free. Returns 0 on pong. */
+#define SELF_PING_TIMEOUT_MS 5000
+#define SELF_PING_MAX_FAILS 2
+
+static int ipc_self_ping(const char* sock_path) {
+    if (!sock_path || sock_path[0] == '\0')
+        return -1;
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0)
+        fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
+
+    int rc = connect(fd, (struct sockaddr*) &addr, sizeof(addr));
+    if (rc < 0 && errno != EINPROGRESS) {
+        close(fd);
+        return -1;
+    }
+    struct pollfd pfd = {.fd = fd, .events = POLLOUT, .revents = 0};
+    if (poll(&pfd, 1, SELF_PING_TIMEOUT_MS) <= 0) {
+        close(fd);
+        return -1;
+    }
+    int so_err = 0;
+    socklen_t so_len = sizeof(so_err);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) < 0 || so_err != 0) {
+        close(fd);
+        return -1;
+    }
+
+    ipc_header req;
+    ipc_write_header(&req, IPC_MSG_PING, 0, 1);
+    const char* out = (const char*) &req;
+    size_t left = sizeof(req);
+    while (left > 0) {
+        pfd.events = POLLOUT;
+        if (poll(&pfd, 1, SELF_PING_TIMEOUT_MS) <= 0) {
+            close(fd);
+            return -1;
+        }
+        ssize_t n = send(fd, out, left, MSG_NOSIGNAL);
+        if (n <= 0) {
+            close(fd);
+            return -1;
+        }
+        out += n;
+        left -= (size_t) n;
+    }
+
+    ipc_header hdr;
+    char* in = (char*) &hdr;
+    left = sizeof(hdr);
+    while (left > 0) {
+        pfd.events = POLLIN;
+        if (poll(&pfd, 1, SELF_PING_TIMEOUT_MS) <= 0) {
+            close(fd);
+            return -1;
+        }
+        ssize_t n = recv(fd, in, left, 0);
+        if (n <= 0) {
+            close(fd);
+            return -1;
+        }
+        in += n;
+        left -= (size_t) n;
+    }
+    close(fd);
+
+    if ((hdr.magic >> 16) != IPC_MAGIC_PREFIX || hdr.msg_type != IPC_MSG_PONG)
+        return -1;
+    return 0;
+}
+
 static void* watchdog_thread_func(void* arg) {
     daemon_state* daemon = (daemon_state*) arg;
+    int ping_fails = 0;
     while (running) {
         if (!atomic_load(&daemon->scanner_healthy)) {
             sd_notify(0, "STATUS=error\nWATCHDOG=1");
@@ -57,6 +143,13 @@ static void* watchdog_thread_func(void* arg) {
             sd_notify(0, "STATUS=scanning\nWATCHDOG=1");
         } else {
             sd_notify(0, "STATUS=idle\nWATCHDOG=1");
+        }
+        if (ipc_self_ping(daemon->ipc_sock_path) == 0) {
+            ping_fails = 0;
+        } else if (++ping_fails >= SELF_PING_MAX_FAILS) {
+            LOG_ERR("watchdog", "IPC unresponsive %ds, exiting for restart",
+                    ping_fails * 15);
+            _exit(1);
         }
         for (int i = 0; i < 15 && running; i++)
             sleep(1);

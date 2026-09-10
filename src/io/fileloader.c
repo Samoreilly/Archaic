@@ -1329,6 +1329,10 @@ int daemon_start_ipc(daemon_state* state, const char* sock_path) {
         if (load_trie(state, state->state_path) == 0)
             LOG_INFO("daemon", "state loaded. %zu buckets restored.", state->store->right_index);
     }
+    if (sock_path && sock_path[0]) {
+        strncpy(state->ipc_sock_path, sock_path, sizeof(state->ipc_sock_path) - 1);
+        state->ipc_sock_path[sizeof(state->ipc_sock_path) - 1] = '\0';
+    }
     state->ipc = ipc_server_start(state, sock_path);
     return state->ipc ? 0 : -1;
 }

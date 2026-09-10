@@ -252,6 +252,7 @@ ExecStart=$HOME/.local/bin/archaic --daemon $sock
 ExecStop=$HOME/.local/bin/archaic-cli --sock $sock shutdown
 Restart=on-failure
 RestartSec=2
+WatchdogSec=40
 
 [Install]
 WantedBy=default.target

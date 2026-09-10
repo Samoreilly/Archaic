@@ -51,6 +51,7 @@ typedef struct {
     atomic_bool watcher_dirty;
     struct timespec start_time;
     char state_path[4096];
+    char ipc_sock_path[4096];
 } daemon_state;
 
 int load_trie(daemon_state* state, const char* path);

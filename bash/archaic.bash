@@ -300,7 +300,7 @@ _archaic_do_complete() {
     fi
 
     case "$cmd" in
-        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find)
+        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find|source|.)
             ;;
         *)
             if [[ -z "$cur" ]]; then
@@ -472,7 +472,7 @@ _archaic_do_complete() {
 }
 
 # ── Default command list ─────────────────────────────────────────────────────
-_archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip)
+_archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip source .)
 
 _archaic_load_commands() {
     local config_file=""
@@ -525,6 +525,7 @@ archaic-status() {
     fi
     echo "Socket: $_archaic_sock"
     echo "Commands: ${_archaic_commands[*]}"
+    echo "Accept hint: Ctrl+Space"
 }
 
 # ── Inline ghost-text suggestions (Bash 5.0+) ────────────────────────────────
@@ -624,10 +625,10 @@ _archaic_prompt_hook() {
 }
 PROMPT_COMMAND="_archaic_prompt_hook"
 
-# Bind Alt+Right Arrow to accept the inline suggestion
-# \e[1;3C = Alt+Right (standard), \e\e[C = Alt+Right (alternate)
+# Accept the ghost-text suggestion with Ctrl+Space (reliable in every
+# terminal, unbound by default). Alt+Right also works where the
+# terminal passes it through. (Ctrl+Left/Right are left alone for
+# word jumping.)
+bind -x '"\C-@": _archaic_accept_suggestion' 2>/dev/null
 bind -x '"\e[1;3C": _archaic_accept_suggestion' 2>/dev/null
 bind -x '"\e\e[C": _archaic_accept_suggestion' 2>/dev/null
-
-# Also bind Ctrl+Right as alternative accept key
-bind -x '"\e[1;5C": _archaic_accept_suggestion' 2>/dev/null

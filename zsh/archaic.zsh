@@ -1,4 +1,4 @@
-#compdef cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod rg fd code hx grep find sudo docker git
+#compdef cd ls cat vim nvim less bat rm mv cp mkdir touch head tail chmod rg fd code hx grep find sudo docker git source .
 
 # archaic.zsh - ZSH shell integration for archaic autocomplete daemon
 #
@@ -340,7 +340,7 @@ _archaic_do_complete() {
     fi
 
     case "$cmd" in
-        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find)
+        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find|source|.)
             ;;
         *)
             if [[ -z "$cur" ]]; then
@@ -506,7 +506,7 @@ _archaic_do_complete() {
 }
 
 # ── Default command list ─────────────────────────────────────────────────────
-_archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip)
+_archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip source .)
 
 _archaic_load_commands() {
     local config_file=""
@@ -650,9 +650,14 @@ zle -N _archaic_accept_suggestion
 zle -N _archaic_cycle_next
 zle -N _archaic_cycle_prev
 
-# Bind keys: Alt+Right = accept, Alt+Down = cycle next, Alt+Up = cycle prev
+# Bind keys: Ctrl+Space = accept (works in every terminal),
+# Alt+Right = accept (where passed through),
+# Alt+Down = cycle next, Alt+Up = cycle prev.
+# (Ctrl+Left/Right are left alone for word jumping.)
+bindkey '^ ' _archaic_accept_suggestion 2>/dev/null
 bindkey '^[^[OC' _archaic_accept_suggestion 2>/dev/null
 bindkey '^[[1;3C' _archaic_accept_suggestion 2>/dev/null
+bindkey '^[^[[C' _archaic_accept_suggestion 2>/dev/null
 bindkey '^[[1;3B' _archaic_cycle_next 2>/dev/null
 bindkey '^[[1;3A' _archaic_cycle_prev 2>/dev/null
 
@@ -697,4 +702,5 @@ archaic-status() {
     fi
     echo "Socket: $_archaic_sock"
     echo "Commands: ${_archaic_commands[*]}"
+    echo "Accept hint: Ctrl+Space"
 }

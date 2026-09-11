@@ -49,8 +49,8 @@ else
 end
 
 # Empty <Tab> lists files. Other commands only if the token looks like a path.
-set -g __archaic_file_cmds cd ls ll la l cat vim nvim lvim hx helix kak micro nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown chgrp ln tar unzip zip gzip bzip2 xz 7z diff patch open xdg-open code cursor codium zed subl rg ag ack fd eza exa lsd tree dust tokei ncdu grep find file stat wc du realpath readlink dirname basename scp sftp rsync rclone sshfs
-set -g __archaic_exec_cmds python python3 pytest lua ruby perl php node bun deno rustc go gcc g++ clang clang++ make cmake ninja meson just jq yq sqlite3 hexdump xxd strings pandoc ffmpeg ffplay mpv vlc feh zathura convert curl wget aria2c pip uv sudo doas env nohup timeout watch xargs tee strace gdb lldb objdump readelf nm install strip man which type source
+set -g __archaic_file_cmds cd ls ll la l cat vim nvim lvim hx helix kak micro nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown chgrp ln tar unzip zip gzip bzip2 xz 7z diff patch open xdg-open code cursor codium zed subl rg ag ack fd eza exa lsd tree dust tokei ncdu grep find file stat wc du realpath readlink dirname basename scp sftp rsync rclone sshfs source .
+set -g __archaic_exec_cmds python python3 pytest lua ruby perl php node bun deno rustc go gcc g++ clang clang++ make cmake ninja meson just jq yq sqlite3 hexdump xxd strings pandoc ffmpeg ffplay mpv vlc feh zathura convert curl wget aria2c pip uv sudo doas env nohup timeout watch xargs tee strace gdb lldb objdump readelf nm install strip man which type
 set -g __archaic_commands $__archaic_file_cmds $__archaic_exec_cmds
 
 # ── Load config (socket path + command list) ─────────────────────────────────
@@ -793,25 +793,33 @@ function __archaic_cycle_next -d "Show next completion in cycle"
     if test (count $__archaic_cycle_completions) -eq 0
         __archaic_fetch_completions
     end
-    if test (count $__archaic_cycle_completions) -eq 0
+    set -l n (count $__archaic_cycle_completions)
+    if test $n -eq 0
         return
     end
+    if not string match -qr '^-?\d+$' -- "$__archaic_cycle_index"
+        set -g __archaic_cycle_index 0
+    end
 
-    set -g __archaic_cycle_index (math "($__archaic_cycle_index + 1) % (count $__archaic_cycle_completions)")
+    set -g __archaic_cycle_index (math "($__archaic_cycle_index + 1) % $n")
     set -l idx (math "$__archaic_cycle_index + 1")
-    set -l completion $__archaic_cycle_completions[$idx]
+    set -l completion "$__archaic_cycle_completions[$idx]"
     set -g __archaic_suggestion (basename "$completion")
     commandline -f repaint
 end
 
 function __archaic_cycle_prev -d "Show previous completion in cycle"
-    if test (count $__archaic_cycle_completions) -eq 0
+    set -l n (count $__archaic_cycle_completions)
+    if test $n -eq 0
         return
     end
+    if not string match -qr '^-?\d+$' -- "$__archaic_cycle_index"
+        set -g __archaic_cycle_index 0
+    end
 
-    set -g __archaic_cycle_index (math "($__archaic_cycle_index - 1 + count $__archaic_cycle_completions) % (count $__archaic_cycle_completions)")
+    set -g __archaic_cycle_index (math "($__archaic_cycle_index - 1 + $n) % $n")
     set -l idx (math "$__archaic_cycle_index + 1")
-    set -l completion $__archaic_cycle_completions[$idx]
+    set -l completion "$__archaic_cycle_completions[$idx]"
     set -g __archaic_suggestion (basename "$completion")
     commandline -f repaint
 end
@@ -932,7 +940,7 @@ end
 function __archaic_accept_suggestion
     if test -n "$__archaic_suggestion"
         set -l tok (commandline -t)"$__archaic_suggestion"
-        commandline -t $tok
+        commandline -t "$tok"
         set -l p $tok
         if not string match -q '/*' -- "$p"
             set p "$PWD/$p"
@@ -941,11 +949,27 @@ function __archaic_accept_suggestion
         set -g __archaic_suggestion ""
         __archaic_reset_cycle
         commandline -f repaint
+    else
+        # No archaic remainder (e.g. the grey hint came from fish's own
+        # history autosuggestion, or the path is already complete):
+        # fall through to fish's native accept instead of silently
+        # doing nothing.
+        commandline -f accept-autosuggestion
     end
 end
 
-# Alt+Right (works immediately)
+# ── Accept the ghost-text suggestion ─────────────────────────────────────────
+# Ctrl+Space is the accept key: easy to reach, unbound by default, and
+# sent reliably as NUL by virtually every terminal. (Alt+Right also
+# works where the terminal passes it through; Alt+Shift+Right accepts
+# and keeps completing (chain), Ctrl+R too.)
+# (`ctrl-space` on fish 4+, `-k nul` on fish 3.x)
+bind ctrl-space __archaic_accept_suggestion 2>/dev/null
+bind -k nul __archaic_accept_suggestion 2>/dev/null
+
+# Alt+Right (works where the terminal passes it through)
 bind \e\[1\;3C __archaic_accept_suggestion
+bind \e\e\[C __archaic_accept_suggestion
 
 # Alt+Down: cycle next completion
 bind \e\[1\;3B __archaic_cycle_next
@@ -964,6 +988,10 @@ bind \e\[27\;6\;32~ __archaic_accept_and_continue
 function __archaic_user_key_bindings
     bind --mode insert \cr __archaic_accept_suggestion
     bind --mode default \cr __archaic_accept_suggestion
+    bind --mode insert ctrl-space __archaic_accept_suggestion 2>/dev/null
+    bind --mode default ctrl-space __archaic_accept_suggestion 2>/dev/null
+    bind --mode insert -k nul __archaic_accept_suggestion 2>/dev/null
+    bind --mode default -k nul __archaic_accept_suggestion 2>/dev/null
     # Cycle bindings survive Fish defaults
     bind --mode insert \e\[1\;3B __archaic_cycle_next
     bind --mode insert \e\[1\;3A __archaic_cycle_prev
@@ -1005,5 +1033,6 @@ function __archaic_status -d "Show archaic daemon status"
     echo "Helper: $archaic_helper_path (one-shot per Tab)"
     echo "Socket: $archaic_sock_path"
     echo "Commands: $__archaic_commands"
+    echo "Accept hint: Ctrl+Space (Alt+Down/Up to cycle)"
     echo "Version checked: $__archaic_version_checked"
 end

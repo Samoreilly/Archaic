@@ -71,6 +71,19 @@ archaic-cli roots
 - Hidden files only if you typed `.`
 - `sudo` / `make` / `python` complete paths only when the token looks like one
 
+## Keybindings
+
+When a dimmed ghost hint appears after your path, accept it without retyping:
+
+| Keys | What it does |
+|---|---|
+| `Ctrl+Space` | Accept the hinted path (works in every terminal) |
+| `Alt+Right` | Accept the hinted path (where your terminal passes it through) |
+| `Alt+Down` / `Alt+Up` | Cycle through alternative completions |
+| `Alt+Shift+Right` | Accept and keep completing (fish) |
+
+Set `ARCHAIC_SUGGEST_ON_PROMPT=0` to turn ghost hints off (Tab completion keeps working).
+
 ## Troubleshooting
 
 ```bash

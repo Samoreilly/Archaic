@@ -45,7 +45,7 @@ typedef struct {
 } completions;
 
 typedef struct {
-    char path[4096];
+    char* path; /* heap-owned, strdup'd */
     double score;
     uint64_t freq;
     uint64_t last_access;

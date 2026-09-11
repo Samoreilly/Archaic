@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <malloc.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -136,6 +137,7 @@ static int ipc_self_ping(const char* sock_path) {
 static void* watchdog_thread_func(void* arg) {
     daemon_state* daemon = (daemon_state*) arg;
     int ping_fails = 0;
+    uint64_t last_completions = 0;
     while (running) {
         if (!atomic_load(&daemon->scanner_healthy)) {
             sd_notify(0, "STATUS=error\nWATCHDOG=1");
@@ -151,6 +153,12 @@ static void* watchdog_thread_func(void* arg) {
                     ping_fails * 15);
             _exit(1);
         }
+        /* Return query-transient pages when idle: bursts of Tab traffic
+         * leave freed pages mapped; trim only when nothing is in flight. */
+        uint64_t completions = atomic_load(&daemon->metrics.completions_total);
+        if (!atomic_load(&daemon->scanning) && completions == last_completions)
+            malloc_trim(0);
+        last_completions = completions;
         for (int i = 0; i < 15 && running; i++)
             sleep(1);
     }

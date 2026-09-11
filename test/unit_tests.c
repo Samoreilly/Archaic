@@ -282,6 +282,22 @@ static void test_listing_wide_dir(void) {
     PASS();
 }
 
+static void test_scored_entry_compact(void) {
+    TEST(scored_entry_compact);
+    ASSERT_TRUE(sizeof(scored_entry) <= 64, "scored_entry must stay pointer-sized");
+    Trie* root = create_trie();
+    insert(root, "/a/file1.c");
+    insert(root, "/a/file2.c");
+    scored_completions* sc = scored_completions_create(4);
+    scored_completions_collect(root, "/a/", sc, 0, "/", NULL, 0.0, 0);
+    ASSERT_EQ_INT(2, (int) sc->count, "collect finds both");
+    for (size_t i = 0; i < sc->count; i++)
+        ASSERT_TRUE(sc->entries[i].path != NULL, "heap path set");
+    scored_completions_free(sc);
+    trie_free_recursive(root);
+    PASS();
+}
+
 static void test_trie_compact(void) {
     TEST(trie_compact);
     Trie* root = create_trie();
@@ -1572,6 +1588,7 @@ int main(int argc, char* argv[]) {
     test_trie_insert_duplicate();
     test_trie_many_inserts();
     test_listing_wide_dir();
+    test_scored_entry_compact();
     test_trie_compact();
 
     /* Group 2: Scoring */

@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 void recent_files_init(recent_files* rf, int capacity) {
     if (!rf)
@@ -91,6 +92,57 @@ int recent_files_get(recent_files* rf, char** paths, bool* is_dirs, int n) {
 
     pthread_mutex_unlock(&rf->lock);
     return count;
+}
+
+int recent_files_save(recent_files* rf, const char* path) {
+    if (!rf || !path || path[0] == '\0')
+        return -1;
+    char tmp[4112];
+    snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int) getpid());
+    FILE* f = fopen(tmp, "w");
+    if (!f)
+        return -1;
+    pthread_mutex_lock(&rf->lock);
+    for (int i = 0; i < rf->count; i++) {
+        fprintf(f, "%d\t%llu\t%s\n", rf->entries[i].is_dir ? 1 : 0,
+                (unsigned long long) rf->entries[i].last_access, rf->entries[i].path);
+    }
+    pthread_mutex_unlock(&rf->lock);
+    fclose(f);
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+int recent_files_load(recent_files* rf, const char* path) {
+    if (!rf || !path || path[0] == '\0')
+        return -1;
+    FILE* f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char line[MAX_RECENT_PATH_LEN + 64];
+    int loaded = 0;
+    pthread_mutex_lock(&rf->lock);
+    while (loaded < rf->capacity && fgets(line, sizeof(line), f)) {
+        int is_dir = 0;
+        unsigned long long last = 0;
+        char p[MAX_RECENT_PATH_LEN];
+        if (sscanf(line, "%d\t%llu\t%4095[^\n]", &is_dir, &last, p) != 3)
+            continue;
+        if (rf->count >= MAX_RECENT_FILES)
+            break;
+        strncpy(rf->entries[rf->count].path, p, MAX_RECENT_PATH_LEN - 1);
+        rf->entries[rf->count].path[MAX_RECENT_PATH_LEN - 1] = '\0';
+        rf->entries[rf->count].last_access = (uint64_t) last;
+        rf->entries[rf->count].is_dir = is_dir ? true : false;
+        rf->count++;
+        loaded++;
+    }
+    pthread_mutex_unlock(&rf->lock);
+    fclose(f);
+    return 0;
 }
 
 void recent_files_clear(recent_files* rf) {

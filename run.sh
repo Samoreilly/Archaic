@@ -253,6 +253,7 @@ ExecStop=$HOME/.local/bin/archaic-cli --sock $sock shutdown
 Restart=on-failure
 RestartSec=2
 WatchdogSec=40
+Environment=MALLOC_ARENA_MAX=4
 
 [Install]
 WantedBy=default.target

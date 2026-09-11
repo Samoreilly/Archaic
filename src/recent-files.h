@@ -35,3 +35,7 @@ int recent_files_get(recent_files* rf, char** paths, bool* is_dirs, int n);
 
 /* Clear all recent files */
 void recent_files_clear(recent_files* rf);
+
+/* Persist/restore the list so recent files survive restarts. Returns 0 ok. */
+int recent_files_save(recent_files* rf, const char* path);
+int recent_files_load(recent_files* rf, const char* path);

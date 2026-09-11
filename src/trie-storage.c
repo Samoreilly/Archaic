@@ -1,3 +1,4 @@
+#include <malloc.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -332,11 +333,10 @@ void free_path_validation(path_validation* result) {
 void update_memory_estimate(t_bucket_store* store) {
     if (!store)
         return;
-    size_t est = 0;
-    est += store->right_index * sizeof(t_bucket);
-    est += store->right_index * sizeof(t_bucket*);
-    est += atomic_load(&store->total_nodes) * 200;
-    atomic_store(&store->estimated_memory_bytes, est);
+    /* Ask the allocator for bytes actually in use: exact, O(1), and it
+     * tracks retained arena pages that node-walking can't see. */
+    struct mallinfo2 mi = mallinfo2();
+    atomic_store(&store->estimated_memory_bytes, (size_t) mi.uordblks);
 }
 
 void store_set_max_nodes(t_bucket_store* store, size_t max_nodes) {

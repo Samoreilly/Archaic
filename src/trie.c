@@ -773,6 +773,8 @@ scored_completions* scored_completions_create(size_t capacity) {
 void scored_completions_free(scored_completions* sc) {
     if (!sc)
         return;
+    for (size_t i = 0; i < sc->count; i++)
+        free(sc->entries[i].path);
     free(sc->entries);
     free(sc);
 }
@@ -932,11 +934,8 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
 
 static void scored_fill(scored_entry* e, const char* path, double score, uint64_t freq,
                         uint64_t last_access, bool is_dir) {
-    size_t n = strlen(path);
-    if (n >= sizeof(e->path))
-        n = sizeof(e->path) - 1;
-    memcpy(e->path, path, n);
-    e->path[n] = '\0';
+    free(e->path);
+    e->path = path ? strdup(path) : NULL;
     e->score = score;
     e->freq = freq;
     e->last_access = last_access;
@@ -979,6 +978,10 @@ static void scored_insert(scored_completions* sc, const char* path, double score
     if (sc->count >= sc->capacity && scored_grow(sc) != 0)
         return;
     scored_fill(&sc->entries[sc->count], path, score, freq, last_access, is_dir);
+    /* Heap paths: strdup may fail (OOM) leaving NULL. Never count a NULL
+     * path — qsort's strcmp and free() callers assume non-NULL. */
+    if (!sc->entries[sc->count].path)
+        return;
     sc->count++;
 }
 

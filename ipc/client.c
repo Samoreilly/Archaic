@@ -335,6 +335,22 @@ int ipc_client_reset_stats(ipc_client* client) {
     return 0;
 }
 
+int ipc_client_recent(ipc_client* client, uint32_t limit, ipc_recent_resp* out) {
+    ipc_recent_req req;
+    memset(&req, 0, sizeof(req));
+    req.limit = limit;
+
+    if (send_request(client, IPC_MSG_RECENT, &req, sizeof(req)) < 0)
+        return -1;
+
+    ipc_header hdr;
+    if (recv_response(client, &hdr, out, sizeof(*out)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_RECENT_RESP)
+        return -1;
+    return 0;
+}
+
 #include "../src/config.h"
 
 ipc_client* ipc_client_connect_default(void) {

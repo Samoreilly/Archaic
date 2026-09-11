@@ -228,6 +228,99 @@ _archaic_check_daemon() {
     return 1
 }
 
+# ── Active command detection (multi-command lines) ─────────────────────────
+_arhcaic_is_sep() {
+    case "$1" in
+        ';'|'&'|'|'|'&&'|'||'|'('|'{') return 0 ;;
+    esac
+    return 1
+}
+
+# Echoes active command from words[1..upto] (zsh 1-indexed, upto exclusive).
+_arhcaic_is_assign() {
+    case "$1" in
+        -*|*=*) [[ "$1" == -* ]] && return 1; return 0 ;;
+    esac
+    return 1
+}
+
+_archaic_active_cmd_words() {
+    local upto="${1:-$CURRENT}"
+    local active=""
+    local i
+    for (( i=1; i<upto; i++ )); do
+        if _arhcaic_is_sep "${words[i]:-}"; then
+            continue
+        fi
+        if _arhcaic_is_assign "${words[i]:-}"; then
+            continue
+        fi
+        active="${words[i]}"
+        break
+    done
+    [[ -z "$active" ]] && active="${words[1]:-}"
+    for (( i=1; i<upto; i++ )); do
+        if _arhcaic_is_sep "${words[i]:-}"; then
+            local j=$((i+1))
+            while (( j < upto )); do
+                if _arhcaic_is_sep "${words[j]:-}"; then j=$((j+1)); continue; fi
+                if _arhcaic_is_assign "${words[j]:-}"; then j=$((j+1)); continue; fi
+                case "${words[j]:-}" in
+                    '') j=$((j+1)); continue ;;
+                    *) active="${words[j]}"; break ;;
+                esac
+            done
+        fi
+    done
+    case "$active" in
+        sudo|doas|env|nohup|timeout|watch|xargs)
+            for (( i=1; i<upto; i++ )); do
+                if [[ "${words[i]:-}" == "$active" ]]; then
+                    local j=$((i+1))
+                    while (( j < upto )); do
+                        if [[ "${words[j]:-}" == -* ]]; then j=$((j+1)); continue; fi
+                        if _arhcaic_is_assign "${words[j]:-}"; then j=$((j+1)); continue; fi
+                        active="${words[j]}"
+                        break
+                    done
+                    break
+                fi
+            done
+            ;;
+    esac
+    print -r -- "$active"
+}
+
+_archaic_active_cmd_from_line() {
+    local line="$1"
+    local seg
+    seg="$(print -r -- "$line" | sed -e 's/&&/\n/g' -e 's/\.\?||/\n/g' -e 's/[;|(){}&]/\n/g' | tail -n 1)"
+    seg="${seg#"${seg%%[![:space:]]*}"}"
+    local first=""
+    local w0
+    for w0 in ${(s: :)seg}; do
+        case "$w0" in
+            -*) first="$w0"; break ;;
+            *=*) continue ;;
+            *) first="$w0"; break ;;
+        esac
+    done
+    case "$first" in
+        sudo|doas|env|nohup|timeout|watch|xargs)
+            local rest="${seg#*[[:space:]]}"
+            local w
+            for w in ${(s: :)rest}; do
+                case "$w" in
+                    -*) continue ;;
+                    *=*) continue ;;
+                    *) print -r -- "$w"; return ;;
+                esac
+            done
+            print -r -- "$first"; return ;;
+    esac
+    print -r -- "$first"
+}
+
 # ── Core completion function ─────────────────────────────────────────────────
 _archaic_do_complete() {
     if [[ -z "$_archaic_cli" ]] || ! command -v "$_archaic_cli" &>/dev/null; then
@@ -239,7 +332,8 @@ _archaic_do_complete() {
     fi
 
     local cur="${words[CURRENT]}"
-    local cmd="${words[1]}"
+    local cmd="$(_archaic_active_cmd_words "$CURRENT")"
+    [[ -z "$cmd" ]] && cmd="${words[1]}"
 
     if [[ "$cur" == -* ]]; then
         return
@@ -444,19 +538,27 @@ compdef _archaic_do_complete ${_archaic_commands[@]}
 # ── Inline suggestions via RPS1 (right prompt) ───────────────────────────────
 _archaic_suggestion=""
 _archaic_suggestion_full=""
+_archaic_last_suggest_token=""
+_archaic_last_suggest_result=""
 
 _archaic_get_suggestion() {
+    [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" == "0" ]] && { _archaic_suggestion=""; return; }
     local cur="${LBUFFER##* }"
     [[ -z "$cur" ]] && { _archaic_suggestion=""; return; }
     [[ "$cur" != */* ]] && { _archaic_suggestion=""; return; }
-    _archaic_check_daemon || { _archaic_suggestion=""; return; }
+    if [[ "$cur" == "$_archaic_last_suggest_token" ]]; then
+        _archaic_suggestion="$_archaic_last_suggest_result"
+        return
+    fi
+    _archaic_check_daemon || { _archaic_suggestion=""; _archaic_last_suggest_token="$cur"; _archaic_last_suggest_result=""; return; }
 
     local expanded_cur=$(_archaic_expand_path "$cur")
     local resolved="$expanded_cur"
     [[ "$expanded_cur" != /* ]] && resolved="$(pwd)/$expanded_cur"
     resolved="${resolved%/}"
 
-    local cmd="${LBUFFER%% *}"
+    local cmd="$(_archaic_active_cmd_from_line "$LBUFFER")"
+    [[ -z "$cmd" ]] && cmd="${LBUFFER%% *}"
     local output=""
     if [[ -n "$_archaic_helper_pid" && -n "$_archaic_helper" ]]; then
         output="$(_archaic_q "complete $resolved 1 $PWD $cmd")"
@@ -466,7 +568,7 @@ _archaic_get_suggestion() {
     fi
 
     local full_path="${output#* }"
-    [[ -z "$full_path" || "$full_path" == "$output" ]] && { _archaic_suggestion=""; return; }
+    [[ -z "$full_path" || "$full_path" == "$output" ]] && { _archaic_suggestion=""; _archaic_last_suggest_token="$cur"; _archaic_last_suggest_result=""; return; }
 
     local norm_path="${full_path%/}"
     if [[ "$norm_path" == "$resolved"* ]]; then
@@ -475,6 +577,8 @@ _archaic_get_suggestion() {
     else
         _archaic_suggestion=""
     fi
+    _archaic_last_suggest_token="$cur"
+    _archaic_last_suggest_result="$_archaic_suggestion"
 }
 
 _archaic_accept_suggestion() {
@@ -516,7 +620,8 @@ _archaic_fetch_completions() {
     [[ "$expanded_cur" != /* ]] && resolved="$(pwd)/$expanded_cur"
     resolved="${resolved%/}"
 
-    local cmd="${LBUFFER%% *}"
+    local cmd="$(_archaic_active_cmd_from_line "$LBUFFER")"
+    [[ -z "$cmd" ]] && cmd="${LBUFFER%% *}"
     local results=""
     if [[ -n "$_archaic_helper_pid" && -n "$_archaic_helper" ]]; then
         results="$(_archaic_q "complete $resolved 20 $PWD $cmd")"

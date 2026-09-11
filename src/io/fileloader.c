@@ -1,5 +1,9 @@
 #include <dirent.h>
+#include <malloc.h>
 #include <pthread.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +85,66 @@ static void assign_indices_dfs(const RadixNode* node, IndexedNode* arr, uint32_t
         assign_indices_dfs(node->children[i].node, arr, idx);
 }
 
+/* ── O(1) node* -> index map (replaces O(N) linear find_child_index) ──
+ * Save used to call linear find_child_index() per edge => O(N^2) per
+ * bucket (10B ops at 100k nodes) while holding store+trie locks.
+ * Build once per bucket: open-addressing map sized 2x, then O(1) lookups. */
+typedef struct {
+    const RadixNode* key;
+    uint32_t val;
+    bool occupied;
+} PtrIndexMap;
+
+static uint64_t ptr_index_hash(const RadixNode* p) {
+    uintptr_t x = (uintptr_t) p;
+    /* splitmix64-style mix on shifted pointer (low 3 bits are ~zero) */
+    x >>= 3;
+    x ^= x >> 30;
+    x *= (uintptr_t) 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= (uintptr_t) 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return (uint64_t) x;
+}
+
+static PtrIndexMap* ptr_index_map_build(const IndexedNode* arr, uint32_t n, size_t* out_cap) {
+    if (n == 0)
+        return NULL;
+    size_t cap = 1;
+    while (cap < (size_t) n * 2)
+        cap <<= 1;
+    PtrIndexMap* map = calloc(cap, sizeof(PtrIndexMap));
+    if (!map)
+        return NULL;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t h = ptr_index_hash(arr[i].node);
+        size_t pos = (size_t) (h & (uint64_t) (cap - 1));
+        while (map[pos].occupied)
+            pos = (pos + 1) & (cap - 1);
+        map[pos].key = arr[i].node;
+        map[pos].val = arr[i].index;
+        map[pos].occupied = true;
+    }
+    if (out_cap)
+        *out_cap = cap;
+    return map;
+}
+
+static inline int ptr_index_map_find(const PtrIndexMap* map, size_t cap, const RadixNode* child) {
+    if (!map || cap == 0)
+        return -1;
+    uint64_t h = ptr_index_hash(child);
+    size_t pos = (size_t) (h & (uint64_t) (cap - 1));
+    for (size_t i = 0; i < cap; i++) {
+        size_t p = (pos + i) & (cap - 1);
+        if (!map[p].occupied)
+            return -1;
+        if (map[p].key == child)
+            return (int) map[p].val;
+    }
+    return -1;
+}
+
 static int find_child_index(const IndexedNode* arr, uint32_t n, const RadixNode* child) {
     for (uint32_t i = 0; i < n; i++)
         if (arr[i].node == child)
@@ -146,16 +210,22 @@ int save_trie(daemon_state* state, const char* path) {
             uint32_t idx = 0;
             assign_indices_dfs(bucket->dir_trie, indexed, &idx);
 
+            /* O(N) build, O(1) lookups. Fall back to linear scan if OOM. */
+            size_t map_cap = 0;
+            PtrIndexMap* pmap = ptr_index_map_build(indexed, nc, &map_cap);
+
             for (uint32_t i = 0; i < nc; i++) {
                 const RadixNode* nd = indexed[i].node;
 
                 uint32_t kl = (uint32_t) nd->key_len;
                 if (fwrite(&kl, sizeof(kl), 1, f) != 1) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
                 }
                 if (kl > 0 && fwrite(nd->key, 1, kl, f) != kl) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
@@ -163,16 +233,19 @@ int save_trie(daemon_state* state, const char* path) {
 
                 uint16_t cc = nd->child_count;
                 if (fwrite(&cc, sizeof(cc), 1, f) != 1) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
                 }
                 if (fwrite(&nd->freq, sizeof(nd->freq), 1, f) != 1) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
                 }
                 if (fwrite(&nd->last_access, sizeof(nd->last_access), 1, f) != 1) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
@@ -180,11 +253,13 @@ int save_trie(daemon_state* state, const char* path) {
 
                 uint8_t il = (uint8_t) nd->is_leaf, id = (uint8_t) nd->is_dir;
                 if (fwrite(&il, sizeof(il), 1, f) != 1) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
                 }
                 if (fwrite(&id, sizeof(id), 1, f) != 1) {
+                    free(pmap);
                     free(indexed);
                     trie_unlock(bucket);
                     goto werr;
@@ -193,19 +268,23 @@ int save_trie(daemon_state* state, const char* path) {
                 for (uint16_t c = 0; c < nd->child_count; c++) {
                     uint8_t ec = (uint8_t) nd->children[c].edge_char;
                     if (fwrite(&ec, sizeof(ec), 1, f) != 1) {
+                        free(pmap);
                         free(indexed);
                         trie_unlock(bucket);
                         goto werr;
                     }
-                    int ci = find_child_index(indexed, nc, nd->children[c].node);
+                    int ci = pmap ? ptr_index_map_find(pmap, map_cap, nd->children[c].node)
+                                  : find_child_index(indexed, nc, nd->children[c].node);
                     uint32_t ci32 = (uint32_t) ci;
                     if (fwrite(&ci32, sizeof(ci32), 1, f) != 1) {
+                        free(pmap);
                         free(indexed);
                         trie_unlock(bucket);
                         goto werr;
                     }
                 }
             }
+            free(pmap);
             free(indexed);
         }
         trie_unlock(bucket);
@@ -423,12 +502,23 @@ rerr:
 }
 
 void daemon_save_state(daemon_state* state, const char* path) {
-    if (!path || path[0] == '\0')
+    if (!state || !path || path[0] == '\0')
         return;
     char tmp_path[4100];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%d", path, getpid());
     save_trie(state, tmp_path);
     rename(tmp_path, path);
+    char recent_path[4104];
+    snprintf(recent_path, sizeof(recent_path), "%s.recent", path);
+    recent_files_save(&state->recent, recent_path);
+    /* Persist hot Tab completions alongside the index so a restart
+     * doesn't start with a cold query cache. Best-effort: failure
+     * must never break index saving. */
+    if (state->cache) {
+        char hot_path[4104];
+        snprintf(hot_path, sizeof(hot_path), "%s.hotcache", path);
+        cache_save_to_file(state->cache, hot_path);
+    }
 }
 
 static void collect_frequencies_dfs(RadixNode* node, char* buffer, size_t depth, FILE* f) {
@@ -866,6 +956,9 @@ static void* scan_thread_func(void* arg) {
     update_memory_estimate(state->store);
     if (state->cache)
         cache_invalidate(state->cache);
+    /* Scans churn millions of transient allocs across malloc arenas; hand
+     * fully-free trailing pages back so steady-state RSS tracks the index. */
+    malloc_trim(0);
 
     for (int i = 0; i < path_count; i++) {
         free(paths[i]);
@@ -1056,6 +1149,96 @@ completions* daemon_get_completions(daemon_state* state, const char* prefix, siz
     return out;
 }
 
+/* ── Parent-prefix cache reuse (typing "sa" after "s") ───────────────
+ * Each keystroke is a different exact key, so exact-match caching measured
+ * 0% hits. But child prefix results are a subset of the parent's: if the
+ * parent entry is exhaustive (count < limit, i.e. not truncated) we can
+ * filter it by the longer prefix without a trie walk.
+ * Correctness guards:
+ *  - same dirs_only/limit/cwd (part of key), child startswith parent
+ *  - only walk back <= 64 chars (bounded hash lookups)
+ *  - typed-dot flag must match (hidden scores differ otherwise)
+ *  - parent must be exhaustive (count < cap) else it may have truncated
+ *    away children that match the longer prefix
+ * Scores are reused as-is (recency drift over TTL is negligible; surviving
+ * entries matched both prefixes so the constant basename boost is equal). */
+#define PARENT_REUSE_MAX_BACKTRACK 64
+static int last_component_typed_dot(const char* prefix) {
+    if (!prefix || !prefix[0])
+        return 0;
+    const char* slash = strrchr(prefix, '/');
+    const char* comp = slash ? slash + 1 : prefix;
+    return comp[0] == '.';
+}
+
+static scored_completions* try_parent_cache_reuse(query_cache* cache, const char* prefix,
+                                                  size_t limit, size_t cap, const char* cwd,
+                                                  int dirs_only) {
+    if (!cache || !prefix || prefix[0] == '\0')
+        return NULL;
+    size_t plen = strlen(prefix);
+    if (plen <= 1)
+        return NULL;
+    int child_dot = last_component_typed_dot(prefix);
+
+    char parent_prefix[4096];
+    char parent_key[CACHE_MAX_KEY_LEN];
+    size_t max_back = plen > PARENT_REUSE_MAX_BACKTRACK + 1 ? PARENT_REUSE_MAX_BACKTRACK : plen - 1;
+    for (size_t back = 1; back <= max_back; back++) {
+        size_t parent_len = plen - back;
+        if (parent_len == 0)
+            break;
+        if (parent_len >= sizeof(parent_prefix))
+            continue;
+        memcpy(parent_prefix, prefix, parent_len);
+        parent_prefix[parent_len] = '\0';
+        if (last_component_typed_dot(parent_prefix) != child_dot)
+            continue; /* hidden scoring differs; try shorter parent */
+        int n = snprintf(parent_key, sizeof(parent_key), "%d|%zu|%s|%s", dirs_only, limit,
+                         cwd ? cwd : "", parent_prefix);
+        if (n <= 0 || (size_t) n >= sizeof(parent_key))
+            continue;
+        const scored_completions* parent = cache_get(cache, parent_key);
+        if (!parent)
+            continue;
+        /* Parent must be exhaustive, else reuse would drop truncated hits. */
+        int exhaustive = parent->count < parent->capacity;
+        scored_completions* filtered = NULL;
+        if (exhaustive) {
+            filtered = scored_completions_create(cap > 0 ? cap : 1);
+            if (filtered) {
+                for (size_t i = 0; i < parent->count; i++) {
+                    const char* p = parent->entries[i].path;
+                    if (!p)
+                        continue;
+                    if (strncmp(p, prefix, plen) != 0)
+                        continue;
+                    if (filtered->count >= filtered->capacity)
+                        break;
+                    scored_entry* d = &filtered->entries[filtered->count];
+                    d->path = strdup(p);
+                    if (!d->path)
+                        break;
+                    d->score = parent->entries[i].score;
+                    d->freq = parent->entries[i].freq;
+                    d->last_access = parent->entries[i].last_access;
+                    d->is_dir = parent->entries[i].is_dir;
+                    filtered->count++;
+                }
+            }
+        }
+        cache_release(cache, parent);
+        if (!exhaustive)
+            continue; /* truncated parent proves nothing; try shorter */
+        if (!filtered)
+            return NULL; /* OOM: fall through to full scan */
+        /* Exhaustive parent (even with 0 filtered hits) answers the child:
+         * negative results are valid too and skip the trie walk. */
+        return filtered;
+    }
+    return NULL;
+}
+
 scored_result daemon_get_scored_completions(daemon_state* state, const char* prefix, size_t limit,
                                             uint64_t now, const char* cwd, int dirs_only) {
     scored_result empty = {NULL, false};
@@ -1076,11 +1259,36 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     }
     metrics_record_cache_miss(&state->metrics);
 
+    /* Clamp first: parent-reuse keys must use the clamped limit so they
+     * match what cache_put stored. */
+    size_t cap = limit;
+    if (cap < 1)
+        cap = 1;
+    if (cap > IPC_COMPLETE_MAX)
+        cap = IPC_COMPLETE_MAX;
+
+    /* Keystroke reuse: exact miss, but an exhaustive parent prefix may
+     * already answer this child without a trie walk. */
+    scored_completions* reused =
+        try_parent_cache_reuse(state->cache, prefix, limit, cap, cwd, dirs_only);
+    if (reused) {
+        metrics_record_cache_hit(&state->metrics);
+        char reuse_key[CACHE_MAX_KEY_LEN];
+        snprintf(reuse_key, sizeof(reuse_key), "%d|%zu|%s|%s", dirs_only, limit, cwd ? cwd : "",
+                 prefix);
+        cache_put(state->cache, reuse_key, reused);
+        metrics_record_completion(&state->metrics);
+        scored_result result;
+        result.data = reused;
+        result.from_cache = false;
+        return result;
+    }
+
     metrics_record_completion(&state->metrics);
 
-    size_t cap = limit;
-    if (cap < 512)
-        cap = 512;
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+
     scored_completions* out = scored_completions_create(cap);
     if (!out)
         return empty;
@@ -1101,31 +1309,32 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
         scored_completions_free(out);
         return empty;
     }
-    for (size_t i = 0; i < count; i++) {
-        t_bucket* bucket = state->store->buckets[i];
-        if (bucket && bucket->dir_trie) {
-            atomic_fetch_add(&bucket->refcount, 1);
-            snapshot[i] = bucket;
-        } else {
-            snapshot[i] = NULL;
-        }
-    }
-    store_unlock(state->store);
-
     size_t prefix_len = strlen(prefix);
     for (size_t i = 0; i < count; i++) {
-        t_bucket* bucket = snapshot[i];
-        if (!bucket)
+        t_bucket* bucket = state->store->buckets[i];
+        if (!bucket || !bucket->dir_trie) {
+            snapshot[i] = NULL;
             continue;
-
+        }
+        /* Skip non-matching buckets before refcounting: dir_name is stable
+         * under store_lock, so no extra locking cost per Tab. */
         if (prefix_len > 0 && bucket->dir_name) {
             size_t bl = strlen(bucket->dir_name);
             size_t n = bl < prefix_len ? bl : prefix_len;
             if (n > 0 && memcmp(bucket->dir_name, prefix, n) != 0) {
-                bucket_release(bucket);
+                snapshot[i] = NULL;
                 continue;
             }
         }
+        atomic_fetch_add(&bucket->refcount, 1);
+        snapshot[i] = bucket;
+    }
+    store_unlock(state->store);
+
+    for (size_t i = 0; i < count; i++) {
+        t_bucket* bucket = snapshot[i];
+        if (!bucket)
+            continue;
 
         trie_lock(bucket);
         scored_completions_collect(bucket->dir_trie, prefix, out, now, cwd, NULL,
@@ -1136,6 +1345,10 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
 
     free(snapshot);
     cache_put(state->cache, cache_key, out);
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    metrics_record_query(&state->metrics,
+                         (uint64_t) (ts_end.tv_sec - ts_start.tv_sec) * 1000000000ULL +
+                             (uint64_t) (ts_end.tv_nsec - ts_start.tv_nsec));
     scored_result result;
     result.data = out;
     result.from_cache = false;
@@ -1179,14 +1392,26 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
         completions_free(out);
         return NULL;
     }
+    /* When the query carries a path (has '/'), buckets whose directory
+     * cannot prefix-match are skipped before refcounting, same as scoring. */
+    int has_slash = (qbase != query);
+    size_t query_len = strlen(query);
     for (size_t i = 0; i < bucket_count; i++) {
         t_bucket* bucket = state->store->buckets[i];
-        if (bucket && bucket->dir_trie) {
-            atomic_fetch_add(&bucket->refcount, 1);
-            snapshot[i] = bucket;
-        } else {
+        if (!bucket || !bucket->dir_trie) {
             snapshot[i] = NULL;
+            continue;
         }
+        if (has_slash && bucket->dir_name) {
+            size_t bl = strlen(bucket->dir_name);
+            size_t n = bl < query_len ? bl : query_len;
+            if (n > 0 && memcmp(bucket->dir_name, query, n) != 0) {
+                snapshot[i] = NULL;
+                continue;
+            }
+        }
+        atomic_fetch_add(&bucket->refcount, 1);
+        snapshot[i] = bucket;
     }
     store_unlock(state->store);
 
@@ -1329,6 +1554,18 @@ int daemon_start_ipc(daemon_state* state, const char* sock_path) {
         if (load_trie(state, state->state_path) == 0)
             LOG_INFO("daemon", "state loaded. %zu buckets restored.", state->store->right_index);
     }
+    char recent_path[4104];
+    snprintf(recent_path, sizeof(recent_path), "%s.recent", state->state_path);
+    recent_files_load(&state->recent, recent_path);
+    /* Restore hot Tab completions saved by daemon_save_state. Entries get
+     * a fresh TTL on load; a missing/corrupt file is not fatal. */
+    if (state->cache) {
+        char hot_path[4104];
+        snprintf(hot_path, sizeof(hot_path), "%s.hotcache", state->state_path);
+        int n = cache_load_from_file(state->cache, hot_path);
+        if (n > 0)
+            LOG_INFO("daemon", "hot query cache restored: %d entries", n);
+    }
     if (sock_path && sock_path[0]) {
         strncpy(state->ipc_sock_path, sock_path, sizeof(state->ipc_sock_path) - 1);
         state->ipc_sock_path[sizeof(state->ipc_sock_path) - 1] = '\0';
@@ -1374,7 +1611,23 @@ void daemon_log_query(daemon_state* state, const char* prefix, const char* cwd, 
     strncpy(last_prefix, prefix, sizeof(last_prefix) - 1);
     last_log_time = now;
 
-    FILE* f = fopen("/tmp/archaic-query.log", "a");
+    /* Query log lives next to the state file, not hardcoded /tmp. */
+    static char log_path[4096] = {0};
+    if (log_path[0] == '\0') {
+        const char* cache = getenv("XDG_CACHE_HOME");
+        if (cache && cache[0])
+            snprintf(log_path, sizeof(log_path), "%s/archaic/queries.log", cache);
+        else {
+            const char* home = getenv("HOME");
+            if (home && home[0])
+                snprintf(log_path, sizeof(log_path), "%s/.cache/archaic/queries.log", home);
+            else
+                snprintf(log_path, sizeof(log_path), "/tmp/archaic-queries.log");
+        }
+        config_ensure_parent_dir(log_path);
+    }
+
+    FILE* f = fopen(log_path, "a");
     if (!f)
         return;
 

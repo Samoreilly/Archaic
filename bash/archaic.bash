@@ -177,11 +177,119 @@ _archaic_check_daemon() {
     return 1
 }
 
+# ── Active command detection (multi-command lines) ─────────────────────────
+# `cd foo && vim <Tab>` completes for vim, not cd. Unwraps sudo/doas/env.
+_arhcaic_is_sep() {
+    case "$1" in
+        ';'|'&'|'|'|'&&'|'||'|'('|'{') return 0 ;;
+    esac
+    return 1
+}
+
+# Assignment prefix (`VAR=1 vim …`): not a command, skip it.
+_arhcaic_is_assign() {
+    case "$1" in
+        -*|*=*) [[ "$1" == -* ]] && return 1; return 0 ;;
+    esac
+    return 1
+}
+
+_archaic_active_cmd() {
+    # $1 = index of current word (exclusive upper bound), defaults to COMP_CWORD
+    local upto="${1:-$COMP_CWORD}"
+    local active=""
+    local i
+    for (( i=0; i<upto; i++ )); do
+        if _arhcaic_is_sep "${COMP_WORDS[i]:-}"; then
+            continue
+        fi
+        if _arhcaic_is_assign "${COMP_WORDS[i]:-}"; then
+            continue
+        fi
+        active="${COMP_WORDS[i]}"
+        break
+    done
+    [[ -z "$active" ]] && active="${COMP_WORDS[0]:-}"
+    for (( i=0; i<upto; i++ )); do
+        if _arhcaic_is_sep "${COMP_WORDS[i]:-}"; then
+            local j=$((i+1))
+            while (( j < upto )); do
+                if _arhcaic_is_sep "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
+                if _arhcaic_is_assign "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
+                case "${COMP_WORDS[j]:-}" in
+                    '') j=$((j+1)); continue ;;
+                    *) active="${COMP_WORDS[j]}"; break ;;
+                esac
+            done
+        fi
+    done
+    # Unwrap wrappers: sudo/vim -> vim (skip flags after wrapper)
+    case "$active" in
+        sudo|doas|env|nohup|timeout|watch|xargs)
+            for (( i=0; i<upto; i++ )); do
+                if [[ "${COMP_WORDS[i]:-}" == "$active" ]]; then
+                    local j=$((i+1))
+                    while (( j < upto )); do
+                        if [[ "${COMP_WORDS[j]:-}" == -* ]]; then j=$((j+1)); continue; fi
+                        if _arhcaic_is_assign "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
+                        active="${COMP_WORDS[j]}"
+                        break
+                    done
+                    break
+                fi
+            done
+            ;;
+    esac
+    printf '%s' "$active"
+}
+
+_archaic_active_cmd_from_line() {
+    # Parse a raw command line string (for ghost-text path where COMP_WORDS
+    # is unavailable). Returns active command or "".
+    local line="$1"
+    local cur_pos="${2:-${#line}}"
+    local before="${line:0:$cur_pos}"
+    # Normalize separators to newlines, take last segment's first word
+    local seg
+    seg="$(printf '%s' "$before" | sed -e 's/&&/\n/g' -e 's/\.\?||/\n/g' -e 's/[;|(){}&]/\n/g' | tail -n 1)"
+    seg="$(printf '%s' "$seg" | sed 's/^[[:space:]]*//')"
+    # Skip leading VAR=assignments (`VAR=1 vim …` completes for vim)
+    local first=""
+    local w0
+    for w0 in $seg; do
+        case "$w0" in
+            -*)
+                first="$w0"; break ;;
+            *=*)
+                continue ;;
+            *)
+                first="$w0"; break ;;
+        esac
+    done
+    # Unwrap wrappers + skip flags
+    case "$first" in
+        sudo|doas|env|nohup|timeout|watch|xargs)
+            local rest="${seg#*[[:space:]]}"
+            local w
+            for w in $rest; do
+                case "$w" in
+                    -*) continue ;;
+                    *=*) continue ;;
+                    *) printf '%s' "$w"; return ;;
+                esac
+            done
+            printf '%s' "$first"; return ;;
+    esac
+    printf '%s' "$first"
+}
+
 # ── Core completion function ─────────────────────────────────────────────────
 _archaic_do_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    local cmd="${COMP_WORDS[0]}"
+    local cmd
+    cmd="$(_archaic_active_cmd "$COMP_CWORD")"
+    [[ -z "$cmd" ]] && cmd="${COMP_WORDS[0]}"
 
     if [[ -z "$_archaic_cli" ]] || ! command -v "$_archaic_cli" &>/dev/null; then
         return
@@ -425,8 +533,13 @@ archaic-status() {
 
 _archaic_suggestion=""
 _archaic_suggestion_full=""
+_archaic_last_suggest_token=""
+_archaic_last_suggest_result=""
 
 _archaic_get_suggestion() {
+    # Opt-out: ARCHAIC_SUGGEST_ON_PROMPT=0 disables per-prompt queries
+    # (Tab completion keeps working).
+    [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" == "0" ]] && { _archaic_suggestion=""; return; }
     # Extract the word currently being typed (text before cursor, last token)
     local before_cursor="${READLINE_LINE:0:$READLINE_POINT}"
     local cur="${before_cursor##* }"
@@ -436,7 +549,13 @@ _archaic_get_suggestion() {
     # Only suggest for path-like inputs
     [[ "$cur" != */* ]] && { _archaic_suggestion=""; return; }
 
-    _archaic_check_daemon || { _archaic_suggestion=""; return; }
+    # Memoize: same token as last prompt repaint reuses the result.
+    if [[ "$cur" == "$_archaic_last_suggest_token" ]]; then
+        _archaic_suggestion="$_archaic_last_suggest_result"
+        return
+    fi
+
+    _archaic_check_daemon || { _archaic_suggestion=""; _archaic_last_suggest_token="$cur"; _archaic_last_suggest_result=""; return; }
 
     # Expand environment variables
     local expanded_cur=$(_archaic_expand_path "$cur")
@@ -446,8 +565,10 @@ _archaic_get_suggestion() {
     [[ "$expanded_cur" != /* ]] && resolved="$(pwd)/$expanded_cur"
     resolved="${resolved%/}"
 
-    # Detect command for context-aware queries
-    local cmd="${READLINE_LINE%% *}"
+    # Detect command for context-aware queries (chain-aware)
+    local cmd
+    cmd="$(_archaic_active_cmd_from_line "$READLINE_LINE" "$READLINE_POINT")"
+    [[ -z "$cmd" ]] && cmd="${READLINE_LINE%% *}"
 
     _archaic_ensure_helper
 
@@ -462,7 +583,7 @@ _archaic_get_suggestion() {
 
     # Parse result: "D /path" or "F /path"
     local full_path="${output#* }"
-    [[ -z "$full_path" || "$full_path" == "$output" ]] && { _archaic_suggestion=""; return; }
+    [[ -z "$full_path" || "$full_path" == "$output" ]] && { _archaic_suggestion=""; _archaic_last_suggest_token="$cur"; _archaic_last_suggest_result=""; return; }
 
     # Calculate the remainder (ghost text)
     local norm_path="${full_path%/}"
@@ -472,6 +593,8 @@ _archaic_get_suggestion() {
     else
         _archaic_suggestion=""
     fi
+    _archaic_last_suggest_token="$cur"
+    _archaic_last_suggest_result="$_archaic_suggestion"
 }
 
 _archaic_accept_suggestion() {

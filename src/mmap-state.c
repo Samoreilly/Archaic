@@ -2,6 +2,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +64,62 @@ static void assign_indices_dfs(const RadixNode* node, IndexedNode* arr, uint32_t
     (*idx)++;
     for (uint16_t i = 0; i < node->child_count; i++)
         assign_indices_dfs(node->children[i].node, arr, idx);
+}
+
+/* O(1) node* -> index map: avoids O(N^2) save when buckets grow large. */
+typedef struct {
+    const RadixNode* key;
+    uint32_t val;
+    bool occupied;
+} PtrIndexMap;
+
+static uint64_t ptr_index_hash(const RadixNode* p) {
+    uintptr_t x = (uintptr_t) p;
+    x >>= 3;
+    x ^= x >> 30;
+    x *= (uintptr_t) 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= (uintptr_t) 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return (uint64_t) x;
+}
+
+static PtrIndexMap* ptr_index_map_build(const IndexedNode* arr, uint32_t n, size_t* out_cap) {
+    if (n == 0)
+        return NULL;
+    size_t cap = 1;
+    while (cap < (size_t) n * 2)
+        cap <<= 1;
+    PtrIndexMap* map = calloc(cap, sizeof(PtrIndexMap));
+    if (!map)
+        return NULL;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t h = ptr_index_hash(arr[i].node);
+        size_t pos = (size_t) (h & (uint64_t) (cap - 1));
+        while (map[pos].occupied)
+            pos = (pos + 1) & (cap - 1);
+        map[pos].key = arr[i].node;
+        map[pos].val = arr[i].index;
+        map[pos].occupied = true;
+    }
+    if (out_cap)
+        *out_cap = cap;
+    return map;
+}
+
+static inline int ptr_index_map_find(const PtrIndexMap* map, size_t cap, const RadixNode* child) {
+    if (!map || cap == 0)
+        return -1;
+    uint64_t h = ptr_index_hash(child);
+    size_t pos = (size_t) (h & (uint64_t) (cap - 1));
+    for (size_t i = 0; i < cap; i++) {
+        size_t p = (pos + i) & (cap - 1);
+        if (!map[p].occupied)
+            return -1;
+        if (map[p].key == child)
+            return (int) map[p].val;
+    }
+    return -1;
 }
 
 static int find_child_index(const IndexedNode* arr, uint32_t n, const RadixNode* child) {
@@ -124,39 +183,49 @@ static int serialize_bucket(mmap_cursor* c, const t_bucket* bucket) {
     uint32_t idx = 0;
     assign_indices_dfs(bucket->dir_trie, indexed, &idx);
 
+    size_t map_cap = 0;
+    PtrIndexMap* pmap = ptr_index_map_build(indexed, nc, &map_cap);
+
     for (uint32_t i = 0; i < nc; i++) {
         const RadixNode* nd = indexed[i].node;
 
         uint32_t kl = (uint32_t) nd->key_len;
         if (cursor_write(c, &kl, sizeof(kl)) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
         if (kl > 0 && cursor_write(c, nd->key, kl) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
 
         uint16_t cc = nd->child_count;
         if (cursor_write(c, &cc, sizeof(cc)) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
         if (cursor_write(c, &nd->freq, sizeof(nd->freq)) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
         if (cursor_write(c, &nd->last_access, sizeof(nd->last_access)) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
 
         uint8_t il = (uint8_t) nd->is_leaf, id = (uint8_t) nd->is_dir;
         if (cursor_write(c, &il, sizeof(il)) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
         if (cursor_write(c, &id, sizeof(id)) != 0) {
+            free(pmap);
             free(indexed);
             return -1;
         }
@@ -164,17 +233,21 @@ static int serialize_bucket(mmap_cursor* c, const t_bucket* bucket) {
         for (uint16_t cc2 = 0; cc2 < nd->child_count; cc2++) {
             uint8_t ec = (uint8_t) nd->children[cc2].edge_char;
             if (cursor_write(c, &ec, sizeof(ec)) != 0) {
+                free(pmap);
                 free(indexed);
                 return -1;
             }
-            int ci = find_child_index(indexed, nc, nd->children[cc2].node);
+            int ci = pmap ? ptr_index_map_find(pmap, map_cap, nd->children[cc2].node)
+                          : find_child_index(indexed, nc, nd->children[cc2].node);
             uint32_t ci32 = (uint32_t) ci;
             if (cursor_write(c, &ci32, sizeof(ci32)) != 0) {
+                free(pmap);
                 free(indexed);
                 return -1;
             }
         }
     }
+    free(pmap);
     free(indexed);
     return 0;
 }

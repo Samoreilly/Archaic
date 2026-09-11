@@ -17,7 +17,9 @@ watcher_fallback_interval = 30
 max_buckets = 65536
 max_nodes_per_bucket = 100000
 cache_max_entries = 1024
-cache_ttl_seconds = 2
+# Query cache TTL: typing reuses parent-prefix results, so 30s is safe.
+# Previous default (2s) measured 0% hit rate in real typing.
+cache_ttl_seconds = 30
 
 [scoring]
 weight_frequency = 0.40

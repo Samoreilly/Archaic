@@ -288,7 +288,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->storage.max_buckets = 65536;
     cfg->storage.max_nodes_per_bucket = 100000;
     cfg->storage.cache_max_entries = 1024;
-    cfg->storage.cache_ttl_seconds = 2;
+    cfg->storage.cache_ttl_seconds = 30;
     cfg->storage.recent_files_capacity = 50;
     cfg->storage.case_insensitive = false;
     cfg->storage.max_total_nodes = 0;

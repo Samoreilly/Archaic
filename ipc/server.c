@@ -5,8 +5,10 @@
 #include "../src/threadpool.h"
 #include "../src/trie.h"
 #include <errno.h>
+#include <dirent.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,6 +126,149 @@ static int validate_string_field(const char* str, size_t max_len) {
             return 0;
     }
     return -1;
+}
+
+/* ── Reusable per-thread pack buffer (avoids malloc(256K) per Tab) ──
+ * malloc(256KB) per COMPLETE/FUZZY goes through mmap + page faults.
+ * Threadpool workers are long-lived, so keep one buffer per thread and
+ * reuse it. Fallback to malloc if the first alloc fails. */
+static uint8_t* packed_buffer_reuse(bool* owned) {
+    static __thread uint8_t* buf = NULL;
+    if (buf) {
+        if (owned)
+            *owned = false;
+        return buf;
+    }
+    buf = malloc(IPC_MAX_PAYLOAD);
+    if (buf) {
+        if (owned)
+            *owned = false;
+        return buf;
+    }
+    uint8_t* heap = malloc(IPC_MAX_PAYLOAD);
+    if (owned)
+        *owned = true;
+    return heap;
+}
+
+/* ── Filesystem fallback: index must never veto the filesystem ──────
+ * If the trie has no results (stale index, outside scan roots, ignored
+ * dir, new file before rescan), list the parent directory directly.
+ * Bounded: single opendir + readdir, no recursion, stops once `want`
+ * is reached, caps directory scan to avoid huge-dir stalls. Uses
+ * d_type to avoid stat() per entry except symlinks/unknown. */
+#define FS_FALLBACK_MAX_SCAN 5000
+static void fs_fallback_fill(const char* expanded_prefix, int explicit_slash, int dirs_only,
+                             int typed_dot, uint32_t want, uint32_t* out_idx,
+                             uint32_t* packed_count, uint8_t* packed, size_t* pack_pos,
+                             dedup_set* seen) {
+    if (!expanded_prefix || expanded_prefix[0] == '\0')
+        return;
+    if (!out_idx || !packed_count || !packed || !pack_pos || !seen)
+        return;
+    if (*out_idx >= want)
+        return;
+
+    /* Split into parent dir + basename prefix. expanded_prefix is absolute
+     * and normalized (no trailing slash); explicit_slash recovers whether
+     * the user typed one, in which case we list the dir's children. */
+    char dir[4096];
+    const char* base = "";
+    if (explicit_slash) {
+        if (strlen(expanded_prefix) >= sizeof(dir))
+            return;
+        strcpy(dir, expanded_prefix[0] ? expanded_prefix : "/");
+        base = "";
+    } else {
+        size_t elen = strlen(expanded_prefix);
+        /* Strip trailing slashes for split (keep root "/"). */
+        size_t trim = elen;
+        while (trim > 1 && expanded_prefix[trim - 1] == '/')
+            trim--;
+        const char* last_slash = NULL;
+        for (size_t i = 0; i < trim; i++) {
+            if (expanded_prefix[i] == '/')
+                last_slash = expanded_prefix + i;
+        }
+        if (!last_slash) {
+            return; /* should not happen for absolute paths */
+        }
+        if (elen > 0 && expanded_prefix[elen - 1] == '/') {
+            /* "…/dir/" → list dir itself */
+            size_t dlen = trim;
+            if (dlen == 0)
+                dlen = 1;
+            if (dlen >= sizeof(dir))
+                return;
+            memcpy(dir, expanded_prefix, dlen);
+            dir[dlen] = '\0';
+            base = "";
+        } else {
+            size_t dlen = (size_t) (last_slash - expanded_prefix);
+            if (dlen == 0)
+                dlen = 1; /* parent is root */
+            if (dlen >= sizeof(dir))
+                return;
+            memcpy(dir, expanded_prefix, dlen);
+            dir[dlen] = '\0';
+            base = last_slash + 1;
+        }
+    }
+    size_t baselen = strlen(base);
+
+    DIR* dp = opendir(dir);
+    if (!dp)
+        return; /* ENOENT/EACCES: nothing to add, stay silent */
+
+    size_t scanned = 0;
+    struct dirent* de;
+    while ((de = readdir(dp)) != NULL) {
+        if (++scanned > FS_FALLBACK_MAX_SCAN)
+            break;
+        if (*out_idx >= want)
+            break;
+        const char* name = de->d_name;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        if (baselen > 0 && strncmp(name, base, baselen) != 0)
+            continue;
+        if (!typed_dot && name[0] == '.')
+            continue;
+
+        bool is_dir = false;
+        if (de->d_type == DT_DIR) {
+            is_dir = true;
+        } else if (de->d_type == DT_REG) {
+            is_dir = false;
+        } else if (de->d_type == DT_LNK || de->d_type == DT_UNKNOWN) {
+            char full[4096];
+            int n = snprintf(full, sizeof(full), "%s/%s",
+                             strcmp(dir, "/") == 0 ? "" : dir, name);
+            if (n <= 0 || (size_t) n >= sizeof(full))
+                continue;
+            struct stat st;
+            if (stat(full, &st) != 0)
+                continue; /* dangling symlink etc: skip */
+            is_dir = S_ISDIR(st.st_mode);
+        } else {
+            continue; /* sockets/fifos/devices: not completable */
+        }
+        if (dirs_only && !is_dir)
+            continue;
+
+        char full[4096];
+        int n = snprintf(full, sizeof(full), "%s/%s", strcmp(dir, "/") == 0 ? "" : dir, name);
+        if (n <= 0 || (size_t) n >= sizeof(full))
+            continue;
+        if (dedup_contains(seen, full))
+            continue;
+        dedup_insert(seen, full);
+        if (ipc_pack_completions_add(packed, IPC_MAX_PAYLOAD, pack_pos, packed_count, full,
+                                     is_dir ? 1 : 0, 0.0f) != 0)
+            break;
+        (*out_idx)++;
+    }
+    closedir(dp);
 }
 
 static void send_error(int fd, uint32_t req_id, int32_t code, const char* msg) {
@@ -253,7 +398,8 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         sr_files = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now, req->cwd,
                                                  0);
 
-    uint8_t* packed = malloc(IPC_MAX_PAYLOAD);
+    bool packed_owned = false;
+    uint8_t* packed = packed_buffer_reuse(&packed_owned);
     if (!packed) {
         send_error(fd, req_id, -7, "out of memory");
         if (sr_dirs.data)
@@ -351,6 +497,13 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
             out_idx++;
         }
     }
+    /* Index missed (or was thin): fall back to the live filesystem so a
+     * stale index, an outside-roots path, or an ignored dir still completes.
+     * Index results keep priority (packed first); fallback appends. */
+    if (out_idx < want) {
+        fs_fallback_fill(expanded_prefix, explicit_slash, req->dirs_only ? 1 : 0, typed_dot, want,
+                         &out_idx, &packed_count, packed, &pack_pos, &seen);
+    }
     ipc_pack_completions_finish(packed, packed_count);
     if (sr_dirs.data)
         daemon_release_scored(srv->daemon, sr_dirs);
@@ -363,7 +516,8 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     ipc_write_header(&hdr, IPC_MSG_COMPLETIONS, (uint32_t) pack_pos, req_id);
     write_exact(fd, &hdr, sizeof(hdr));
     write_exact(fd, packed, pack_pos);
-    free(packed);
+    if (packed_owned)
+        free(packed);
 }
 
 static void handle_suggest(ipc_server* srv, int fd, uint32_t req_id, const ipc_suggest_req* req) {
@@ -420,11 +574,22 @@ static void handle_recent(ipc_server* srv, int fd, uint32_t req_id, const ipc_re
     memset(resp.is_dirs, 0, sizeof(resp.is_dirs));
 
     uint32_t limit = req->limit > 0 && req->limit <= 50 ? req->limit : 50;
-    char* paths[50];
-    for (int i = 0; i < 50; i++) {
+    char* paths[50] = {0};
+    bool alloc_ok = true;
+    for (uint32_t i = 0; i < limit; i++) {
         paths[i] = malloc(4096);
+        if (!paths[i]) {
+            alloc_ok = false;
+            break;
+        }
     }
-    bool is_dirs[50];
+    if (!alloc_ok) {
+        for (uint32_t i = 0; i < limit; i++)
+            free(paths[i]);
+        send_error(fd, req_id, -7, "out of memory");
+        return;
+    }
+    bool is_dirs[50] = {0};
 
     int count = daemon_get_recent_files(srv->daemon, paths, is_dirs, (int) limit);
 
@@ -442,7 +607,7 @@ static void handle_recent(ipc_server* srv, int fd, uint32_t req_id, const ipc_re
     }
     resp.count = out_idx;
 
-    for (int i = 0; i < 50; i++) {
+    for (uint32_t i = 0; i < limit; i++) {
         free(paths[i]);
     }
 
@@ -524,7 +689,8 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
         want = IPC_COMPLETE_MAX;
     completions* fc = daemon_get_fuzzy_completions(srv->daemon, req->prefix, want);
 
-    uint8_t* packed = malloc(IPC_MAX_PAYLOAD);
+    bool packed_owned = false;
+    uint8_t* packed = packed_buffer_reuse(&packed_owned);
     if (!packed) {
         if (fc)
             completions_free(fc);
@@ -571,7 +737,8 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
     ipc_write_header(&hdr, IPC_MSG_FUZZY_COMPLETIONS, (uint32_t) pack_pos, req_id);
     write_exact(fd, &hdr, sizeof(hdr));
     write_exact(fd, packed, pack_pos);
-    free(packed);
+    if (packed_owned)
+        free(packed);
 }
 
 static void handle_select(ipc_server* srv, int fd, uint32_t req_id, const ipc_select_req* req) {

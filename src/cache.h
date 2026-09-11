@@ -6,7 +6,7 @@
 
 #define CACHE_MAX_KEY_LEN 4096
 #define CACHE_DEFAULT_MAX_ENTRIES 1024
-#define CACHE_DEFAULT_TTL_SECONDS 2
+#define CACHE_DEFAULT_TTL_SECONDS 30
 #define CACHE_NUM_SHARDS 16
 
 typedef struct query_cache query_cache;
@@ -55,6 +55,12 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
 void cache_invalidate(query_cache* cache);
 
 void cache_clear(query_cache* cache);
+
+/* ── Hot-cache disk persistence ─────────────────────────────────────
+ * Saves live entries so a restart doesn't start with a cold Tab cache.
+ * Returns number of entries saved/loaded, or -1 on I/O/format error. */
+int cache_save_to_file(query_cache* cache, const char* path);
+int cache_load_from_file(query_cache* cache, const char* path);
 
 /* ── Stats ─────────────────────────────────────────────────────────── */
 

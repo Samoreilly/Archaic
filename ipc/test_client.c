@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fnmatch.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "../src/config.h"
@@ -13,6 +15,7 @@
 #endif
 
 int main(int argc, char* argv[]) {
+    const char* prog = argv[0];
     if (argc > 1 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
         printf("archaic-cli " ARCHAIC_VERSION "\n");
         return 0;
@@ -23,6 +26,7 @@ int main(int argc, char* argv[]) {
         sock_override = argv[2];
         argv += 2;
         argc -= 2;
+        argv[0] = (char*) prog; /* keep usage/cli lines showing the binary, not the socket */
     }
 
     if (argc < 2) {
@@ -41,10 +45,199 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  reindex [path]\n");
         fprintf(stderr, "  shutdown\n");
         fprintf(stderr, "  doctor\n");
+        fprintf(stderr, "  explain <prefix> [cwd]\n");
         fprintf(stderr, "  watch <path>\n");
         fprintf(stderr, "  unwatch <path>\n");
         fprintf(stderr, "  roots\n");
+        fprintf(stderr, "  recent [n]\n");
         return 1;
+    }
+
+    /* ── explain: why does this prefix complete (or not)? ────────────
+     * Client-side only (no protocol change): checks roots, ignore rules,
+     * filesystem state, daemon scanning flag, and live index results. */
+    if (strcmp(argv[1], "explain") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "Usage: %s explain <prefix> [cwd]\n", argv[0]);
+            return 1;
+        }
+        const char* prefix = argv[2];
+        const char* cwd = argc > 3 ? argv[3] : "";
+        archaic_config cfg;
+        config_init_defaults(&cfg);
+        config_load_default(&cfg);
+
+        /* Resolve to absolute for root/ignore checks (mirror server join). */
+        char abs_prefix[4096];
+        if (prefix[0] == '/') {
+            strncpy(abs_prefix, prefix, sizeof(abs_prefix) - 1);
+            abs_prefix[sizeof(abs_prefix) - 1] = '\0';
+        } else if (cwd[0] == '/') {
+            snprintf(abs_prefix, sizeof(abs_prefix), "%s/%s", cwd, prefix);
+        } else {
+            strncpy(abs_prefix, prefix, sizeof(abs_prefix) - 1);
+            abs_prefix[sizeof(abs_prefix) - 1] = '\0';
+        }
+
+        printf("explain %s\n", prefix);
+        printf("  absolute:   %s\n", abs_prefix);
+
+        /* Daemon live roots first: the daemon may have been started with
+         * explicit scan paths that differ from this client's config file. */
+        ipc_client* client =
+            sock_override ? ipc_client_connect(sock_override) : ipc_client_connect_default();
+        if (!client) {
+            printf("  daemon:     not connected\n");
+            return 1;
+        }
+        ipc_health_resp health;
+        memset(&health, 0, sizeof(health));
+        int have_health = (ipc_client_health(client, &health) == 0);
+
+        /* Roots check (prefix itself or its parent under a root still
+         * completes via filesystem fallback, but index hits need roots).
+         * Checks client config roots AND the daemon's live scan roots. */
+        int under_root = 0;
+        const char* matched_root = NULL;
+        char live_roots[10][4096];
+        memset(live_roots, 0, sizeof(live_roots));
+        int nlive = 0;
+        const char* all_roots[32];
+        int nroots = 0;
+        if (cfg.daemon.scan_path[0])
+            all_roots[nroots++] = cfg.daemon.scan_path;
+        for (int i = 0; i < cfg.daemon.scan_path_count && nroots < 20; i++) {
+            if (cfg.daemon.scan_paths[i][0])
+                all_roots[nroots++] = cfg.daemon.scan_paths[i];
+        }
+        if (have_health) {
+            for (int i = 0; i < health.scan_root_count && nlive < 10 && i < 10; i++) {
+                if (!health.scan_roots[i][0])
+                    continue;
+                int dup = 0;
+                for (int j = 0; j < nroots; j++) {
+                    if (strcmp(all_roots[j], health.scan_roots[i]) == 0) {
+                        dup = 1;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    strncpy(live_roots[nlive], health.scan_roots[i], sizeof(live_roots[0]) - 1);
+                    all_roots[nroots++] = live_roots[nlive];
+                    nlive++;
+                }
+            }
+        }
+        for (int i = 0; i < nroots && !under_root; i++) {
+            size_t rl = strlen(all_roots[i]);
+            if (rl == 0)
+                continue;
+            if (strncmp(abs_prefix, all_roots[i], rl) == 0 &&
+                (abs_prefix[rl] == '\0' || abs_prefix[rl] == '/')) {
+                under_root = 1;
+                matched_root = all_roots[i];
+            }
+        }
+        /* Also consider parent dir: completing "/root/newfile" lists parent. */
+        char parent[4096];
+        strncpy(parent, abs_prefix, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        size_t pl = strlen(parent);
+        while (pl > 1 && parent[pl - 1] == '/')
+            parent[--pl] = '\0';
+        char* slash = strrchr(parent[1] ? parent + 1 : parent, '/');
+        char parent_dir[4096];
+        if (abs_prefix[strlen(abs_prefix) - 1] == '/') {
+            strncpy(parent_dir, parent, sizeof(parent_dir) - 1);
+        } else if (slash) {
+            size_t dl = (size_t) (slash - parent);
+            if (dl == 0)
+                dl = 1;
+            memcpy(parent_dir, parent, dl);
+            parent_dir[dl] = '\0';
+        } else {
+            snprintf(parent_dir, sizeof(parent_dir), "%s",
+                     cwd[0] == '/' ? cwd : ".");
+        }
+        parent_dir[sizeof(parent_dir) - 1] = '\0';
+        int parent_under_root = under_root;
+        if (!under_root) {
+            for (int i = 0; i < nroots && !parent_under_root; i++) {
+                size_t rl = strlen(all_roots[i]);
+                if (rl == 0)
+                    continue;
+                if (strncmp(parent_dir, all_roots[i], rl) == 0 &&
+                    (parent_dir[rl] == '\0' || parent_dir[rl] == '/'))
+                    parent_under_root = 1;
+            }
+        }
+        if (under_root && matched_root)
+            printf("  under_root: yes (%s)\n", matched_root);
+        else
+            printf("  under_root: %s\n", under_root ? "yes" : "no");
+        if (!under_root)
+            printf("  hint:       outside scan roots; index misses expected, "
+                   "filesystem fallback still applies; run `%s watch %s` to index\n",
+                   prog, parent_dir);
+
+        /* Ignore check: any path component matching ignore_dirs, or the
+         * basename matching ignore_files, means the index skips it. */
+        const char* ignored_by = NULL;
+        char tmp[4096];
+        strncpy(tmp, abs_prefix, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        for (char* tok = strtok(tmp, "/"); tok; tok = strtok(NULL, "/")) {
+            for (int i = 0; i < cfg.scanner.ignore_dir_count; i++) {
+                if (fnmatch(cfg.scanner.ignore_dirs[i], tok, 0) == 0)
+                    ignored_by = cfg.scanner.ignore_dirs[i];
+            }
+        }
+        const char* base = strrchr(abs_prefix, '/');
+        base = base ? base + 1 : abs_prefix;
+        if (!ignored_by && base[0]) {
+            for (int i = 0; i < cfg.scanner.ignore_file_count; i++) {
+                if (fnmatch(cfg.scanner.ignore_files[i], base, 0) == 0)
+                    ignored_by = cfg.scanner.ignore_files[i];
+            }
+        }
+        printf("  ignored:    %s%s%s\n", ignored_by ? "yes (" : "no",
+               ignored_by ? ignored_by : "", ignored_by ? ")" : "");
+        if (ignored_by)
+            printf("  hint:       index skips this; filesystem fallback still "
+                   "completes it if present on disk\n");
+
+        /* Filesystem state. */
+        struct stat st;
+        int exists = (stat(abs_prefix, &st) == 0);
+        int parent_exists = (stat(parent_dir, &st) == 0);
+        printf("  on_disk:    %s\n", exists ? "yes" : "no");
+        printf("  parent_dir: %s (%s)\n", parent_dir, parent_exists ? "exists" : "missing");
+
+        /* Daemon state + live results probe (index and/or fallback). */
+        if (have_health) {
+            printf("  scanning:   %s\n", health.scanning ? "yes (results may be partial)" : "no");
+            printf("  watcher:    %s\n", health.watcher_active ? "active" : "inactive");
+        }
+        ipc_completion_list* resp = calloc(1, sizeof(*resp));
+        if (resp) {
+            if (ipc_client_complete(client, abs_prefix, 5, cwd, 0, resp) == 0) {
+                printf("  results:    %u (index and/or filesystem fallback)%s\n", resp->count,
+                       resp->scanning ? " (scan in progress)" : "");
+            } else {
+                printf("  results:    query failed\n");
+            }
+            free(resp);
+        }
+        if (!parent_under_root)
+            printf("  verdict:    outside roots — expect filesystem fallback only\n");
+        else if (ignored_by)
+            printf("  verdict:    ignored by index rules — expect filesystem fallback only\n");
+        else if (!parent_exists)
+            printf("  verdict:    parent missing on disk — no completions possible\n");
+        else
+            printf("  verdict:    should complete (index and/or filesystem fallback)\n");
+        ipc_client_disconnect(client);
+        return 0;
     }
 
     if (strcmp(argv[1], "watch") == 0 || strcmp(argv[1], "unwatch") == 0 ||
@@ -84,16 +277,61 @@ int main(int argc, char* argv[]) {
         archaic_config cfg;
         config_init_defaults(&cfg);
         config_load_default(&cfg);
+        /* Which file did the config actually come from? */
+        const char* cfg_src = "(defaults)";
+        const char* env_cfg = getenv("ARCHAIC_CONFIG");
+        struct stat cfg_st;
+        char home_cfg[4096] = {0};
+        const char* home = getenv("HOME");
+        if (env_cfg && env_cfg[0] && stat(env_cfg, &cfg_st) == 0)
+            cfg_src = env_cfg;
+        else if (home && home[0]) {
+            snprintf(home_cfg, sizeof(home_cfg), "%s/.config/archaic/config.toml", home);
+            if (stat(home_cfg, &cfg_st) == 0)
+                cfg_src = home_cfg[0] ? home_cfg : "(defaults)";
+            else if (stat("/etc/archaic/config.toml", &cfg_st) == 0)
+                cfg_src = "/etc/archaic/config.toml";
+        }
         const char* sock = sock_override ? sock_override : cfg.daemon.socket_path;
         printf("archaic doctor\n");
         printf("  cli:        %s\n", argv[0]);
+        printf("  config:     %s\n", cfg_src);
         printf("  socket:     %s\n", sock);
         struct stat st;
         int sock_ok = (stat(sock, &st) == 0 && S_ISSOCK(st.st_mode));
         printf("  sock_exists:%s\n", sock_ok ? " yes" : " no");
-        printf("  scan_path:  %s\n", cfg.daemon.scan_path[0] ? cfg.daemon.scan_path : "(none)");
-        for (int i = 0; i < cfg.daemon.scan_path_count; i++)
-            printf("  scan_paths: %s\n", cfg.daemon.scan_paths[i]);
+        if (cfg.daemon.scan_path[0]) {
+            int ok = (stat(cfg.daemon.scan_path, &st) == 0 && S_ISDIR(st.st_mode));
+            printf("  scan_path:  %s (%s)\n", cfg.daemon.scan_path, ok ? "ok" : "MISSING");
+        } else {
+            printf("  scan_path:  (none)\n");
+        }
+        for (int i = 0; i < cfg.daemon.scan_path_count; i++) {
+            int ok = (stat(cfg.daemon.scan_paths[i], &st) == 0 && S_ISDIR(st.st_mode));
+            printf("  scan_paths: %s (%s)\n", cfg.daemon.scan_paths[i], ok ? "ok" : "MISSING");
+        }
+        /* State file age/size: proxy for last successful save. */
+        char state_path[4096] = {0};
+        const char* xdg_cache = getenv("XDG_CACHE_HOME");
+        if (xdg_cache && xdg_cache[0])
+            snprintf(state_path, sizeof(state_path), "%s/archaic/state.bin", xdg_cache);
+        else if (home && home[0])
+            snprintf(state_path, sizeof(state_path), "%s/.cache/archaic/state.bin", home);
+        if (state_path[0] && stat(state_path, &st) == 0) {
+            char ago[64];
+            time_t now = time(NULL);
+            long diff = (long) (now - st.st_mtime);
+            if (diff < 0)
+                diff = 0;
+            if (diff < 90)
+                snprintf(ago, sizeof(ago), "%lds ago", diff);
+            else if (diff < 5400)
+                snprintf(ago, sizeof(ago), "%ldm ago", diff / 60);
+            else
+                snprintf(ago, sizeof(ago), "%ldh ago", diff / 3600);
+            printf("  state:      %s (%lld bytes, saved %s)\n", state_path,
+                   (long long) st.st_size, ago);
+        }
         ipc_client* client =
             sock_override ? ipc_client_connect(sock_override) : ipc_client_connect_default();
         if (!client) {
@@ -110,9 +348,25 @@ int main(int argc, char* argv[]) {
         if (ipc_client_health(client, &health) == 0) {
             printf("  pid:        %d\n", health.daemon_pid);
             printf("  scanning:   %s\n", health.scanning ? "yes" : "no");
+            uint64_t tot = health.cache_hits + health.cache_misses;
+            double rate = tot ? (100.0 * (double) health.cache_hits / (double) tot) : 0.0;
+            printf("  cache:      %d entries, %.1f%% hit (%lu/%lu)\n", health.cache_entries, rate,
+                   (unsigned long) health.cache_hits, (unsigned long) tot);
+            printf("  watcher:    %s\n", health.watcher_active ? "active" : "inactive");
+            printf("  rescan:     every %us\n", health.rescan_interval);
+            printf("  indexed:    %lu buckets, %lu files, %lu dirs\n",
+                   (unsigned long) health.buckets_indexed, (unsigned long) health.files_scanned,
+                   (unsigned long) health.dirs_scanned);
             printf("  rss:        %lu bytes\n", (unsigned long) health.estimated_memory_bytes);
             printf("  protocol:   %d\n", health.protocol_version);
             printf("  daemon_sock:%s\n", health.socket_path);
+            if (health.scan_root_count > 0) {
+                printf("  roots:      %d\n", health.scan_root_count);
+                for (int i = 0; i < health.scan_root_count && i < 10; i++)
+                    printf("    [%d] %s\n", i, health.scan_roots[i]);
+            }
+            printf("  tip:        run `%s explain <prefix> [cwd]` to debug empty completions\n",
+                   argv[0]);
         } else {
             printf("  health:     fail\n");
         }
@@ -342,6 +596,18 @@ int main(int argc, char* argv[]) {
             }
         } else {
             fprintf(stderr, "Failed to get bookmarks\n");
+        }
+    } else if (strcmp(argv[1], "recent") == 0) {
+        uint32_t n = argc > 2 ? (uint32_t) atoi(argv[2]) : 10;
+        ipc_recent_resp resp;
+        memset(&resp, 0, sizeof(resp));
+        rc = ipc_client_recent(client, n, &resp);
+        if (rc == 0) {
+            for (uint32_t i = 0; i < resp.count; i++) {
+                printf("%c %s\n", resp.is_dirs[i] ? 'D' : 'F', resp.paths[i]);
+            }
+        } else {
+            fprintf(stderr, "Recent failed\n");
         }
     } else if (strcmp(argv[1], "health") == 0) {
         ipc_health_resp resp;

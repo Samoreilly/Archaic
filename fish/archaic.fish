@@ -158,8 +158,9 @@ function __archaic_try_start_daemon -d "Start daemon in background if it is down
     if not test -x "$bin"
         return 1
     end
-    set -l scan "$HOME"
-    $bin --daemon $scan $archaic_sock_path >/dev/null 2>&1 &
+    # No scan path: the daemon uses config roots (~/.config/archaic/roots
+    # plus ~/src, ~/projects, …), never a whole-$HOME scan.
+    $bin --daemon $archaic_sock_path >/dev/null 2>&1 &
     disown 2>/dev/null
     for i in 1 2 3 4 5 6 7 8
         if test -S "$archaic_sock_path"
@@ -311,17 +312,97 @@ function __archaic_token_path -d "Turn an absolute result into the token the use
     echo "$full"
 end
 
+# ── Active command detection (multi-command lines) ──────────────────────────
+# `cd foo && vim <Tab>` should complete for vim, not cd. Returns the command
+# after the last shell separator, unwrapping sudo/doas/env wrappers.
+function __archaic_active_command -d "Active command in a possibly chained line"
+    set -l tokens $argv
+    if test (count $tokens) -eq 0
+        echo ""
+        return
+    end
+    # First non-separator, non-assignment token (handles `VAR=1 vim …`)
+    set -l active ""
+    for t in $tokens
+        switch "$t"
+            case ';' '&' '|' '&&' '||' '(' '{' 'if' 'while' 'for' 'begin' 'function' 'not' 'and' 'or'
+                continue
+            case '*=*'
+                if not string match -q -- '-*' "$t"
+                    continue
+                end
+                set active $t
+                break
+            case '*'
+                set active $t
+                break
+        end
+    end
+    if test -z "$active"
+        set active $tokens[1]
+    end
+    set -l expect_cmd 0
+    for t in $tokens
+        if test $expect_cmd -eq 1
+            # Skip empty separator-adjacent tokens; first real token wins
+            switch "$t"
+                case ';' '&' '|' '&&' '||' '(' '{'
+                    continue
+                case '*=*'
+                    if not string match -q -- '-*' "$t"
+                        continue
+                    end
+                    set active $t
+                    set expect_cmd 0
+                case '*'
+                    set active $t
+                    set expect_cmd 0
+            end
+            continue
+        end
+        switch "$t"
+            case ';' '&' '|' '&&' '||' '(' '{' 'if' 'while' 'for' 'begin' 'function' 'not' 'and' 'or'
+                set expect_cmd 1
+        end
+    end
+    # Unwrap privilege/env wrappers: `sudo vim <Tab>` completes for vim
+    switch "$active"
+        case sudo doas env nohup timeout watch xargs
+            set -l idx 1
+            for t in $tokens
+                if test "$t" = "$active"
+                    break
+                end
+                set idx (math $idx + 1)
+            end
+            # Find token right after the wrapper, skipping flags
+            set -l j (math $idx + 1)
+            while test $j -le (count $tokens)
+                set -l cand $tokens[$j]
+                switch "$cand"
+                    case '-*'
+                        set j (math $j + 1)
+                        continue
+                    case ';' '&' '|' '&&' '||' '(' '{' ''
+                        break
+                    case '*'
+                        echo $cand
+                        return
+                end
+                break
+            end
+    end
+    echo $active
+end
+
 # ── Core completion function ──────────────────────────────────────────────────
 function __archaic_do_complete -d "Query archaic daemon for completions"
     set -l typed (commandline -ct)
     set -l prefix $typed
 
-    # Detect command being completed
+    # Detect command being completed (chain-aware)
     set -l cmd_tokens (commandline -co)
-    set -l cmd ""
-    if test (count $cmd_tokens) -gt 0
-        set cmd $cmd_tokens[1]
-    end
+    set -l cmd (__archaic_active_command $cmd_tokens)
 
     # Flags are not paths
     if string match -q -- '-*' "$prefix"
@@ -503,11 +584,8 @@ function __archaic_complete_ok -d "File cmds allow empty token; others need a pa
     if string match -q -- '-*' "$tok"
         return 1
     end
-    set -l cmd ""
     set -l toks (commandline -co)
-    if test (count $toks) -gt 0
-        set cmd $toks[1]
-    end
+    set -l cmd (__archaic_active_command $toks)
     if contains -- $cmd $__archaic_file_cmds
         return 0
     end
@@ -549,11 +627,26 @@ complete -c gh -n '__archaic_is_tool_path_token; and __fish_seen_subcommand_from
 
 # ── Inline autosuggestion via fish_right_prompt ────────────────────────────────
 set -g __archaic_suggestion ""
+set -g __archaic_last_suggest_token ""
+set -g __archaic_last_suggest_result ""
 
 function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
+    # Opt-out: set ARCHAIC_SUGGEST_ON_PROMPT=0 to disable per-prompt queries
+    # (Tab completion keeps working). Reduces daemon traffic on every prompt.
+    if set -q ARCHAIC_SUGGEST_ON_PROMPT; and test "$ARCHAIC_SUGGEST_ON_PROMPT" = "0"
+        set -g __archaic_suggestion ""
+        return
+    end
     set -l prefix (commandline -t)
     if test -z "$prefix"
         set -g __archaic_suggestion ""
+        return
+    end
+
+    # Memoize: repeated prompt repaints with the same token reuse the last
+    # result instead of hitting the daemon again.
+    if test "$prefix" = "$__archaic_last_suggest_token"
+        set -g __archaic_suggestion "$__archaic_last_suggest_result"
         return
     end
 
@@ -565,6 +658,8 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
 
     if not __archaic_check_daemon
         set -g __archaic_suggestion ""
+        set -g __archaic_last_suggest_token "$prefix"
+        set -g __archaic_last_suggest_result ""
         return
     end
 
@@ -583,6 +678,8 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
 
     if test $status -ne 0 -o -z "$output"
         set -g __archaic_suggestion ""
+        set -g __archaic_last_suggest_token "$prefix"
+        set -g __archaic_last_suggest_result ""
         return
     end
 
@@ -590,6 +687,8 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     set -l parts (string split " " "$output")
     if test (count $parts) -lt 2
         set -g __archaic_suggestion ""
+        set -g __archaic_last_suggest_token "$prefix"
+        set -g __archaic_last_suggest_result ""
         return
     end
     set -l suggestion $parts[2]
@@ -612,6 +711,8 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
     else
         set -g __archaic_suggestion ""
     end
+    set -g __archaic_last_suggest_token "$prefix"
+    set -g __archaic_last_suggest_result "$__archaic_suggestion"
 end
 
 function __archaic_right_prompt -d "Show archaic autosuggestion"

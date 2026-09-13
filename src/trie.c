@@ -267,6 +267,7 @@ bool is_executable_script(const char* path) {
 
 typedef struct {
     char path[4096];
+    size_t len; /* memoized: boost scans this per candidate per Tab */
     uint64_t select_count;
     uint64_t last_select;
 } session_entry;
@@ -309,6 +310,7 @@ void session_record_selection(const char* path) {
         e.select_count = 1;
     }
     e.last_select = (uint64_t) time(NULL);
+    e.len = strlen(e.path);
     g_session_entries[0] = e;
 
     pthread_mutex_unlock(&g_session_lock);
@@ -325,13 +327,13 @@ double session_get_boost(const char* path) {
 
     for (int i = 0; i < g_session_count; i++) {
         const char* selected = g_session_entries[i].path;
-        size_t sel_len = strlen(selected);
+        size_t sel_len = g_session_entries[i].len;
 
         double recency = 1.0 / (1.0 + (double) i * 0.15);
         if (path_len > sel_len && strncmp(path, selected, sel_len) == 0 && path[sel_len] == '/') {
             boost += 0.12 * recency;
         }
-        if (strcmp(path, selected) == 0) {
+        if (path_len == sel_len && strcmp(path, selected) == 0) {
             boost += 0.55 * recency;
             if (g_session_entries[i].select_count > 1)
                 boost += 0.08;
@@ -1009,6 +1011,13 @@ static void scored_insert(scored_completions* sc, const char* path, double score
     if (!sc->entries[sc->count].path)
         return;
     sc->count++;
+}
+
+void scored_completions_add(scored_completions* sc, const char* path, double score, uint64_t freq,
+                            uint64_t last_access, bool is_dir) {
+    if (!sc || !path)
+        return;
+    scored_insert(sc, path, score, freq, last_access, is_dir);
 }
 
 typedef struct {

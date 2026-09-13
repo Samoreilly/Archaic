@@ -541,33 +541,26 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     if (want > IPC_COMPLETE_MAX)
         want = IPC_COMPLETE_MAX;
 
-    scored_result sr_dirs = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now,
-                                                          req->cwd, 1);
-    scored_result sr_files = {NULL, false};
-    if (!req->dirs_only)
-        sr_files = daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now, req->cwd,
-                                                 0);
+    /* Single scored walk: dirs_only filters in-walk (see collect), so one
+     * call serves both cases. Results stream in score order. */
+    scored_result sr =
+        daemon_get_scored_completions(srv->daemon, expanded_prefix, want, now, req->cwd,
+                                      req->dirs_only ? 1 : 0);
 
     bool packed_owned = false;
     uint8_t* packed = packed_buffer_reuse(&packed_owned);
     if (!packed) {
         send_error(fd, req_id, -7, "out of memory");
-        if (sr_dirs.data)
-            daemon_release_scored(srv->daemon, sr_dirs);
-        if (sr_files.data)
-            daemon_release_scored(srv->daemon, sr_files);
+        if (sr.data)
+            daemon_release_scored(srv->daemon, sr);
         return;
     }
     uint8_t scanning = atomic_load(&srv->daemon->scanning) ? 1 : 0;
     size_t pack_pos = ipc_pack_completions_begin(packed, IPC_MAX_PAYLOAD, scanning);
     uint32_t packed_count = 0;
 
-    const scored_completions* sources[2];
-    int nsrc = 0;
-    if (sr_dirs.data)
-        sources[nsrc++] = sr_dirs.data;
-    if (sr_files.data)
-        sources[nsrc++] = sr_files.data;
+    const scored_completions* sc = sr.data;
+    uint32_t sc_count = sc ? (uint32_t) sc->count : 0;
 
     uint32_t out_idx = 0;
     size_t prefix_len = strlen(expanded_prefix);
@@ -579,13 +572,10 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     dedup_set seen;
     dedup_init(&seen);
 
-    for (int s = 0; s < nsrc && out_idx < want; s++) {
-        const scored_completions* sc = sources[s];
-        uint32_t n = (uint32_t) sc->count;
+    {
+        uint32_t n = sc_count;
         for (uint32_t i = 0; i < n && out_idx < want; i++) {
             if (req->dirs_only && !sc->entries[i].is_dir)
-                continue;
-            if (!req->dirs_only && s == 1 && sc->entries[i].is_dir)
                 continue;
 
             const char* p = sc->entries[i].path;
@@ -633,8 +623,7 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     }
     /* Index missed (or was thin): fall back to the live filesystem so a
      * stale index, an outside-roots path, or an ignored dir still completes.
-     * Index results keep priority (packed first); fallback appends. */
-    if (out_idx < want) {
+     * Index results keep priority (packed first); fallback appends. */    if (out_idx < want) {
         fs_fallback_fill(expanded_prefix, explicit_slash, req->dirs_only ? 1 : 0, typed_dot, want,
                          &out_idx, &packed_count, packed, &pack_pos, &seen);
     }
@@ -646,10 +635,8 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
             hint = IPC_HINT_SCANNING;
         ipc_pack_completions_set_hint(packed, hint);
     }
-    if (sr_dirs.data)
-        daemon_release_scored(srv->daemon, sr_dirs);
-    if (sr_files.data)
-        daemon_release_scored(srv->daemon, sr_files);
+    if (sr.data)
+        daemon_release_scored(srv->daemon, sr);
 
     daemon_log_query(srv->daemon, req->prefix, req->cwd, packed_count);
 

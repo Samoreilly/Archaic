@@ -76,6 +76,9 @@ void completions_collect(Trie* root, const char* prefix, completions* out);
 
 scored_completions* scored_completions_create(size_t capacity);
 void scored_completions_free(scored_completions* sc);
+/* Append one entry (used to cache fuzzy results as ranked entries). */
+void scored_completions_add(scored_completions* sc, const char* path, double score, uint64_t freq,
+                            uint64_t last_access, bool is_dir);
 void scored_completions_collect(Trie* root, const char* prefix, scored_completions* out,
                                 uint64_t now, const char* cwd, const char* command,
                                 double hidden_file_penalty, int dirs_only);

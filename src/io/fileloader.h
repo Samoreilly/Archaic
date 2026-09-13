@@ -32,6 +32,9 @@ typedef struct {
     struct ipc_server* ipc;
     metrics_t metrics;
     query_cache* cache;
+    /* Bumped on every accept (select): namespaces cache keys so ranking
+     * reflects learning without wiping unrelated entries. */
+    atomic_uint_fast64_t cache_gen;
     pthread_t scan_thread;
     atomic_bool scanning;
     pthread_mutex_t scan_start_lock;

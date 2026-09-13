@@ -794,6 +794,7 @@ daemon_state* daemon_init(void) {
     metrics_init(&state->metrics);
 
     state->cache = cache_create(cfg.storage.cache_max_entries, cfg.storage.cache_ttl_seconds);
+    atomic_store(&state->cache_gen, 0);
 
     recent_files_init(&state->recent, (int) cfg.storage.recent_files_capacity);
 
@@ -1295,7 +1296,7 @@ static int last_component_typed_dot(const char* prefix) {
 
 static scored_completions* try_parent_cache_reuse(query_cache* cache, const char* prefix,
                                                   size_t limit, size_t cap, const char* cwd,
-                                                  int dirs_only) {
+                                                  int dirs_only, unsigned long long gen) {
     if (!cache || !prefix || prefix[0] == '\0')
         return NULL;
     size_t plen = strlen(prefix);
@@ -1316,8 +1317,8 @@ static scored_completions* try_parent_cache_reuse(query_cache* cache, const char
         parent_prefix[parent_len] = '\0';
         if (last_component_typed_dot(parent_prefix) != child_dot)
             continue; /* hidden scoring differs; try shorter parent */
-        int n = snprintf(parent_key, sizeof(parent_key), "%d|%zu|%s|%s", dirs_only, limit,
-                         cwd ? cwd : "", parent_prefix);
+        int n = snprintf(parent_key, sizeof(parent_key), "%d|%zu|%s|%s|%llu", dirs_only, limit,
+                         cwd ? cwd : "", parent_prefix, gen);
         if (n <= 0 || (size_t) n >= sizeof(parent_key))
             continue;
         const scored_completions* parent = cache_get(cache, parent_key);
@@ -1369,8 +1370,12 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     }
 
     char cache_key[CACHE_MAX_KEY_LEN];
-    snprintf(cache_key, sizeof(cache_key), "%d|%zu|%s|%s", dirs_only, limit, cwd ? cwd : "",
-             prefix);
+    /* Select generation namespaces the key: accept learning takes effect
+     * on the next Tab without wiping the cache (old generations age out
+     * via TTL/LRU, bounded by cache capacity). */
+    unsigned long long gen = (unsigned long long) atomic_load(&state->cache_gen);
+    snprintf(cache_key, sizeof(cache_key), "%d|%zu|%s|%s|%llu", dirs_only, limit, cwd ? cwd : "",
+             prefix, gen);
     const scored_completions* cached = cache_get(state->cache, cache_key);
     if (cached) {
         /* Exact hit: still counts as a query + served completion so
@@ -1397,13 +1402,13 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     /* Keystroke reuse: exact miss, but an exhaustive parent prefix may
      * already answer this child without a trie walk. */
     scored_completions* reused =
-        try_parent_cache_reuse(state->cache, prefix, limit, cap, cwd, dirs_only);
+        try_parent_cache_reuse(state->cache, prefix, limit, cap, cwd, dirs_only, gen);
     if (reused) {
         metrics_record_cache_hit(&state->metrics);
         metrics_record_query(&state->metrics, 0);
         char reuse_key[CACHE_MAX_KEY_LEN];
-        snprintf(reuse_key, sizeof(reuse_key), "%d|%zu|%s|%s", dirs_only, limit, cwd ? cwd : "",
-                 prefix);
+        snprintf(reuse_key, sizeof(reuse_key), "%d|%zu|%s|%s|%llu", dirs_only, limit,
+                 cwd ? cwd : "", prefix, gen);
         cache_put(state->cache, reuse_key, reused);
         metrics_record_completion(&state->metrics);
         scored_result result;
@@ -1490,6 +1495,32 @@ void daemon_release_scored(daemon_state* state, scored_result result) {
 completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query, size_t limit) {
     if (!state || !state->store || !query || query[0] == '\0') {
         return NULL;
+    }
+
+    /* Fuzzy results depend only on (query, limit): cache them, including
+     * empty results (a repeated failing Tab is the hottest fuzzy path). */
+    size_t fcap = limit > 0 ? limit : 50;
+    char fkey[CACHE_MAX_KEY_LEN];
+    snprintf(fkey, sizeof(fkey), "fuzzy|%zu|%s", fcap, query);
+    const scored_completions* fhit =
+        (state->cache && fkey[0]) ? cache_get(state->cache, fkey) : NULL;
+    if (fhit) {
+        completions* hit_out = completions_create(fcap > 0 ? fcap : 1);
+        if (hit_out) {
+            for (size_t i = 0; i < fhit->count && hit_out->count < fcap; i++) {
+                if (!fhit->entries[i].path)
+                    continue;
+                char* dup = strdup(fhit->entries[i].path);
+                if (!dup)
+                    break;
+                hit_out->paths[hit_out->count] = dup;
+                hit_out->is_dirs[hit_out->count] = fhit->entries[i].is_dir;
+                hit_out->count++;
+            }
+        }
+        metrics_record_cache_hit(&state->metrics);
+        cache_release(state->cache, fhit);
+        return hit_out;
     }
 
     struct timespec ts_start, ts_end;
@@ -1609,6 +1640,19 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
     free(bucket_is_dirs);
     free(bucket_paths);
     free(snapshot);
+    /* Rank-preserving snapshot for the cache: score decays with position. */
+    if (state->cache && out) {
+        scored_completions* fs = scored_completions_create(out->count > 0 ? out->count : 1);
+        if (fs) {
+            for (size_t i = 0; i < out->count; i++) {
+                if (out->paths[i])
+                    scored_completions_add(fs, out->paths[i], 1.0 / (1.0 + (double) i), 0, 0,
+                                           out->is_dirs[i]);
+            }
+            cache_put(state->cache, fkey, fs);
+            scored_completions_free(fs);
+        }
+    }
     clock_gettime(CLOCK_MONOTONIC, &ts_end);
     metrics_record_query(
         &state->metrics, (uint64_t) (ts_end.tv_sec - ts_start.tv_sec) * 1000000000ULL +
@@ -1636,9 +1680,11 @@ void daemon_record_selection(daemon_state* state, const char* path) {
 
     session_record_selection(path);
 
-    /* Accept learning changes ranking immediately: expire cached orderings
-     * so the next Tab reflects the selection instead of stale scores. */
-    cache_invalidate(state->cache);
+    /* Accept learning changes ranking immediately: bump the cache
+     * generation so the next Tab recomputes instead of serving stale
+     * scores. Old generations age out via TTL/LRU (no wipe, no miss
+     * storm on unrelated keys). */
+    atomic_fetch_add(&state->cache_gen, 1);
 
     struct stat st;
     bool is_dir = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));

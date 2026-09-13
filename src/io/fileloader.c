@@ -953,11 +953,22 @@ static void* scan_thread_func(void* arg) {
     parallel_scanner_set_ignores(&state->scanner, ignore_dirs, cfg.scanner.ignore_dir_count,
                                  ignore_files, cfg.scanner.ignore_file_count);
 
-    if (path_count == 1) {
-        parallel_scanner_start(&state->scanner, paths[0]);
-    } else {
-        parallel_scanner_start_multi(&state->scanner, (const char**) paths, path_count);
+    /* Per-root policy (depth / ignore_dirs) is resolved fresh every scan
+     * from the reloaded config, so roots-file edits apply on next scan. */
+    int depths[CONFIG_MAX_ROOTS];
+    for (int i = 0; i < path_count && i < CONFIG_MAX_ROOTS; i++) {
+        const config_root_policy* pol = config_root_policy_for(&cfg, paths[i]);
+        depths[i] = pol ? pol->depth : -1;
+        if (pol && pol->ignore_dir_count > 0) {
+            const char* rign[CONFIG_MAX_ROOT_IGNORE];
+            for (int j = 0; j < pol->ignore_dir_count && j < CONFIG_MAX_ROOT_IGNORE; j++)
+                rign[j] = pol->ignore_dirs[j];
+            parallel_scanner_set_root_ignores(&state->scanner, i, rign, pol->ignore_dir_count);
+        } else {
+            parallel_scanner_set_root_ignores(&state->scanner, i, NULL, 0);
+        }
     }
+    parallel_scanner_start_multi_depth(&state->scanner, (const char**) paths, depths, path_count);
     parallel_scanner_wait(&state->scanner);
 
     atomic_store(&state->scan_bucket_count, state->store->right_index);
@@ -1104,6 +1115,38 @@ void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_cou
     }
     pthread_detach(state->scan_thread);
     pthread_mutex_unlock(&state->scan_start_lock);
+}
+
+/* Live unwatch: drop a root from the scan list + the live watcher + the
+ * index, without restarting the daemon. Returns buckets purged. */
+size_t daemon_unwatch(daemon_state* state, const char* path) {
+    if (!state || !path || path[0] == '\0')
+        return 0;
+
+    pthread_mutex_lock(&state->scan_start_lock);
+    int dst = 0;
+    for (int src = 0; src < state->last_scan_path_count; src++) {
+        if (strcmp(state->last_scan_paths[src], path) == 0)
+            continue;
+        if (dst != src) {
+            strncpy(state->last_scan_paths[dst], state->last_scan_paths[src],
+                    sizeof(state->last_scan_paths[0]) - 1);
+            state->last_scan_paths[dst][sizeof(state->last_scan_paths[0]) - 1] = '\0';
+        }
+        dst++;
+    }
+    state->last_scan_path_count = dst;
+    pthread_mutex_unlock(&state->scan_start_lock);
+
+    if (state->watcher)
+        watcher_remove_root(state->watcher, path);
+
+    size_t dropped = 0;
+    if (state->store)
+        dropped = store_drop_prefix(state->store, path);
+    if (state->cache)
+        cache_invalidate(state->cache);
+    return dropped;
 }
 
 void daemon_start_rescan_timer(daemon_state* state) {

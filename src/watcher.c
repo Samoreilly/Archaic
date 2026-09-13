@@ -50,6 +50,88 @@ static int watcher_add_tree_linux(fs_watcher* w, const char* root);
 static int watcher_add_tree_kqueue(fs_watcher* w, const char* root);
 #endif
 
+static int watcher_path_under(const char* path, const char* root) {
+    if (!path || !root || root[0] == '\0')
+        return 0;
+    size_t n = strlen(root);
+    if (strncmp(path, root, n) != 0)
+        return 0;
+    return path[n] == '\0' || path[n] == '/';
+}
+
+int watcher_remove_root(fs_watcher* w, const char* path) {
+    if (!w || !path || path[0] == '\0')
+        return -1;
+
+    char resub[WATCHER_MAX_ROOTS][4096];
+    int nresub = 0;
+    int found = 0;
+
+    pthread_mutex_lock(&w->watch_lock);
+    /* Compact the root list, keeping entries that are not the removed root
+     * or nested under it. */
+    {
+        int dst = 0;
+        for (int src = 0; src < w->root_count; src++) {
+            if (strcmp(w->roots[src], path) == 0) {
+                found = 1;
+                continue;
+            }
+            if (watcher_path_under(w->roots[src], path)) {
+                /* Nested root: its watches live under the removed tree
+                 * and are dropped below; re-subscribe afterwards. */
+                if (nresub < WATCHER_MAX_ROOTS) {
+                    strncpy(resub[nresub], w->roots[src], sizeof(resub[0]) - 1);
+                    resub[nresub][sizeof(resub[0]) - 1] = '\0';
+                    nresub++;
+                }
+                continue;
+            }
+            if (dst != src) {
+                strncpy(w->roots[dst], w->roots[src], sizeof(w->roots[0]) - 1);
+                w->roots[dst][sizeof(w->roots[0]) - 1] = '\0';
+            }
+            dst++;
+        }
+        w->root_count = dst;
+    }
+    /* Drop every watch at or under the removed root (swap-remove). */
+    int i = 0;
+    while (i < w->watch_count) {
+        if (watcher_path_under(w->watch_paths[i], path)) {
+#ifdef __linux__
+            if (w->fd >= 0)
+                inotify_rm_watch(w->fd, w->watch_descriptors[i]);
+#endif
+            int last = w->watch_count - 1;
+            if (i != last) {
+                w->watch_descriptors[i] = w->watch_descriptors[last];
+                strncpy(w->watch_paths[i], w->watch_paths[last], sizeof(w->watch_paths[0]) - 1);
+                w->watch_paths[i][sizeof(w->watch_paths[0]) - 1] = '\0';
+            }
+            w->watch_count--;
+        } else {
+            i++;
+        }
+    }
+    int running = atomic_load(&w->running);
+    int fd = w->fd;
+    pthread_mutex_unlock(&w->watch_lock);
+
+    /* Re-subscribe surviving nested roots outside the lock. */
+    if (running && fd >= 0) {
+        for (int r = 0; r < nresub; r++) {
+#ifdef __linux__
+            watcher_add_tree_linux(w, resub[r]);
+#endif
+#ifdef __APPLE__
+            watcher_add_tree_kqueue(w, resub[r]);
+#endif
+        }
+    }
+    return found ? 0 : 1;
+}
+
 int watcher_add_root(fs_watcher* w, const char* path) {
     if (!w || !path || path[0] == '\0')
         return -1;

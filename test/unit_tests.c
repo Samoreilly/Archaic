@@ -1671,6 +1671,71 @@ static void test_memory_budget_no_evict_under_cap(void) {
     PASS();
 }
 
+/* ── Per-root policy (#6) ─────────────────────────────────────────────── */
+
+static void test_root_line_bare(void) {
+    TEST(root_line_bare);
+    char path[4096];
+    config_root_policy pol;
+    ASSERT_EQ_INT(0, config_parse_root_line("/home/sam/src", path, sizeof(path), &pol),
+                  "bare path parses");
+    ASSERT_EQ_STR("/home/sam/src", path, "path part");
+    ASSERT_EQ_INT(-1, pol.depth, "depth defaults to global");
+    ASSERT_EQ_INT(1, pol.watch, "watch defaults on");
+    ASSERT_EQ_INT(0, pol.ignore_dir_count, "no ignores by default");
+    PASS();
+}
+
+static void test_root_line_full(void) {
+    TEST(root_line_full);
+    char path[4096];
+    config_root_policy pol;
+    ASSERT_EQ_INT(0,
+                  config_parse_root_line("/home/sam/big depth=3 watch=0 ignore_dirs=target,dist",
+                                         path, sizeof(path), &pol),
+                  "annotated line parses");
+    ASSERT_EQ_STR("/home/sam/big", path, "path part");
+    ASSERT_EQ_INT(3, pol.depth, "depth parsed");
+    ASSERT_EQ_INT(0, pol.watch, "watch parsed");
+    ASSERT_EQ_INT(2, pol.ignore_dir_count, "two ignores parsed");
+    ASSERT_EQ_STR("target", pol.ignore_dirs[0], "first ignore");
+    ASSERT_EQ_STR("dist", pol.ignore_dirs[1], "second ignore");
+    PASS();
+}
+
+static void test_root_line_bad(void) {
+    TEST(root_line_bad);
+    char path[4096];
+    config_root_policy pol;
+    ASSERT_TRUE(config_parse_root_line("/x depth=abc", path, sizeof(path), &pol) != 0,
+                "bad depth rejected");
+    ASSERT_TRUE(config_parse_root_line("/x frobnicate=1", path, sizeof(path), &pol) != 0,
+                "unknown key rejected");
+    ASSERT_TRUE(config_parse_root_line("", path, sizeof(path), &pol) != 0, "empty rejected");
+    /* Out-of-range depth clamps instead of failing. */
+    ASSERT_EQ_INT(0, config_parse_root_line("/x depth=999", path, sizeof(path), &pol),
+                  "huge depth parses");
+    ASSERT_EQ_INT(64, pol.depth, "depth clamps to 64");
+    PASS();
+}
+
+static void test_root_policy_lookup(void) {
+    TEST(root_policy_lookup);
+    archaic_config cfg;
+    config_init_defaults(&cfg);
+    ASSERT_TRUE(config_root_policy_for(&cfg, "/home/sam/src") == NULL, "no policy by default");
+    config_root_policy* dst = &cfg.daemon.root_policies[cfg.daemon.root_policy_count++];
+    memset(dst, 0, sizeof(*dst));
+    strncpy(dst->path, "/home/sam/src", sizeof(dst->path) - 1);
+    dst->depth = 4;
+    dst->watch = 1;
+    const config_root_policy* got = config_root_policy_for(&cfg, "/home/sam/src");
+    ASSERT_TRUE(got != NULL, "stored policy found");
+    ASSERT_EQ_INT(4, got->depth, "depth round-trips");
+    ASSERT_TRUE(config_root_policy_for(&cfg, "/other") == NULL, "other path has none");
+    PASS();
+}
+
 int main(int argc, char* argv[]) {
     (void) argc;
     (void) argv;
@@ -1817,6 +1882,13 @@ int main(int argc, char* argv[]) {
     test_memory_budget_disabled();
     test_memory_budget_evicts_to_fit();
     test_memory_budget_no_evict_under_cap();
+
+    /* Per-root policy */
+    printf("\n--- Per-Root Policy ---\n");
+    test_root_line_bare();
+    test_root_line_full();
+    test_root_line_bad();
+    test_root_policy_lookup();
 
     /* Summary */
     printf("\n========================================\n");

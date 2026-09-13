@@ -104,3 +104,7 @@ void store_set_max_memory(t_bucket_store* store, size_t max_bytes);
 size_t store_calculate_memory_bytes(t_bucket_store* store);
 int store_check_memory_budget(t_bucket_store* store);
 void store_enforce_budget(t_bucket_store* store);
+/* Drop every bucket at or under path (used by live unwatch). Detaches LRU
+ * nodes first, then removes array slots. Returns buckets dropped. Buckets
+ * with live references are marked pending-destroy and freed on release. */
+size_t store_drop_prefix(t_bucket_store* store, const char* prefix);

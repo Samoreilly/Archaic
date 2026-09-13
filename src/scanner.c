@@ -38,6 +38,24 @@ static int should_ignore_file(parallel_scanner* scanner, const char* name) {
     return 0;
 }
 
+/* Per-root policy helpers: root_idx comes from the queue item (-1 = none). */
+static int scanner_max_depth_for(parallel_scanner* scanner, int root_idx) {
+    if (scanner && root_idx >= 0 && root_idx < SCANNER_MAX_ROOTPOLICY &&
+        scanner->root_max_depths[root_idx] >= 0)
+        return scanner->root_max_depths[root_idx];
+    return scanner ? scanner->max_depth : 0;
+}
+
+static int scanner_root_ignores_dir(parallel_scanner* scanner, int root_idx, const char* name) {
+    if (!scanner || !name || root_idx < 0 || root_idx >= SCANNER_MAX_ROOTPOLICY)
+        return 0;
+    for (int i = 0; i < scanner->root_ignore_dir_counts[root_idx]; i++) {
+        if (fnmatch(scanner->root_ignore_dirs[root_idx][i], name, 0) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 static int should_ignore_dir_local(const ignore_file* local, const char* name) {
     if (!local || local->count == 0)
         return 0;
@@ -59,7 +77,7 @@ void scan_queue_init(scan_queue* q) {
     pthread_cond_init(&q->queue_not_full, NULL);
 }
 
-int scan_queue_push(scan_queue* q, const char* path, int depth) {
+int scan_queue_push(scan_queue* q, const char* path, int depth, int root_idx) {
     if (!q || !path)
         return -1;
     char* copy = strdup(path);
@@ -71,6 +89,7 @@ int scan_queue_push(scan_queue* q, const char* path, int depth) {
     scan_work_item* item = &q->queue[q->queue_tail];
     item->path = copy;
     item->depth = depth;
+    item->root_idx = root_idx;
     q->queue_tail = (q->queue_tail + 1) % SCANNER_QUEUE_SIZE;
     q->queue_count++;
     pthread_cond_signal(&q->queue_not_empty);
@@ -78,7 +97,8 @@ int scan_queue_push(scan_queue* q, const char* path, int depth) {
     return 0;
 }
 
-int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_cap) {
+int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_cap,
+                   int* root_idx_out) {
     if (!q || !path_out || !depth_out || path_cap == 0)
         return -1;
     pthread_mutex_lock(&q->queue_lock);
@@ -97,6 +117,8 @@ int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_ca
     strncpy(path_out, item->path, path_cap - 1);
     path_out[path_cap - 1] = '\0';
     *depth_out = item->depth;
+    if (root_idx_out)
+        *root_idx_out = item->root_idx;
     free(item->path);
     item->path = NULL;
     q->queue_head = (q->queue_head + 1) % SCANNER_QUEUE_SIZE;
@@ -154,6 +176,7 @@ static void* scanner_worker(void* arg) {
     while (1) {
         char path[4096];
         int depth;
+        int root_idx = -1;
 
         pthread_mutex_lock(&scanner->queue->queue_lock);
         while (scanner->queue->queue_count == 0) {
@@ -172,6 +195,7 @@ static void* scanner_worker(void* arg) {
         strncpy(path, item->path, sizeof(path) - 1);
         path[sizeof(path) - 1] = '\0';
         depth = item->depth;
+        root_idx = item->root_idx;
         free(item->path);
         item->path = NULL;
         scanner->queue->queue_head = (scanner->queue->queue_head + 1) % SCANNER_QUEUE_SIZE;
@@ -297,6 +321,8 @@ static void* scanner_worker(void* arg) {
             (void) is_symlink;
             if (is_dir && should_ignore_dir(scanner, entry->d_name))
                 continue;
+            if (is_dir && scanner_root_ignores_dir(scanner, root_idx, entry->d_name))
+                continue;
             if (!is_dir && should_ignore_file(scanner, entry->d_name))
                 continue;
             if (is_dir && should_ignore_dir_local(&local_ignore, entry->d_name))
@@ -380,8 +406,8 @@ static void* scanner_worker(void* arg) {
                 bucket_release(bucket);
             }
 
-            if (entries[i].is_dir && depth < scanner->max_depth) {
-                scan_queue_push(scanner->queue, child_path, depth + 1);
+            if (entries[i].is_dir && depth < scanner_max_depth_for(scanner, root_idx)) {
+                scan_queue_push(scanner->queue, child_path, depth + 1, root_idx);
             }
         }
         free(entries);
@@ -403,6 +429,8 @@ void parallel_scanner_init(parallel_scanner* scanner, t_bucket_store* store, str
     scan_queue_init(scanner->queue);
     scanner->num_threads = num_threads > SCANNER_MAX_THREADS ? SCANNER_MAX_THREADS : num_threads;
     scanner->max_depth = max_depth;
+    for (int i = 0; i < SCANNER_MAX_ROOTPOLICY; i++)
+        scanner->root_max_depths[i] = -1;
     scanner->lfu = store;
     scanner->parent = parent;
     atomic_store(&scanner->stop, false);
@@ -451,7 +479,7 @@ void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {
     atomic_store(&scanner->threads_joined, false);
     symlink_dedup_reset(&g_symlink_seen);
 
-    scan_queue_push(scanner->queue, root_path, 0);
+    scan_queue_push(scanner->queue, root_path, 0, -1);
 
     for (int i = 0; i < scanner->num_threads; i++) {
         pthread_create(&scanner->workers[i], NULL, scanner_worker, (void*) scanner);
@@ -459,17 +487,44 @@ void parallel_scanner_start(parallel_scanner* scanner, const char* root_path) {
 }
 
 void parallel_scanner_start_multi(parallel_scanner* scanner, const char** roots, int root_count) {
+    parallel_scanner_start_multi_depth(scanner, roots, NULL, root_count);
+}
+
+void parallel_scanner_start_multi_depth(parallel_scanner* scanner, const char** roots,
+                                        const int* depths, int root_count) {
     atomic_store(&scanner->stop, false);
     atomic_store(&scanner->active_workers, 0);
     atomic_store(&scanner->threads_joined, false);
     symlink_dedup_reset(&g_symlink_seen);
 
+    for (int i = 0; i < SCANNER_MAX_ROOTPOLICY; i++)
+        scanner->root_max_depths[i] = -1;
+    if (root_count > SCANNER_MAX_ROOTPOLICY)
+        root_count = SCANNER_MAX_ROOTPOLICY;
     for (int i = 0; i < root_count; i++) {
-        scan_queue_push(scanner->queue, roots[i], 0);
+        if (depths)
+            scanner->root_max_depths[i] = depths[i];
+        scan_queue_push(scanner->queue, roots[i], 0, i);
     }
 
     for (int i = 0; i < scanner->num_threads; i++) {
         pthread_create(&scanner->workers[i], NULL, scanner_worker, (void*) scanner);
+    }
+}
+
+void parallel_scanner_set_root_ignores(parallel_scanner* scanner, int root_idx,
+                                       const char** dirs, int dir_count) {
+    if (!scanner || root_idx < 0 || root_idx >= SCANNER_MAX_ROOTPOLICY)
+        return;
+    scanner->root_ignore_dir_counts[root_idx] = 0;
+    if (!dirs)
+        return;
+    for (int i = 0; i < dir_count && i < SCANNER_MAX_ROOT_IGNORE; i++) {
+        if (!dirs[i])
+            continue;
+        strncpy(scanner->root_ignore_dirs[root_idx][i], dirs[i], SCANNER_MAX_IGNORE_LEN - 1);
+        scanner->root_ignore_dirs[root_idx][i][SCANNER_MAX_IGNORE_LEN - 1] = '\0';
+        scanner->root_ignore_dir_counts[root_idx]++;
     }
 }
 

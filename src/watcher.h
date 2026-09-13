@@ -51,6 +51,10 @@ fs_watcher* watcher_create(void);
 void watcher_destroy(fs_watcher* w);
 
 int watcher_add_root(fs_watcher* w, const char* path);
+/* Drop a root live: removes it from the root list plus every inotify watch
+ * at or under it, then re-subscribes remaining nested roots so they keep
+ * reporting. Returns 0 if the root was present, 1 if unknown, -1 on error. */
+int watcher_remove_root(fs_watcher* w, const char* path);
 int watcher_start(fs_watcher* w, watcher_cb_ctx cb);
 void watcher_stop(fs_watcher* w);
 int watcher_is_running(fs_watcher* w);

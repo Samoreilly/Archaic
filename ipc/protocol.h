@@ -57,6 +57,7 @@ typedef enum {
     IPC_MSG_FUZZY_SUGGEST = 116,
     IPC_MSG_FUZZY_SUGGEST_RESP = 117,
     IPC_MSG_CLEAR_CACHE = 118,
+    IPC_MSG_UNWATCH = 119,
 } ipc_msg_type;
 
 /*
@@ -75,6 +76,10 @@ typedef struct {
 typedef struct {
     char path[4096];
 } __attribute__((packed)) ipc_scan_req;
+
+typedef struct {
+    char path[4096];
+} __attribute__((packed)) ipc_unwatch_req;
 
 typedef struct {
     char save_path[4096];

@@ -29,6 +29,7 @@ typedef struct {
 typedef struct {
     char* path;
     int depth;
+    int root_idx; /* index into the scanner's per-root policy arrays, or -1 */
 } scan_work_item;
 
 typedef struct {
@@ -40,6 +41,9 @@ typedef struct {
     pthread_cond_t queue_not_empty;
     pthread_cond_t queue_not_full;
 } scan_queue;
+
+#define SCANNER_MAX_ROOTPOLICY 16
+#define SCANNER_MAX_ROOT_IGNORE 8
 
 typedef struct {
     pthread_t workers[SCANNER_MAX_THREADS];
@@ -53,6 +57,13 @@ typedef struct {
     struct t_bucket_store* lfu;
     struct node* parent;
     int max_depth;
+
+    /* Per-root policy, parallel to the roots passed to
+     * parallel_scanner_start_multi_depth. depth < 0 = global max_depth. */
+    int root_max_depths[SCANNER_MAX_ROOTPOLICY];
+    char root_ignore_dirs[SCANNER_MAX_ROOTPOLICY][SCANNER_MAX_ROOT_IGNORE]
+                          [SCANNER_MAX_IGNORE_LEN];
+    int root_ignore_dir_counts[SCANNER_MAX_ROOTPOLICY];
 
     char ignore_dirs[SCANNER_MAX_IGNORE][SCANNER_MAX_IGNORE_LEN];
     int ignore_dir_count;

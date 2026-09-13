@@ -437,6 +437,25 @@ static void handle_scan(ipc_server* srv, int fd, uint32_t req_id, const ipc_scan
     send_ok(fd, req_id);
 }
 
+static void handle_unwatch(ipc_server* srv, int fd, uint32_t req_id, const ipc_unwatch_req* req) {
+    if (validate_string_field(req->path, sizeof(req->path)) != 0) {
+        send_error(fd, req_id, -6, "invalid path: not null-terminated");
+        return;
+    }
+    {
+        char expanded[4096];
+        char normalized[4096];
+        path_expand_abbrev(expanded, req->path, sizeof(expanded));
+        path_normalize(normalized, expanded, sizeof(normalized));
+        if (normalized[0] == '\0') {
+            send_error(fd, req_id, -6, "invalid path");
+            return;
+        }
+        daemon_unwatch(srv->daemon, normalized);
+    }
+    send_ok(fd, req_id);
+}
+
 static void handle_save(ipc_server* srv, int fd, uint32_t req_id, const ipc_save_req* req) {
     if (validate_string_field(req->save_path, sizeof(req->save_path)) != 0) {
         send_error(fd, req_id, -6, "invalid save path: not null-terminated");
@@ -913,6 +932,19 @@ static void handle_client(ipc_server* srv, int fd) {
                 break;
             }
             handle_scan(srv, fd, hdr.request_id, &req);
+            break;
+        }
+        case IPC_MSG_UNWATCH: {
+            ipc_unwatch_req req;
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
+                send_error(fd, hdr.request_id, -3, "invalid unwatch payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
+                break;
+            }
+            handle_unwatch(srv, fd, hdr.request_id, &req);
             break;
         }
         case IPC_MSG_SAVE: {

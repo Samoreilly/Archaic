@@ -67,6 +67,7 @@ daemon_state* daemon_init(void);
 void daemon_shutdown(daemon_state* state);
 void daemon_run_scan(daemon_state* state, const char* path);
 void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_count);
+size_t daemon_unwatch(daemon_state* state, const char* path);
 void daemon_start_rescan_timer(daemon_state* state);
 void daemon_stop_rescan_timer(daemon_state* state);
 scan_status daemon_scan_status(daemon_state* state);

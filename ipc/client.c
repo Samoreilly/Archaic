@@ -110,6 +110,24 @@ int ipc_client_scan(ipc_client* client, const char* path) {
     return 0;
 }
 
+int ipc_client_unwatch(ipc_client* client, const char* path) {
+    ipc_unwatch_req req;
+    memset(&req, 0, sizeof(req));
+    if (path)
+        strncpy(req.path, path, sizeof(req.path) - 1);
+
+    if (send_request(client, IPC_MSG_UNWATCH, &req, sizeof(req)) < 0)
+        return -1;
+
+    ipc_header hdr;
+    ipc_ok_resp resp;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_OK)
+        return -1;
+    return 0;
+}
+
 int ipc_client_save(ipc_client* client, const char* path) {
     ipc_save_req req;
     memset(&req, 0, sizeof(req));
@@ -335,8 +353,7 @@ int ipc_client_reset_stats(ipc_client* client) {
     return 0;
 }
 
-int ipc_client_clear_cache(ipc_client* client) {
-    if (send_request(client, IPC_MSG_CLEAR_CACHE, NULL, 0) < 0)
+int ipc_client_clear_cache(ipc_client* client) {    if (send_request(client, IPC_MSG_CLEAR_CACHE, NULL, 0) < 0)
         return -1;
     ipc_header hdr;
     ipc_ok_resp resp;

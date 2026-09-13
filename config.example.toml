@@ -6,6 +6,12 @@
 scan_path = "/home/user"
 # Multiple roots (uncomment to use instead of scan_path):
 # scan_paths = ["/home/user/projects", "/home/user/work", "/home/user/docs"]
+# Per-root policy lives in the roots file (~/.config/archaic/roots,
+# managed by `archaic-cli watch/unwatch`). One path per line, with
+# optional tokens: depth (default: global max_depth), watch (default 1),
+# ignore_dirs (comma-separated, scoped to that root):
+#   /home/user/projects depth=8
+#   /home/user/big depth=3 watch=0 ignore_dirs=target,node_modules,dist
 # Default socket is $XDG_RUNTIME_DIR/archaic.sock
 # socket_path = "/run/user/1000/archaic.sock"
 scan_threads = 4

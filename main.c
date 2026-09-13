@@ -345,6 +345,14 @@ int main(int argc, char* argv[]) {
         daemon->watcher = watcher_create();
         if (daemon->watcher) {
             for (int i = 0; i < scan_root_count; i++) {
+                /* Per-root policy: watch=0 roots are indexed but not
+                 * live-watched. */
+                const config_root_policy* pol =
+                    config_root_policy_for(&cfg, scan_roots[i]);
+                if (pol && !pol->watch) {
+                    LOG_INFO("main", "root %s: watch disabled by policy", scan_roots[i]);
+                    continue;
+                }
                 watcher_add_root(daemon->watcher, scan_roots[i]);
             }
             watcher_cb_ctx wcb;

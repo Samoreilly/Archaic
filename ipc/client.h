@@ -71,6 +71,7 @@ int ipc_client_health(ipc_client* client, ipc_health_resp* out);
 int ipc_client_reload(ipc_client* client);
 int ipc_client_reset_stats(ipc_client* client);
 int ipc_client_clear_cache(ipc_client* client);
+int ipc_client_unwatch(ipc_client* client, const char* path);
 
 int ipc_client_recent(ipc_client* client, uint32_t limit, ipc_recent_resp* out);
 

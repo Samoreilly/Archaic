@@ -66,8 +66,12 @@ Add more trees without reinstalling:
 
 ```bash
 archaic-cli watch ~/whatever
+archaic-cli unwatch ~/whatever   # drops it live: scan list, watcher, index
 archaic-cli roots
 ```
+
+Per-root policy goes on `~/.config/archaic/roots` lines:
+`/path depth=3 watch=0 ignore_dirs=target,dist` (see `config.example.toml`).
 
 - Socket: `$XDG_RUNTIME_DIR/archaic.sock` (else `/tmp/archaic-$UID.sock`)
 - State: `$XDG_CACHE_HOME/archaic/state.bin` (else `~/.cache/archaic/state.bin`)

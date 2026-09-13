@@ -413,8 +413,7 @@ __attribute__((unused)) static size_t count_bucket_nodes(t_bucket* bucket) {
     return trie_node_count(bucket->dir_trie);
 }
 
-void store_enforce_budget(t_bucket_store* store) {
-    if (!store)
+void store_enforce_budget(t_bucket_store* store) {    if (!store)
         return;
 
     bool node_budget_exceeded = store->max_total_nodes > 0 &&
@@ -461,4 +460,65 @@ void store_enforce_budget(t_bucket_store* store) {
 
     store_unlock(store);
     update_memory_estimate(store);
+}
+
+static int store_path_under_prefix(const char* path, const char* prefix) {
+    if (!path || !prefix || prefix[0] == '\0')
+        return 0;
+    size_t n = strlen(prefix);
+    if (strncmp(path, prefix, n) != 0)
+        return 0;
+    return path[n] == '\0' || path[n] == '/';
+}
+
+size_t store_drop_prefix(t_bucket_store* store, const char* prefix) {
+    if (!store || !prefix || prefix[0] == '\0')
+        return 0;
+
+    store_lock(store);
+    size_t dropped = 0;
+
+    /* Detach LRU nodes first so no dangling bucket pointers remain. */
+    if (store->parent) {
+        node* n = store->parent->first;
+        while (n) {
+            node* next = n->next;
+            if (n->bucket && n->bucket->dir_name &&
+                store_path_under_prefix(n->bucket->dir_name, prefix)) {
+                if (n->prev)
+                    n->prev->next = n->next;
+                else
+                    store->parent->first = n->next;
+                if (n->next)
+                    n->next->prev = n->prev;
+                else
+                    store->parent->tail = n->prev;
+                if (n->bucket->id < BUCKETS)
+                    store->by_id[n->bucket->id] = NULL;
+                free(n);
+                if (store->lru_size > 0)
+                    store->lru_size--;
+            }
+            n = next;
+        }
+    }
+
+    size_t i = 0;
+    while (i < store->right_index) {
+        t_bucket* b = store->buckets[i];
+        if (b && b->dir_name && store_path_under_prefix(b->dir_name, prefix)) {
+            if (i + 1 < store->right_index)
+                shift_left(store, i, store->right_index - 1);
+            store->buckets[store->right_index - 1] = NULL;
+            store->right_index--;
+            destroy_bucket(b);
+            dropped++;
+        } else {
+            i++;
+        }
+    }
+
+    store_unlock(store);
+    update_memory_estimate(store);
+    return dropped;
 }

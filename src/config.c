@@ -132,6 +132,9 @@ static int config_has_root(const archaic_config* cfg, const char* path) {
     return 0;
 }
 
+static int config_has_root(const archaic_config* cfg, const char* path);
+static int parse_bool(const char* s, bool* out);
+
 static int config_append_root(archaic_config* cfg, const char* path) {
     if (!cfg || !path || path[0] == '\0' || config_has_root(cfg, path))
         return 0;
@@ -189,11 +192,126 @@ void config_load_roots_file(archaic_config* cfg) {
             p[--n] = '\0';
         if (n == 0)
             continue;
-        config_append_root(cfg, p);
-        if (cfg->daemon.scan_path[0] && strcmp(cfg->daemon.scan_path, p) == 0)
+        char root_path[4096];
+        config_root_policy pol;
+        if (config_parse_root_line(p, root_path, sizeof(root_path), &pol) != 0)
             continue;
+        config_append_root(cfg, root_path);
+        if (cfg->daemon.scan_path[0] && strcmp(cfg->daemon.scan_path, root_path) == 0)
+            continue;
+        /* Remember explicit per-root policy (a line with key=value tokens). */
+        if ((pol.depth >= 0 || !pol.watch || pol.ignore_dir_count > 0) &&
+            cfg->daemon.root_policy_count < CONFIG_MAX_ROOTS &&
+            !config_root_policy_for(cfg, root_path)) {
+            config_root_policy* dst =
+                &cfg->daemon.root_policies[cfg->daemon.root_policy_count++];
+            *dst = pol;
+            strncpy(dst->path, root_path, sizeof(dst->path) - 1);
+            dst->path[sizeof(dst->path) - 1] = '\0';
+        }
     }
     fclose(f);
+}
+
+/* Split a roots-file line into its path and optional policy tokens. */
+int config_parse_root_line(const char* line, char* path_out, size_t path_cap,
+                           config_root_policy* pol) {
+    if (!line || !path_out || path_cap == 0 || !pol)
+        return -1;
+    memset(pol, 0, sizeof(*pol));
+    pol->depth = -1; /* global max_depth unless overridden */
+    pol->watch = 1;
+
+    while (*line == ' ' || *line == '\t')
+        line++;
+    const char* end = line;
+    while (*end && *end != ' ' && *end != '\t')
+        end++;
+    size_t plen = (size_t) (end - line);
+    if (plen == 0 || plen >= path_cap)
+        return -1;
+    memcpy(path_out, line, plen);
+    path_out[plen] = '\0';
+
+    /* Tilde-expand the root path. */
+    if (path_out[0] == '~' && (path_out[1] == '/' || path_out[1] == '\0')) {
+        const char* home = getenv("HOME");
+        if (home && home[0]) {
+            char expanded[4096];
+            snprintf(expanded, sizeof(expanded), "%s%s", home, path_out + 1);
+            strncpy(path_out, expanded, path_cap - 1);
+            path_out[path_cap - 1] = '\0';
+        }
+    }
+
+    line = end;
+    while (*line) {
+        while (*line == ' ' || *line == '\t')
+            line++;
+        if (*line == '\0' || *line == '#')
+            break;
+        const char* tend = line;
+        while (*tend && *tend != ' ' && *tend != '\t')
+            tend++;
+        size_t tlen = (size_t) (tend - line);
+        char tok[512];
+        if (tlen == 0 || tlen >= sizeof(tok))
+            return -1;
+        memcpy(tok, line, tlen);
+        tok[tlen] = '\0';
+        line = tend;
+
+        char* eq = strchr(tok, '=');
+        if (!eq)
+            return -1;
+        *eq = '\0';
+        const char* val = eq + 1;
+        if (strcmp(tok, "depth") == 0) {
+            char* e = NULL;
+            long d = strtol(val, &e, 10);
+            if (!e || *e != '\0')
+                return -1;
+            if (d < 1)
+                d = 1;
+            if (d > 64)
+                d = 64;
+            pol->depth = (int) d;
+        } else if (strcmp(tok, "watch") == 0) {
+            bool b = false;
+            if (parse_bool(val, &b) != 0)
+                return -1;
+            pol->watch = b ? 1 : 0;
+        } else if (strcmp(tok, "ignore_dirs") == 0) {
+            const char* v = val;
+            while (*v && pol->ignore_dir_count < CONFIG_MAX_ROOT_IGNORE) {
+                while (*v == ',')
+                    v++;
+                if (*v == '\0')
+                    break;
+                const char* c = strchr(v, ',');
+                size_t ilen = c ? (size_t) (c - v) : strlen(v);
+                if (ilen == 0 || ilen >= (size_t) CONFIG_MAX_IGNORE_LEN)
+                    return -1;
+                memcpy(pol->ignore_dirs[pol->ignore_dir_count], v, ilen);
+                pol->ignore_dirs[pol->ignore_dir_count][ilen] = '\0';
+                pol->ignore_dir_count++;
+                v += ilen;
+            }
+        } else {
+            return -1; /* unknown policy key */
+        }
+    }
+    return 0;
+}
+
+const config_root_policy* config_root_policy_for(const archaic_config* cfg, const char* path) {
+    if (!cfg || !path)
+        return NULL;
+    for (int i = 0; i < cfg->daemon.root_policy_count; i++) {
+        if (strcmp(cfg->daemon.root_policies[i].path, path) == 0)
+            return &cfg->daemon.root_policies[i];
+    }
+    return NULL;
 }
 
 int config_roots_add(const char* path) {
@@ -218,7 +336,13 @@ int config_roots_add(const char* path) {
             size_t n = strlen(line);
             while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
                 line[--n] = '\0';
-            if (strcmp(line, resolved) == 0) {
+            /* Compare path parts only: annotated lines carry policy tokens. */
+            char existing[4096];
+            config_root_policy ignored;
+            if (config_parse_root_line(line, existing, sizeof(existing), &ignored) != 0)
+                strncpy(existing, line, sizeof(existing) - 1);
+            existing[sizeof(existing) - 1] = '\0';
+            if (strcmp(existing, resolved) == 0) {
                 fclose(in);
                 return 0;
             }
@@ -261,7 +385,13 @@ int config_roots_remove(const char* path) {
         size_t n = strlen(keep);
         while (n > 0 && (keep[n - 1] == '\n' || keep[n - 1] == '\r'))
             keep[--n] = '\0';
-        if (strcmp(keep, resolved) == 0 || strcmp(keep, path) == 0)
+        /* Match on the path part so annotated lines are removed too. */
+        char existing[4096];
+        config_root_policy ignored;
+        if (config_parse_root_line(keep, existing, sizeof(existing), &ignored) != 0)
+            strncpy(existing, keep, sizeof(existing) - 1);
+        existing[sizeof(existing) - 1] = '\0';
+        if (strcmp(existing, resolved) == 0 || strcmp(existing, path) == 0)
             continue;
         fputs(line, out);
     }

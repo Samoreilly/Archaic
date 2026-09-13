@@ -9,6 +9,19 @@
 #define CONFIG_MAX_IGNORE 64
 #define CONFIG_MAX_IGNORE_LEN 128
 #define CONFIG_MAX_ROOTS 16
+#define CONFIG_MAX_ROOT_IGNORE 8
+
+/* Per-root policy, parsed from policy annotations on roots-file lines:
+ *   /home/sam/src depth=8 watch=1
+ *   /home/sam/big depth=3 watch=0 ignore_dirs=target,node_modules,dist
+ * depth < 0 means "use global max_depth"; watch != 0 means live-watch. */
+typedef struct {
+    char path[CONFIG_MAX_STRING];
+    int depth;
+    int watch;
+    char ignore_dirs[CONFIG_MAX_ROOT_IGNORE][CONFIG_MAX_IGNORE_LEN];
+    int ignore_dir_count;
+} config_root_policy;
 
 typedef struct {
     char scan_path[CONFIG_MAX_STRING];
@@ -20,6 +33,8 @@ typedef struct {
     int rescan_interval_seconds;
     int log_level;       /* 0=debug, 1=info, 2=warn, 3=error */
     bool colored_output; /* Enable ANSI colors in completions */
+    config_root_policy root_policies[CONFIG_MAX_ROOTS];
+    int root_policy_count;
 } config_daemon;
 
 typedef struct {
@@ -95,6 +110,13 @@ void config_pick_workspace_roots(archaic_config* cfg);
 void config_load_roots_file(archaic_config* cfg);
 int config_roots_add(const char* path);
 int config_roots_remove(const char* path);
+
+/* Parse one roots-file line into a path + policy. Returns 0 on success.
+ * path_out always set; pol->depth/watch/ignores get defaults when absent. */
+int config_parse_root_line(const char* line, char* path_out, size_t path_cap,
+                           config_root_policy* pol);
+/* Find the stored policy for a root path, or NULL for global defaults. */
+const config_root_policy* config_root_policy_for(const archaic_config* cfg, const char* path);
 
 /* Load .archaicignore from a directory, merging patterns into the scanner config.
    Searches upward from start_path for .archaicignore until root or max_depth.

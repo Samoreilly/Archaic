@@ -80,8 +80,31 @@ static void doctor_dirname(char* dst, size_t n, const char* path) {
         dst[1] = '\0';
 }
 
-static int doctor_plugin_src(char* out, size_t n, const char* argv0, const char* rel) {
-    char resolved[4096];
+/* Run a fixed systemctl invocation without a shell (no interpolation,
+ * no PATH-shell games beyond execvp). Returns 0 on unit success. */
+static int run_systemctl_unit(const char* op) {
+    pid_t p = fork();
+    if (p < 0)
+        return -1;
+    if (p == 0) {
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > 2)
+                close(devnull);
+        }
+        execlp("systemctl", "systemctl", "--user", op, "archaic", (char*) NULL);
+        _exit(127);
+    }
+    int st = 0;
+    while (waitpid(p, &st, 0) < 0 && errno == EINTR)
+        ;
+    return (WIFEXITED(st) && WEXITSTATUS(st) == 0) ? 0 : -1;
+}
+
+static int doctor_plugin_src(char* out, size_t n, const char* argv0, const char* rel) {    char resolved[4096];
     const char* p = argv0;
     if (realpath(argv0, resolved))
         p = resolved;
@@ -601,9 +624,9 @@ int main(int argc, char* argv[]) {
         }
         if (ping_fail || proto_mismatch) {
             int started = 0;
-            if (system("systemctl --user restart archaic >/dev/null 2>&1") == 0)
+            if (run_systemctl_unit("restart") == 0)
                 started = 1;
-            else if (system("systemctl --user start archaic >/dev/null 2>&1") == 0)
+            else if (run_systemctl_unit("start") == 0)
                 started = 1;
             if (!started) {
                 char bin[4096] = {0};

@@ -32,4 +32,3 @@ typedef struct {
 threadpool* threadpool_init(int num_workers);
 int threadpool_submit(threadpool* pool, threadpool_task_fn fn, void* arg);
 void threadpool_shutdown(threadpool* pool);
-int threadpool_queue_depth(const threadpool* pool);

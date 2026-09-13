@@ -82,12 +82,13 @@ for _ in $(seq 1 100); do
     sleep 0.2
 done
 
-ENV="ARCHAIC_CONFIG=$T/config.toml XDG_CACHE_HOME=$CACHE PATH=$ROOT/build:$PATH"
+ENV="ARCHAIC_CONFIG=$T/config.toml XDG_CACHE_HOME=$CACHE PATH=$ROOT/build:$PATH CONTRACT_FIX=$FIX"
 
 # Normalize a path list to absolute, slash-insensitive, sorted unique set.
+# Also expands the $CONTRACT_FIX test var (fish display preserves it).
 normset() {
     local cwd="$1"
-    sed -e 's/[[:space:]]*$//' | while IFS= read -r p; do
+    sed -e 's/[[:space:]]*$//' -e "s|\$CONTRACT_FIX|$cwd|g" | while IFS= read -r p; do
         [ -z "$p" ] && continue
         p="${p%/}"
         case "$p" in
@@ -171,6 +172,30 @@ fi
 check_agree "space paths agree" "$EXP" \
     "$(fish_complete "cd $FIX/sp")" \
     "$(bash_complete "cd $FIX/sp")"
+
+# ── 3c. Expansion parity: ~, ~user, $VAR, ${VAR} ─────────────────────────────
+expand_case() { # $1 = input, $2 = expected
+    local input="$1" expected="$2" got
+    got="$(env $ENV fish -c "source $ROOT/fish/archaic.fish >/dev/null 2>&1; __archaic_expand_path '$input'" 2>/dev/null)"
+    [ "$got" = "$expected" ] || { bad "fish expands '$input'" "got '$got'"; return; }
+    got="$(env $ENV bash -c "source $ROOT/bash/archaic.bash >/dev/null 2>&1; _archaic_expand_path '$input'" 2>/dev/null)"
+    [ "$got" = "$expected" ] || { bad "bash expands '$input'" "got '$got'"; return; }
+    got="$(env $ENV zsh -f -c "source $ROOT/zsh/archaic.zsh >/dev/null 2>&1; _archaic_expand_path '$input'" 2>/dev/null)"
+    [ "$got" = "$expected" ] || { bad "zsh expands '$input'" "got '$got'"; return; }
+    ok "all shells expand '$input'"
+}
+expand_case "~" "$HOME"
+expand_case "~root/x" "/root/x"
+expand_case '$CONTRACT_FIX/al' "$FIX/al"
+expand_case '${CONTRACT_FIX}/al' "$FIX/al"
+expand_case 'a/$CONTRACT_FIX/b' "a/$FIX/b"
+expand_case '$NOPE_UNSET_QQ/x' "/x"
+
+# $VAR reaches the daemon identically through fish and bash.
+EXP="$(cli_set complete "$FIX/al" 20 "$FIX")"
+check_agree "\$VAR agrees" "$EXP" \
+    "$(fish_complete 'cd $CONTRACT_FIX/al')" \
+    "$(bash_complete 'cd $CONTRACT_FIX/al')"
 
 # ── 4. Empty token lists the directory ───────────────────────────────────────
 # The dir itself renders absolute in the CLI but as a basename in shells;

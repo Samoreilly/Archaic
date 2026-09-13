@@ -309,7 +309,7 @@ function __archaic_check_version -d "Verify CLI/helper version compatibility"
     set -g __archaic_version_checked 1
 end
 
-function __archaic_expand_path -d "Expand ~ and \$VAR in a path prefix"
+function __archaic_expand_path -d "Expand ~, ~user, \$VAR and \${VAR} in a path prefix"
     set -l path $argv[1]
     if test -z "$path"
         echo ""
@@ -323,19 +323,47 @@ function __archaic_expand_path -d "Expand ~ and \$VAR in a path prefix"
         echo "$HOME"(string replace -r '^~' '' "$path")
         return
     end
-    if string match -qr '^\$\{[A-Za-z_][A-Za-z0-9_]*\}' -- "$path"
-        set -l var (string replace -r '^\$\{([A-Za-z_][A-Za-z0-9_]*)\}.*' '$1' "$path")
-        set -l val $$var
-        echo (string replace -r '^\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$val" "$path")
+    # ~user/ via getent (leave untouched when the user is unknown)
+    if string match -qr '^~[^/]+' -- "$path"
+        set -l uname (string replace -r '^~([^/]+).*' '$1' "$path")
+        set -l rest (string replace -r '^~[^/]+' '' "$path")
+        set -l uhome (getent passwd "$uname" 2>/dev/null | cut -d: -f6)
+        if test -n "$uhome"
+            echo "$uhome$rest"
+            return
+        end
+        echo "$path"
         return
     end
-    if string match -qr '^\$[A-Za-z_][A-Za-z0-9_]*' -- "$path"
-        set -l var (string replace -r '^\$([A-Za-z_][A-Za-z0-9_]*).*' '$1' "$path")
-        set -l val $$var
-        echo (string replace -r '^\$[A-Za-z_][A-Za-z0-9_]*' "$val" "$path")
-        return
+    set -l expanded "$path"
+    # All ${VAR} occurrences first (longer matches), then all $VAR.
+    # Break on no-op so self-referential values (VAR='${VAR}') terminate.
+    while string match -qr '\$\{[A-Za-z_][A-Za-z0-9_]*\}' -- "$expanded"
+        set -l var (string replace -r '.*\$\{([A-Za-z_][A-Za-z0-9_]*)\}.*' '$1' "$expanded")
+        set -l val ""
+        if set -q $var
+            set val $$var
+        end
+        set -l pat '$''{'$var'}'
+        set -l new (string replace -a "$pat" "$val" -- "$expanded")
+        if test "$new" = "$expanded"
+            break
+        end
+        set expanded $new
     end
-    echo "$path"
+    while string match -qr '\$[A-Za-z_][A-Za-z0-9_]*' -- "$expanded"
+        set -l var (string replace -r '.*\$([A-Za-z_][A-Za-z0-9_]*).*' '$1' "$expanded")
+        set -l val ""
+        if set -q $var
+            set val $$var
+        end
+        set -l new (string replace -a '$'$var "$val" -- "$expanded")
+        if test "$new" = "$expanded"
+            break
+        end
+        set expanded $new
+    end
+    echo "$expanded"
 end
 
 function __archaic_parse_line -d "Split 'D /path with spaces' into type and path"

@@ -97,37 +97,6 @@ int scan_queue_push(scan_queue* q, const char* path, int depth, int root_idx) {
     return 0;
 }
 
-int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_cap,
-                   int* root_idx_out) {
-    if (!q || !path_out || !depth_out || path_cap == 0)
-        return -1;
-    pthread_mutex_lock(&q->queue_lock);
-    if (q->queue_count == 0) {
-        pthread_mutex_unlock(&q->queue_lock);
-        return -1;
-    }
-    scan_work_item* item = &q->queue[q->queue_head];
-    if (!item->path) {
-        q->queue_head = (q->queue_head + 1) % SCANNER_QUEUE_SIZE;
-        q->queue_count--;
-        pthread_cond_signal(&q->queue_not_full);
-        pthread_mutex_unlock(&q->queue_lock);
-        return -1;
-    }
-    strncpy(path_out, item->path, path_cap - 1);
-    path_out[path_cap - 1] = '\0';
-    *depth_out = item->depth;
-    if (root_idx_out)
-        *root_idx_out = item->root_idx;
-    free(item->path);
-    item->path = NULL;
-    q->queue_head = (q->queue_head + 1) % SCANNER_QUEUE_SIZE;
-    q->queue_count--;
-    pthread_cond_signal(&q->queue_not_full);
-    pthread_mutex_unlock(&q->queue_lock);
-    return 0;
-}
-
 typedef struct {
     dev_t dev;
     ino_t ino;
@@ -145,10 +114,6 @@ static void symlink_dedup_reset(symlink_dedup_set* set) {
     pthread_mutex_lock(&set->lock);
     set->count = 0;
     pthread_mutex_unlock(&set->lock);
-}
-
-__attribute__((unused)) static void symlink_dedup_free(symlink_dedup_set* set) {
-    pthread_mutex_destroy(&set->lock);
 }
 
 static int symlink_dedup_check_and_add(symlink_dedup_set* set, dev_t dev, ino_t ino) {

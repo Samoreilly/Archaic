@@ -132,7 +132,6 @@ static int config_has_root(const archaic_config* cfg, const char* path) {
     return 0;
 }
 
-static int config_has_root(const archaic_config* cfg, const char* path);
 static int parse_bool(const char* s, bool* out);
 
 static int config_append_root(archaic_config* cfg, const char* path) {

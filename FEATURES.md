@@ -38,8 +38,8 @@ Status: done. Boxes checked only after tests passed and the change was pushed.
 - [x] Hints work without requiring `/` in the token
 - [x] Bash actually renders the ghost
 - [x] Accept key documented in status / doctor
-- [x] Tests + push (covered by `test/integration/test_shell_contract.sh`: 27/27)
+- [x] Tests + push (covered by `test/integration/test_shell_contract.sh`: 34/34)
 
 ## 8. Shell contract tests
 - [x] Fixture tree test: fish/bash/zsh/`archaic-cli complete` agree
-- [x] Tests + push (`test/integration/test_shell_contract.sh`: 27/27)
+- [x] Tests + push (`test/integration/test_shell_contract.sh`: 34/34)

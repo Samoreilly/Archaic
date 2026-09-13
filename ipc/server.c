@@ -103,16 +103,6 @@ static void dedup_insert(dedup_set* ds, const char* path) {
     }
 }
 
-__attribute__((unused)) static int cmp_recent_desc(const void* a, const void* b) {
-    const scored_entry* ea = (const scored_entry*) a;
-    const scored_entry* eb = (const scored_entry*) b;
-    if (eb->last_access > ea->last_access)
-        return 1;
-    if (eb->last_access < ea->last_access)
-        return -1;
-    return strcmp(ea->path, eb->path);
-}
-
 struct ipc_server {
     daemon_state* daemon;
     int listen_fd;
@@ -466,7 +456,9 @@ static void handle_save(ipc_server* srv, int fd, uint32_t req_id, const ipc_save
         return;
     }
     /* Containment: a client-supplied path must stay inside the daemon's
-     * own state directory (no arbitrary-file-write primitive). */
+     * own state directory (no arbitrary-file-write primitive). Lexical
+     * check first (cheap reject), then realpath to close symlink races:
+     * the parent chain is ensured before resolving so the target exists. */
     {
         char dir[4096] = {0};
         strncpy(dir, srv->daemon->state_path, sizeof(dir) - 1);
@@ -480,6 +472,33 @@ static void handle_save(ipc_server* srv, int fd, uint32_t req_id, const ipc_save
         int ok = (strcmp(nreq, srv->daemon->state_path) == 0);
         if (!ok && dn > 0 && strncmp(nreq, ndir, dn) == 0 && nreq[dn] == '/')
             ok = 1;
+        if (ok) {
+            /* Resolve symlinks: the request must still sit under the
+             * resolved state dir. Fall back to the lexical verdict when
+             * resolution fails (nothing on disk yet is caught below by
+             * the save itself). */
+            char rdir[4096], rreq[4096];
+            if (realpath(dir[0] ? dir : "/", rdir) != NULL) {
+                size_t rn = strlen(rdir);
+                if (realpath(nreq, rreq) != NULL) {
+                    ok = (strncmp(rreq, rdir, rn) == 0 &&
+                          (rreq[rn] == '\0' || rreq[rn] == '/'));
+                } else {
+                    char rparent[4096], parent[4096];
+                    strncpy(parent, nreq, sizeof(parent) - 1);
+                    parent[sizeof(parent) - 1] = '\0';
+                    char* ps = strrchr(parent, '/');
+                    if (ps)
+                        *ps = '\0';
+                    if (realpath(parent[0] ? parent : "/", rparent) != NULL) {
+                        ok = (strncmp(rparent, rdir, rn) == 0 &&
+                              (rparent[rn] == '\0' || rparent[rn] == '/'));
+                    } else {
+                        ok = 0;
+                    }
+                }
+            }
+        }
         if (!ok) {
             send_error(fd, req_id, -10, "save path outside state directory");
             return;

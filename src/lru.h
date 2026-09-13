@@ -27,8 +27,5 @@ t_bucket* create_or_to_back(t_bucket_store* lfu, t_bucket* bucket);
 t_bucket* create_or_to_front(t_bucket_store* lfu, t_bucket* bucket);
 void move_to_front(t_bucket_store* lfu, t_bucket* bucket);
 
-t_bucket* get_last(node* nde);
-t_bucket* get_first(node* nde);
-
 t_bucket* remove_last(t_bucket_store* lfu);
 node* traverse_nodes(t_bucket_store* lfu, t_bucket* bucket);

@@ -95,9 +95,6 @@ static inline void store_unlock(t_bucket_store* store) {
     }
 }
 
-void remove_char(char* str, int s_index);
-void add_char(char* str, char c, int s_index);
-
 void update_memory_estimate(t_bucket_store* store);
 void store_set_max_nodes(t_bucket_store* store, size_t max_nodes);
 void store_set_max_memory(t_bucket_store* store, size_t max_bytes);

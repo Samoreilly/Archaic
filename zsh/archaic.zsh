@@ -9,14 +9,16 @@
 
 # ── Environment variable & tilde expansion ────────────────────────────────────
 _archaic_expand_path() {
-    local path="$1"
+    # NOTE: never name this `path` — zsh ties $path to $PATH and a local
+    # would shadow command lookup for the whole function (got getent/cut).
+    local p="$1"
 
     # Handle ~ and ~user/ syntax
-    if [[ "$path" == ~* ]]; then
-        local tilde_part="${path%%/*}"
-        local remainder="${path#"$tilde_part"}"
+    if [[ "$p" == ~* ]]; then
+        local tilde_part="${p%%/*}"
+        local remainder="${p#"$tilde_part"}"
         if [[ "$tilde_part" == "~" || "$tilde_part" == "~/" ]]; then
-            path="$HOME$remainder"
+            p="$HOME$remainder"
         else
             local uname="${tilde_part#\~}"
             local uhome
@@ -25,15 +27,24 @@ _archaic_expand_path() {
                 uhome=$(eval echo "~$uname" 2>/dev/null)
             fi
             if [[ -n "$uhome" ]]; then
-                path="$uhome$remainder"
+                p="$uhome$remainder"
             fi
         fi
     fi
 
-    # Expand $VAR patterns
-    local expanded="$path"
-    while [[ "$expanded" =~ \$([A-Za-z_][A-Za-z0-9_]*) ]]; do
-        local var_name="${BASH_REMATCH[1]}"
+    # Expand ${VAR} patterns first (longer matches), then $VAR. Loops
+    # replace every occurrence, like bash. NOTE: zsh strips backslashes
+    # in unquoted =~ patterns (so \$ never matches) and its ERE rejects
+    # \{ — hence [$]/[{]/[}] classes; quoted chunks would go literal.
+    local expanded="$p"
+    while [[ "$expanded" =~ [$][{]([A-Za-z_][A-Za-z0-9_]*)[}] ]]; do
+        local var_name="${match[1]}"
+        local var_ref="\${$var_name}"
+        local val="${(P)var_name:-}"
+        expanded="${expanded//$var_ref/$val}"
+    done
+    while [[ "$expanded" =~ [$]([A-Za-z_][A-Za-z0-9_]*) ]]; do
+        local var_name="${match[1]}"
         local var_ref="\$$var_name"
         local val="${(P)var_name:-}"
         expanded="${expanded//$var_ref/$val}"

@@ -120,11 +120,3 @@ void threadpool_shutdown(threadpool* pool) {
     free(pool->workers);
     free(pool);
 }
-
-int threadpool_queue_depth(const threadpool* pool) {
-    threadpool* p = (threadpool*) pool;
-    pthread_mutex_lock(&p->queue_lock);
-    int n = p->queue_count;
-    pthread_mutex_unlock(&p->queue_lock);
-    return n;
-}

@@ -57,7 +57,7 @@ FEATURES.md (all 8 items done+pushed).
 - [x] **41. `archaic-cli stats` command** — Show top-10 most-completed paths, cache hit rate (shipped: stats command)
 - [x] **42. `archaic-cli clear-cache` command** — Flush query cache without restart (shipped)
 - [x] **43. `archaic-cli reindex` command** — Force full re-scan with progress output (shipped)
-- [x] **44. Integration test framework** — Shell-based tests that verify Fish/Bash completions (shipped: test/integration/, 103 checks)
+- [x] **44. Integration test framework** — Shell-based tests that verify Fish/Bash completions (shipped: test/integration/, 110 checks)
 - [ ] **45. AddressSanitizer CI job** — Run tests with ASan to catch memory bugs
 - [x] **46. Benchmark suite** — Microbenchmarks for trie insert, query, fuzzy match (shipped: archaic-bench + baselines)
 - [x] **47. Man page for archaic-helper** — Document helper commands and usage (shipped: man/archaic-helper.1)

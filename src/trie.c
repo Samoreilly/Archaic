@@ -20,112 +20,11 @@
  * Feature 21: Git-aware scoring
  * ──────────────────────────────────────────────────────────────────────────── */
 
-/* Cached git root to avoid repeated filesystem walks */
-static char g_git_root[4096] = {0};
-static pthread_mutex_t g_git_root_lock = PTHREAD_MUTEX_INITIALIZER;
-
-#if 0
-static bool dir_has_git(const char* dir) {
-    char git_path[4096];
-    int n = snprintf(git_path, sizeof(git_path), "%s/.git", dir);
-    if (n < 0 || (size_t) n >= sizeof(git_path))
-        return false;
-    struct stat st;
-    return stat(git_path, &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-/* Walk up from `path` to find a .git directory. Returns true if found and
-   sets `root_out` to the directory containing .git. */
-static bool find_git_root(const char* path, char* root_out, size_t root_cap) {
-    char buf[4096];
-    strncpy(buf, path, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    /* Strip trailing filename to get directory */
-    char* slash = strrchr(buf, '/');
-    if (!slash)
-        return false;
-    *slash = '\0';
-
-    while (buf[0] != '\0') {
-        if (dir_has_git(buf)) {
-            if (root_out && root_cap > 0) {
-                strncpy(root_out, buf, root_cap - 1);
-                root_out[root_cap - 1] = '\0';
-            }
-            return true;
-        }
-        slash = strrchr(buf, '/');
-        if (!slash)
-            break;
-        *slash = '\0';
-    }
-    return false;
-}
-#endif
-
 bool is_git_tracked(const char* path) {
     (void) path;
     return false;
 }
 
-#if 0
-bool is_git_tracked_popen(const char* path) {
-    if (!path || path[0] == '\0')
-        return false;
-
-    /* Check cached git root first */
-    pthread_mutex_lock(&g_git_root_lock);
-    if (g_git_root[0] != '\0') {
-        size_t root_len = strlen(g_git_root);
-        if (strncmp(path, g_git_root, root_len) == 0 &&
-            (path[root_len] == '/' || path[root_len] == '\0')) {
-            pthread_mutex_unlock(&g_git_root_lock);
-            /* Verify with git ls-files */
-            char cmd[4224];
-            snprintf(cmd, sizeof(cmd), "git -C \"%s\" ls-files --error-unmatch -- '%s' 2>/dev/null",
-                     g_git_root, path);
-            FILE* fp = popen(cmd, "r");
-            if (!fp)
-                return true; /* Assume tracked if git command fails */
-            char line[4096];
-            bool tracked = (fgets(line, sizeof(line), fp) != NULL);
-            pclose(fp);
-            return tracked;
-        }
-    }
-    pthread_mutex_unlock(&g_git_root_lock);
-
-    /* Find git root from scratch */
-    char root[4096];
-    if (!find_git_root(path, root, sizeof(root)))
-        return false;
-
-    /* Cache the git root */
-    pthread_mutex_lock(&g_git_root_lock);
-    strncpy(g_git_root, root, sizeof(g_git_root) - 1);
-    g_git_root[sizeof(g_git_root) - 1] = '\0';
-    pthread_mutex_unlock(&g_git_root_lock);
-
-    /* Check if file is tracked */
-    char cmd[4224];
-    snprintf(cmd, sizeof(cmd), "git -C \"%s\" ls-files --error-unmatch -- '%s' 2>/dev/null", root,
-             path);
-    FILE* fp = popen(cmd, "r");
-    if (!fp)
-        return true;
-    char line[4096];
-    bool tracked = (fgets(line, sizeof(line), fp) != NULL);
-    pclose(fp);
-    return tracked;
-}
-#endif
-
-void git_root_reset(void) {
-    pthread_mutex_lock(&g_git_root_lock);
-    g_git_root[0] = '\0';
-    pthread_mutex_unlock(&g_git_root_lock);
-}
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Feature 22: File extension relevance
@@ -449,15 +348,6 @@ static inline void add_child(RadixNode* node, char c, RadixNode* child) {
     node->children[pos].edge_char = c;
     node->children[pos].node = child;
     node->child_count++;
-}
-
-__attribute__((unused)) static void remove_child_at(RadixNode* node, uint16_t idx) {
-    if (idx >= node->child_count)
-        return;
-    for (uint16_t i = idx; i < node->child_count - 1; i++) {
-        node->children[i] = node->children[i + 1];
-    }
-    node->child_count--;
 }
 
 Trie* create_trie(void) {

@@ -407,12 +407,6 @@ int store_check_memory_budget(t_bucket_store* store) {
     return (int) ((used * 100) / store->max_memory_bytes);
 }
 
-__attribute__((unused)) static size_t count_bucket_nodes(t_bucket* bucket) {
-    if (!bucket || !bucket->dir_trie)
-        return 0;
-    return trie_node_count(bucket->dir_trie);
-}
-
 void store_enforce_budget(t_bucket_store* store) {    if (!store)
         return;
 

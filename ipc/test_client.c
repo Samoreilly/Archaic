@@ -520,6 +520,7 @@ int main(int argc, char* argv[]) {
                 }
                 printf("  tip:        run `%s explain <prefix> [cwd]` to debug empty completions\n",
                        argv[0]);
+                printf("  accept:     Ctrl+Space inserts the ghost hint (Alt+Right also works)\n");
             } else {
                 printf("  health:     fail\n");
             }

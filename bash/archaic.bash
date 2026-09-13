@@ -308,6 +308,16 @@ _archaic_active_cmd_from_line() {
 }
 
 # ── Core completion function ─────────────────────────────────────────────────
+# Does this command take path arguments unconditionally (empty token gets
+# completions)? Other commands only complete path-like tokens.
+_archaic_cmd_takes_paths() {
+    case "$1" in
+        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find|source|.)
+            return 0 ;;
+    esac
+    return 1
+}
+
 _archaic_do_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -323,18 +333,16 @@ _archaic_do_complete() {
         return
     fi
 
-    case "$cmd" in
-        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find|source|.)
-            ;;
-        *)
-            if [[ -z "$cur" ]]; then
-                return
-            fi
-            if [[ "$cur" != .* && "$cur" != ~* && "$cur" != /* && "$cur" != */* ]]; then
-                return
-            fi
-            ;;
-    esac
+    if _archaic_cmd_takes_paths "$cmd"; then
+        :
+    else
+        if [[ -z "$cur" ]]; then
+            return
+        fi
+        if [[ "$cur" != .* && "$cur" != ~* && "$cur" != /* && "$cur" != */* ]]; then
+            return
+        fi
+    fi
 
     if ! _archaic_check_daemon; then
         return
@@ -393,10 +401,12 @@ _archaic_do_complete() {
 
     local found=0
     local -a completions=()
+    local first_full=""
 
     if [[ -n "$expanded_cur" && "$expanded_cur" != */ && -d "$resolved" ]]; then
         completions+=("${expanded_cur%/}/")
         found=1
+        first_full="$resolved"
     fi
 
     local hint=""
@@ -438,6 +448,7 @@ _archaic_do_complete() {
         fi
 
         completions+=("$display_path")
+        [[ -z "$first_full" ]] && first_full="$full_path"
         found=1
     done <<< "$results"
 
@@ -488,6 +499,7 @@ _archaic_do_complete() {
             fi
 
             completions+=("$display_path")
+            [[ -z "$first_full" ]] && first_full="$full_path"
             found=1
         done <<< "$fuzzy_results"
     fi
@@ -500,6 +512,12 @@ _archaic_do_complete() {
             empty) echo "archaic: no matches — archaic-cli explain ${COMP_WORDS[COMP_CWORD]}" >&2 ;;
         esac
         return
+    fi
+
+    # Ghost render: show the top-ranked remainder dimmed (stock bash has no
+    # inline overlay; the accept key inserts exactly this remainder).
+    if [[ -n "$cur" && -n "$first_full" ]]; then
+        _archaic_render_ghost "$first_full" "$resolved"
     fi
 
     COMPREPLY=("${completions[@]}")
@@ -576,17 +594,25 @@ archaic-status() {
     echo "Accept hint: Ctrl+Space"
 }
 
-# ── Inline ghost-text suggestions (Bash 5.0+) ────────────────────────────────
-# Uses READLINE_LINE / READLINE_POINT to show the best completion as dimmed
-# text that the user can accept with Alt + Right Arrow.
+# ── Ghost-text suggestions ───────────────────────────────────────────────────
+# Stock bash cannot overlay inline text, so the ghost lives in two places:
+#   * Tab renders the pending remainder dimmed on stderr (see do_complete).
+#   * Ctrl+Space / Alt+Right computes the remainder live and inserts it.
+# Bare tokens (no slash) qualify only as arguments of path-taking commands.
 
 _archaic_suggestion=""
 _archaic_suggestion_full=""
 _archaic_last_suggest_token=""
 _archaic_last_suggest_result=""
 
+_archaic_learn_accept() {
+    [[ -x "${_archaic_helper:-}" ]] || return 0
+    printf 'select %s\n' "$1" | _archaic_to 0.2 "$_archaic_helper" "$_archaic_sock" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
+
 _archaic_get_suggestion() {
-    # Opt-out: ARCHAIC_SUGGEST_ON_PROMPT=0 disables per-prompt queries
+    # Opt-out: ARCHAIC_SUGGEST_ON_PROMPT=0 disables ghost queries
     # (Tab completion keeps working).
     [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" == "0" ]] && { _archaic_suggestion=""; return; }
     # Extract the word currently being typed (text before cursor, last token)
@@ -595,10 +621,20 @@ _archaic_get_suggestion() {
 
     [[ -z "$cur" ]] && { _archaic_suggestion=""; return; }
 
-    # Only suggest for path-like inputs
-    [[ "$cur" != */* ]] && { _archaic_suggestion=""; return; }
+    # Detect command for context-aware queries (chain-aware)
+    local cmd
+    cmd="$(_archaic_active_cmd_from_line "$READLINE_LINE" "$READLINE_POINT")"
+    [[ -z "$cmd" ]] && cmd="${READLINE_LINE%% *}"
 
-    # Memoize: same token as last prompt repaint reuses the result.
+    if [[ "$cur" != */* ]]; then
+        # Bare token: must look like a path fragment, sit in argument
+        # position, and belong to a path-taking command.
+        [[ "$cur" =~ ^[a-zA-Z0-9._~-]+$ ]] || { _archaic_suggestion=""; return; }
+        [[ "$before_cursor" == *" "* ]] || { _archaic_suggestion=""; return; }
+        _archaic_cmd_takes_paths "$cmd" || { _archaic_suggestion=""; return; }
+    fi
+
+    # Memoize: same token reuses the last result instead of re-querying.
     if [[ "$cur" == "$_archaic_last_suggest_token" ]]; then
         _archaic_suggestion="$_archaic_last_suggest_result"
         return
@@ -613,11 +649,6 @@ _archaic_get_suggestion() {
     local resolved="$expanded_cur"
     [[ "$expanded_cur" != /* ]] && resolved="$(pwd)/$expanded_cur"
     resolved="${resolved%/}"
-
-    # Detect command for context-aware queries (chain-aware)
-    local cmd
-    cmd="$(_archaic_active_cmd_from_line "$READLINE_LINE" "$READLINE_POINT")"
-    [[ -z "$cmd" ]] && cmd="${READLINE_LINE%% *}"
 
     # Query daemon (persistent helper first, then CLI)
     local output=""
@@ -643,56 +674,48 @@ _archaic_get_suggestion() {
 }
 
 _archaic_accept_suggestion() {
+    # Compute live: READLINE_LINE is only meaningful inside this widget.
+    _archaic_get_suggestion
     if [[ -n "$_archaic_suggestion" ]]; then
         READLINE_LINE="${READLINE_LINE}${_archaic_suggestion}"
         READLINE_POINT=${#READLINE_LINE}
+        [[ -n "$_archaic_suggestion_full" ]] && _archaic_learn_accept "$_archaic_suggestion_full"
         _archaic_suggestion=""
+        _archaic_suggestion_full=""
     fi
 }
 
-# Render ghost text by appending dimmed suggestion to the prompt.
-# Called via PROMPT_COMMAND before each prompt display.
-_archaic_render_suggestion() {
-    if [[ -n "$_archaic_suggestion" ]]; then
-        # \033[2m = dim, \033[0m = reset
-        printf '\033[2m%s\033[0m' "$_archaic_suggestion"
-    fi
-}
-
-# Hook into PROMPT_COMMAND: update suggestion + preserve existing hooks.
-# Idempotent on re-source, preserves array-form PROMPT_COMMAND (bash 5+),
-# and never clobbers hooks added after us: we append once instead of
-# overwriting. Opt out entirely with ARCHAIC_SUGGEST_ON_PROMPT=0 (Tab
-# completion keeps working).
+# Legacy no-op: ghost text used to hook PROMPT_COMMAND (which runs outside
+# readline, so it could never see the live line). Kept so shells upgrading
+# from that version don't error on their saved PROMPT_COMMAND.
 _archaic_prompt_hook() {
-    _archaic_get_suggestion
-    _archaic_render_suggestion
+    :
 }
-if [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" != "0" ]]; then
-    if declare -p PROMPT_COMMAND 2>/dev/null | grep -q 'declare -a'; then
-        _archaic_in_pc=0
-        for _pc_elt in "${PROMPT_COMMAND[@]}"; do
-            [[ "$_pc_elt" == *"_archaic_prompt_hook"* ]] && _archaic_in_pc=1
-        done
-        [[ "$_archaic_in_pc" -eq 0 ]] && PROMPT_COMMAND+=("_archaic_prompt_hook")
-        unset _archaic_in_pc _pc_elt
-    else
-        case "${PROMPT_COMMAND:-}" in
-            *"_archaic_prompt_hook"*) ;;
-            "" ) PROMPT_COMMAND="_archaic_prompt_hook" ;;
-            * ) PROMPT_COMMAND="${PROMPT_COMMAND}; _archaic_prompt_hook" ;;
-        esac
-    fi
-    # Back-compat for the pre-append layout: if a previous version saved the
-    # original hook, keep running it once (avoids dropping user hooks that
-    # existed before upgrade).
-    if [[ -n "${_archaic_orig_prompt_command:-}" && "${_archaic_orig_prompt_command}" != *"_archaic_prompt_hook"* ]]; then
-        case "${PROMPT_COMMAND:-}" in
-            *"_archaic_orig_prompt_command"*) ;;
-            *) PROMPT_COMMAND="${PROMPT_COMMAND}; eval \"\$_archaic_orig_prompt_command\"" ;;
-        esac
-    fi
+# Back-compat for the pre-append layout: if a previous version saved the
+# original hook, keep running it once (avoids dropping user hooks that
+# existed before upgrade).
+if [[ -n "${_archaic_orig_prompt_command:-}" && "${_archaic_orig_prompt_command}" != *"_archaic_prompt_hook"* ]]; then
+    case "${PROMPT_COMMAND:-}" in
+        *"_archaic_orig_prompt_command"*) ;;
+        *) PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}; }eval \"\$_archaic_orig_prompt_command\"" ;;
+    esac
 fi
+
+# Render the ghost remainder dimmed on stderr. Called from Tab completion
+# with the top-ranked result (same ordering the accept key inserts).
+_archaic_render_ghost() {
+    local full_path="$1" resolved="$2"
+    [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" == "0" ]] && return 0
+    local norm_path="${full_path%/}"
+    local norm_resolved="${resolved%/}"
+    if [[ "$norm_path" == "$norm_resolved"* ]]; then
+        local remainder="${norm_path#$norm_resolved}"
+        if [[ -n "$remainder" ]]; then
+            printf '\033[2m→ %s  (Ctrl+Space to accept)\033[0m\n' "$remainder" >&2
+        fi
+    fi
+    return 0
+}
 
 # Accept the ghost-text suggestion with Ctrl+Space (reliable in every
 # terminal, unbound by default). Alt+Right also works where the

@@ -370,18 +370,16 @@ _archaic_do_complete() {
         return
     fi
 
-    case "$cmd" in
-        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find|source|.)
-            ;;
-        *)
-            if [[ -z "$cur" ]]; then
-                return
-            fi
-            if [[ "$cur" != .* && "$cur" != ~* && "$cur" != /* && "$cur" != */* ]]; then
-                return
-            fi
-            ;;
-    esac
+    if _archaic_cmd_takes_paths "$cmd"; then
+        :
+    else
+        if [[ -z "$cur" ]]; then
+            return
+        fi
+        if [[ "$cur" != .* && "$cur" != ~* && "$cur" != /* && "$cur" != */* ]]; then
+            return
+        fi
+    fi
 
     # Expand environment variables and ~user/ syntax
     local expanded_cur=$(_archaic_expand_path "$cur")
@@ -588,17 +586,42 @@ _archaic_load_commands
 # ── Register completions ─────────────────────────────────────────────────────
 compdef _archaic_do_complete ${_archaic_commands[@]}
 
-# ── Inline suggestions via RPS1 (right prompt) ───────────────────────────────
+# ── Inline ghost text via POSTDISPLAY (native zsh overlay) ──────────────────
+# Updated on every redraw from the live line buffer; bare tokens (no slash)
+# qualify only as arguments of path-taking commands.
 _archaic_suggestion=""
 _archaic_suggestion_full=""
 _archaic_last_suggest_token=""
 _archaic_last_suggest_result=""
 
+# Does this command take path arguments unconditionally?
+_archaic_cmd_takes_paths() {
+    case "$1" in
+        cd|ls|ll|la|l|cat|vim|nvim|hx|nano|emacs|less|more|bat|rm|mv|cp|mkdir|rmdir|pushd|popd|touch|head|tail|chmod|chown|ln|tar|unzip|open|code|rg|fd|eza|grep|find|source|.)
+            return 0 ;;
+    esac
+    return 1
+}
+
+_archaic_learn_accept() {
+    [[ -x "${_archaic_helper:-}" ]] || return 0
+    printf 'select %s\n' "$1" | _archaic_to 0.2 "$_archaic_helper" "$_archaic_sock" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
+
 _archaic_get_suggestion() {
     [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" == "0" ]] && { _archaic_suggestion=""; return; }
     local cur="${LBUFFER##* }"
     [[ -z "$cur" ]] && { _archaic_suggestion=""; return; }
-    [[ "$cur" != */* ]] && { _archaic_suggestion=""; return; }
+    local cmd="$(_archaic_active_cmd_from_line "$LBUFFER")"
+    [[ -z "$cmd" ]] && cmd="${LBUFFER%% *}"
+    if [[ "$cur" != */* ]]; then
+        # Bare token: must look like a path fragment, sit in argument
+        # position, and belong to a path-taking command.
+        [[ "$cur" =~ ^[a-zA-Z0-9._~-]+$ ]] || { _archaic_suggestion=""; return; }
+        [[ "$LBUFFER" == *" "* ]] || { _archaic_suggestion=""; return; }
+        _archaic_cmd_takes_paths "$cmd" || { _archaic_suggestion=""; return; }
+    fi
     if [[ "$cur" == "$_archaic_last_suggest_token" ]]; then
         _archaic_suggestion="$_archaic_last_suggest_result"
         return
@@ -610,8 +633,6 @@ _archaic_get_suggestion() {
     [[ "$expanded_cur" != /* ]] && resolved="$(pwd)/$expanded_cur"
     resolved="${resolved%/}"
 
-    local cmd="$(_archaic_active_cmd_from_line "$LBUFFER")"
-    [[ -z "$cmd" ]] && cmd="${LBUFFER%% *}"
     local output=""
     output="$(_archaic_q "complete $resolved 1 $PWD $cmd")"
     if [[ -z "$output" ]]; then
@@ -632,10 +653,21 @@ _archaic_get_suggestion() {
     _archaic_last_suggest_result="$_archaic_suggestion"
 }
 
+# Refresh the overlay from the live line on every redraw. Queued daemon
+# queries are memoized per token, so idle repaints cost nothing.
+_archaic_zle_update() {
+    [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" == "0" ]] && { POSTDISPLAY=""; return; }
+    _archaic_get_suggestion
+    POSTDISPLAY="$_archaic_suggestion"
+}
+
 _archaic_accept_suggestion() {
     if [[ -n "$_archaic_suggestion" ]]; then
         LBUFFER="${LBUFFER}${_archaic_suggestion}"
+        [[ -n "$_archaic_suggestion_full" ]] && _archaic_learn_accept "$_archaic_suggestion_full"
         _archaic_suggestion=""
+        _archaic_suggestion_full=""
+        POSTDISPLAY=""
         zle reset-prompt
     fi
 }
@@ -710,42 +742,30 @@ bindkey '^[^[[C' _archaic_accept_suggestion 2>/dev/null
 bindkey '^[[1;3B' _archaic_cycle_next 2>/dev/null
 bindkey '^[[1;3A' _archaic_cycle_prev 2>/dev/null
 
-# Hook into precmd to update suggestion before each prompt.
-# Idempotent on re-source. Opt out with ARCHAIC_SUGGEST_ON_PROMPT=0 (Tab
-# completion keeps working).
-_archaic_precmd_hook() {
-    _archaic_get_suggestion
-}
+# Live ghost overlay: refresh on every redraw (opt out with
+# ARCHAIC_SUGGEST_ON_PROMPT=0; Tab completion keeps working). Replaces the
+# old precmd/RPS1 approach, which could only see the pre-typing line.
 if [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" != "0" ]]; then
-    if (( ${precmd_functions[(I)_archaic_precmd_hook]} == 0 )); then
-        precmd_functions=(_archaic_precmd_hook ${precmd_functions[@]})
+    if (( ${+functions[_archaic_zle_update]} )); then
+        autoload -Uz add-zle-hook-widget 2>/dev/null
+        if (( ${+functions[add-zle-hook-widget]} )); then
+            add-zle-hook-widget line-pre-redraw _archaic_zle_update 2>/dev/null
+        fi
     fi
 fi
 
-# Append suggestion to RPS1 (right prompt) without clobbering frameworks
-# (p10k, starship). Save the original once, reinstall idempotently, and
-# skip entirely when ghost hints are disabled.
-if [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" != "0" ]]; then
-    if [[ -z "${_archaic_orig_rps1_set:-}" ]]; then
-        _archaic_orig_rps1="${RPS1:-${RPROMPT:-}}"
-        _archaic_orig_rps1_set=1
-    fi
-    _archaic_rps1() {
-        if [[ -n "$_archaic_suggestion" ]]; then
-            print -n "%F{244}${_archaic_suggestion}%f"
-        fi
-        if [[ -n "$_archaic_orig_rps1" ]]; then
-            print -n "$_archaic_orig_rps1"
-        fi
-    }
-    # Only take over RPS1 if it isn't already ours (re-source safe, and
-    # won't fight frameworks that set RPS1 after us on next prompt via
-    # their own precmd — our precmd still updates the suggestion).
-    case "${RPS1:-}" in
-        *"_archaic_rps1"*) ;;
-        *) RPS1='$(_archaic_rps1)' ;;
-    esac
+# Upgrade hygiene: detach the retired precmd hook and RPS1 takeover so
+# shells upgrading from those versions neither error nor keep stale UI.
+if (( ${+precmd_functions} )) && (( ${precmd_functions[(I)_archaic_precmd_hook]} )); then
+    precmd_functions=(${precmd_functions:#_archaic_precmd_hook})
 fi
+_archaic_precmd_hook() { :; }
+if [[ "${RPS1:-}" == '$(_archaic_rps1)' ]]; then
+    RPS1="${_archaic_orig_rps1:-}"
+fi
+_archaic_rps1() {
+    [[ -n "${_archaic_orig_rps1:-}" ]] && print -n "$_archaic_orig_rps1"
+}
 
 # ── Status function ──────────────────────────────────────────────────────────
 archaic-status() {

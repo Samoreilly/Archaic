@@ -178,7 +178,7 @@ end
 
 function __archaic_cli_query -d "Bounded archaic-cli call"
     if command -sq timeout
-        timeout $__archaic_query_timeout command $archaic_cli_path $argv 2>/dev/null
+        timeout $__archaic_query_timeout "$archaic_cli_path" $argv 2>/dev/null
     else
         command $archaic_cli_path $argv 2>/dev/null
     end
@@ -186,7 +186,7 @@ end
 
 function __archaic_ping -d "Bounded daemon ping"
     if command -sq timeout
-        timeout $__archaic_ping_timeout command $archaic_cli_path ping 2>/dev/null
+        timeout $__archaic_ping_timeout "$archaic_cli_path" ping 2>/dev/null
     else
         command $archaic_cli_path ping 2>/dev/null
     end
@@ -258,6 +258,23 @@ function __archaic_check_daemon -d "Check if daemon socket exists and responds"
 end
 
 # ── Stale socket cleanup ──────────────────────────────────────────────────────
+# A single failed ping never deletes a live socket (the daemon may just be
+# busy): removal requires the owning daemon PID to be dead or missing.
+function __archaic_daemon_pid_dead -d "True when no live daemon owns the socket"
+    set -l pidf "$archaic_sock_path.pid"
+    if not test -f "$pidf"
+        return 0
+    end
+    set -l pid (cat "$pidf" 2>/dev/null)
+    if test -z "$pid"
+        return 0
+    end
+    if kill -0 "$pid" 2>/dev/null
+        return 1
+    end
+    return 0
+end
+
 function __archaic_cleanup_socket -d "Remove stale socket file if daemon is not running"
     if test -e "$archaic_sock_path" -a ! -S "$archaic_sock_path"
         # File exists but is not a socket - stale, remove it
@@ -267,8 +284,8 @@ function __archaic_cleanup_socket -d "Remove stale socket file if daemon is not 
     if test -S "$archaic_sock_path"
         # Socket exists - try ping to verify daemon is alive
         set -l ping_result (__archaic_ping)
-        if test $status -ne 0
-            # Daemon not responding - clean up stale socket
+        if test $status -ne 0; and __archaic_daemon_pid_dead
+            # Daemon not responding and owning PID dead - stale socket
             rm -f "$archaic_sock_path" 2>/dev/null
             set -g __archaic_daemon_healthy 0
         end
@@ -374,6 +391,16 @@ function __archaic_token_path -d "Turn an absolute result into the token the use
     if string match -q "$resolved/*" -- "$full"
         echo "$norm_prefix"(string replace -- "$resolved" "" "$full")
         return
+    end
+    # Relative token whose result is a string-prefix extension (e.g. token
+    # "al" -> "/pwd/alpha"): rewrite to token form ("alpha") so fish's
+    # candidate filter keeps it. Absolute results fish can't match are
+    # dropped by the shell, so never emit them for relative tokens.
+    if not string match -q '/*' -- "$prefix"
+        if string match -q "$resolved*" -- "$full"
+            echo "$norm_prefix"(string replace -- "$resolved" "" "$full")
+            return
+        end
     end
     echo "$full"
 end
@@ -734,10 +761,24 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
         return
     end
 
-    # Only suggest for path-like inputs
+    # Path-like inputs always qualify. Bare tokens (no slash) qualify only
+    # for an argument of a file command (e.g. `cd Doc`), so command names
+    # themselves never get path ghosts.
     if not string match -q '*/*' -- "$prefix"
-        set -g __archaic_suggestion ""
-        return
+        if not string match -qr '^[a-zA-Z0-9._~-]+$' -- "$prefix"
+            set -g __archaic_suggestion ""
+            return
+        end
+        set -l toks (commandline -co)
+        if test (count $toks) -lt 2
+            set -g __archaic_suggestion ""
+            return
+        end
+        set -l cmd (__archaic_active_command $toks)
+        if not contains -- $cmd $__archaic_file_cmds
+            set -g __archaic_suggestion ""
+            return
+        end
     end
 
     if not __archaic_check_daemon

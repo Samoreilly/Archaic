@@ -1,9 +1,13 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <fnmatch.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -538,9 +542,26 @@ int main(int argc, char* argv[]) {
             repairs++;
         }
         if (ping_fail && stat(sock, &st2) == 0 && S_ISSOCK(st2.st_mode)) {
-            unlink(sock);
-            printf("  fix:        removed unresponsive socket\n");
-            repairs++;
+            /* Only remove when the owning daemon is actually dead (pid
+             * file), never on a single failed ping: a busy daemon must
+             * not lose its socket. */
+            char pidf[4096];
+            snprintf(pidf, sizeof(pidf), "%s.pid", sock);
+            FILE* pf = fopen(pidf, "r");
+            int owner_dead = 1;
+            if (pf) {
+                int pid = 0;
+                if (fscanf(pf, "%d", &pid) == 1 && pid > 0 && kill(pid, 0) == 0)
+                    owner_dead = 0;
+                fclose(pf);
+            }
+            if (owner_dead) {
+                unlink(sock);
+                printf("  fix:        removed unresponsive socket (owner dead)\n");
+                repairs++;
+            } else {
+                printf("  fix:        socket unresponsive but owner lives; left alone\n");
+            }
         }
         if (home && home[0] && (stat(home_cfg, &st2) != 0)) {
             if (doctor_write_config(home_cfg, &cfg) == 0) {
@@ -596,11 +617,31 @@ int main(int argc, char* argv[]) {
                 if (access(bin, X_OK) != 0 && home)
                     snprintf(bin, sizeof(bin), "%s/.local/bin/archaic", home);
                 if (access(bin, X_OK) == 0) {
-                    char cmd[8192];
-                    snprintf(cmd, sizeof(cmd), "nohup \"%s\" --daemon \"%s\" >/dev/null 2>&1 &",
-                             bin, sock);
-                    if (system(cmd) == 0)
-                        started = 1;
+                    /* No system(): double-fork + exec avoids shell
+                     * interpolation of the configured socket path. */
+                    pid_t p1 = fork();
+                    if (p1 == 0) {
+                        if (fork() == 0) {
+                            setsid();
+                            int devnull = open("/dev/null", O_RDWR);
+                            if (devnull >= 0) {
+                                dup2(devnull, STDIN_FILENO);
+                                dup2(devnull, STDOUT_FILENO);
+                                dup2(devnull, STDERR_FILENO);
+                                if (devnull > 2)
+                                    close(devnull);
+                            }
+                            execl(bin, "archaic", "--daemon", sock, (char*) NULL);
+                            _exit(127);
+                        }
+                        _exit(0);
+                    } else if (p1 > 0) {
+                        int st = 0;
+                        while (waitpid(p1, &st, 0) < 0 && errno == EINTR)
+                            ;
+                        if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
+                            started = 1;
+                    }
                 }
             }
             if (started) {

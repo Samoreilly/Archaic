@@ -89,6 +89,46 @@ else
     bad "daemon serves queries under the budget"
 fi
 
+# ── Save containment (security) ────────────────────────────────────────────
+if cli save /tmp/archaic-evil-save.bin >/dev/null 2>&1; then
+    bad "save rejects paths outside the state dir"
+else
+    ok "save rejects paths outside the state dir"
+fi
+[ ! -e /tmp/archaic-evil-save.bin ] \
+    && ok "rejected save wrote nothing" || bad "rejected save wrote nothing"
+if cli save "$CACHE/archaic/backup.bin" >/dev/null 2>&1 \
+    && [ -f "$CACHE/archaic/backup.bin" ]; then
+    ok "save allows paths inside the state dir"
+else
+    bad "save allows paths inside the state dir"
+fi
+
+# ── doctor --fix respawns a dead daemon without system() ───────────────────
+OLDPID="$(cat "$DSOCK.pid" 2>/dev/null)"
+kill "$OLDPID" 2>/dev/null || true
+for _ in $(seq 1 40); do
+    { [ -z "$OLDPID" ] || ! kill -0 "$OLDPID" 2>/dev/null; } && break
+    sleep 0.2
+done
+if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+    kill -9 "$OLDPID" 2>/dev/null || true
+    for _ in $(seq 1 25); do kill -0 "$OLDPID" 2>/dev/null || break; sleep 0.2; done
+fi
+rm -f "$DSOCK" "$DSOCK.pid"
+# Point the user bus at nowhere so systemctl fails and doctor must use
+# its fork/exec spawn path (never touches the real user bus).
+if XDG_RUNTIME_DIR="$T/run" cli doctor --fix 2>&1 | grep -q "started/restarted daemon"; then
+    ok "doctor --fix respawns dead daemon"
+else
+    bad "doctor --fix respawns dead daemon"
+fi
+if cli ping >/dev/null 2>&1; then
+    ok "respawned daemon answers"
+else
+    bad "respawned daemon answers"
+fi
+
 echo ""
 echo "memory-budget: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -1,5 +1,9 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* struct ucred for SO_PEERCRED */
+#endif
 #include "server.h"
 #include "../src/io/fileloader.h"
+#include "../src/log.h"
 #include "../src/metrics.h"
 #include "../src/path-utils.h"
 #include "../src/threadpool.h"
@@ -460,6 +464,26 @@ static void handle_save(ipc_server* srv, int fd, uint32_t req_id, const ipc_save
     if (validate_string_field(req->save_path, sizeof(req->save_path)) != 0) {
         send_error(fd, req_id, -6, "invalid save path: not null-terminated");
         return;
+    }
+    /* Containment: a client-supplied path must stay inside the daemon's
+     * own state directory (no arbitrary-file-write primitive). */
+    {
+        char dir[4096] = {0};
+        strncpy(dir, srv->daemon->state_path, sizeof(dir) - 1);
+        char* slash = strrchr(dir, '/');
+        if (slash)
+            *slash = '\0';
+        char nreq[4096], ndir[4096];
+        path_normalize(nreq, req->save_path, sizeof(nreq));
+        path_normalize(ndir, dir[0] ? dir : "/", sizeof(ndir));
+        size_t dn = strlen(ndir);
+        int ok = (strcmp(nreq, srv->daemon->state_path) == 0);
+        if (!ok && dn > 0 && strncmp(nreq, ndir, dn) == 0 && nreq[dn] == '/')
+            ok = 1;
+        if (!ok) {
+            send_error(fd, req_id, -10, "save path outside state directory");
+            return;
+        }
     }
     daemon_save_state(srv->daemon, req->save_path);
     send_ok(fd, req_id);
@@ -1266,6 +1290,20 @@ static void* server_loop(void* arg) {
                 break;
             break;
         }
+#ifdef __linux__
+        /* Socket perms (0700) are the first gate; peer credentials the
+         * second: only our own uid may talk to the daemon. */
+        struct ucred cred;
+        socklen_t cred_len = sizeof(cred);
+        if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) == 0 &&
+            cred_len >= sizeof(cred)) {
+            if (cred.uid != geteuid()) {
+                LOG_WARN("ipc", "rejecting connection from uid %u", (unsigned) cred.uid);
+                close(fd);
+                continue;
+            }
+        }
+#endif
         client_ctx* ctx = malloc(sizeof(client_ctx));
         if (!ctx) {
             close(fd);

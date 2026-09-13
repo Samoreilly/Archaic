@@ -27,7 +27,7 @@ Status: done. Boxes checked only after tests passed and the change was pushed.
 ## 5. Memory budget in doctor + enforcement
 - [x] `doctor`/`health` report RSS vs `max_memory_mb`
 - [x] Scanner/index sheds or refuses when over cap
-- [x] Tests + push (unit `memory_budget_*` + `test/integration/test_memory_budget.sh`: 4/4)
+- [x] Tests + push (unit `memory_budget_*` + `test/integration/test_memory_budget.sh`: 9/9)
 
 ## 6. Per-root policy + live unwatch
 - [x] Per-root depth / ignore / watch in config
@@ -38,8 +38,8 @@ Status: done. Boxes checked only after tests passed and the change was pushed.
 - [x] Hints work without requiring `/` in the token
 - [x] Bash actually renders the ghost
 - [x] Accept key documented in status / doctor
-- [x] Tests + push (covered by `test/integration/test_shell_contract.sh`: 21/21)
+- [x] Tests + push (covered by `test/integration/test_shell_contract.sh`: 27/27)
 
 ## 8. Shell contract tests
 - [x] Fixture tree test: fish/bash/zsh/`archaic-cli complete` agree
-- [x] Tests + push (`test/integration/test_shell_contract.sh`: 21/21)
+- [x] Tests + push (`test/integration/test_shell_contract.sh`: 27/27)

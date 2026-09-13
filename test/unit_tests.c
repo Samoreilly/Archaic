@@ -2,7 +2,7 @@
  * archaic — Unit Test Suite
  *
  * Comprehensive unit tests covering: trie operations, scoring, fuzzy matching,
- * cache operations, config parsing, incremental scanning, hashset, path handling,
+ * cache operations, config parsing, hashset, path handling,
  * protocol validation, and edge cases.
  *
  * Run: ./archaic-unit [scan_path]
@@ -28,7 +28,6 @@
 #include "../src/cache.h"
 #include "../src/config.h"
 #include "../src/hashset.h"
-#include "../src/incremental.h"
 #include "../src/lru.h"
 #include "../src/path-utils.h"
 #include "../src/scanner.h"
@@ -627,8 +626,8 @@ static void test_config_sandbox_validate(void) {
     config_sandbox_validate(&cfg);
 
     ASSERT_TRUE(cfg.daemon.scan_threads <= 32, "scan_threads should be clamped to 32");
-    ASSERT_TRUE(cfg.daemon.max_depth <= 50, "max_depth should be clamped to 50");
-    ASSERT_TRUE(cfg.storage.max_buckets >= 256, "max_buckets should have minimum");
+    ASSERT_EQ_INT(20, cfg.daemon.max_depth, "max_depth 500 should clamp to exactly 20");
+    ASSERT_EQ_INT(1024, (int) cfg.storage.max_buckets, "max_buckets 0 should clamp to exactly 1024");
     ASSERT_TRUE(cfg.storage.cache_max_entries == 50000,
                 "cache_max_entries 50000 should be within range (65536 max)");
     PASS();
@@ -719,87 +718,6 @@ static void test_hashset_duplicate_insert(void) {
 
     ASSERT_TRUE(hashset_contains(&hs, "test"), "duplicate inserts should still contain key");
     hashset_free(&hs);
-    PASS();
-}
-
-/* ══════════════════════════════════════════════════════════════════════
- * TEST GROUP 7: Incremental Scanning
- * ══════════════════════════════════════════════════════════════════════ */
-
-static void test_incremental_basic(void) {
-    TEST(incremental_basic);
-    incremental_state* state = calloc(1, sizeof(incremental_state));
-    ASSERT_NOT_NULL(state, "calloc incremental_state failed");
-    incremental_init(state);
-
-    incremental_record_dir(state, "/test/dir1", 1000);
-    incremental_record_dir(state, "/test/dir2", 2000);
-
-    ASSERT_EQ_INT(2, state->count, "should have 2 tracked dirs");
-
-    ASSERT_TRUE(!incremental_needs_rescan(state, "/test/dir1", 1000),
-                "same mtime should not need rescan");
-
-    ASSERT_TRUE(incremental_needs_rescan(state, "/test/dir1", 1001),
-                "changed mtime should need rescan");
-
-    ASSERT_TRUE(incremental_needs_rescan(state, "/test/dir3", 1000),
-                "unknown dir should need rescan");
-
-    incremental_free(state);
-    free(state);
-    PASS();
-}
-
-static void test_incremental_stale(void) {
-    TEST(incremental_stale);
-    incremental_state* state = calloc(1, sizeof(incremental_state));
-    ASSERT_NOT_NULL(state, "calloc incremental_state failed");
-    incremental_init(state);
-
-    incremental_record_dir(state, "/test/a", 100);
-    incremental_record_dir(state, "/test/b", 200);
-
-    incremental_mark_all_stale(state);
-
-    /* needs_rescan checks mtime, not exists flag — same mtime = no rescan */
-    ASSERT_TRUE(incremental_needs_rescan(state, "/test/a", 100) == false,
-                "same mtime should not need rescan regardless of stale flag");
-    ASSERT_TRUE(incremental_needs_rescan(state, "/test/a", 101) == true,
-                "changed mtime should need rescan");
-
-    /* But remove_missing should clear stale entries */
-    int removed = incremental_remove_missing(state);
-    ASSERT_TRUE(removed >= 1, "stale entries should be removable via remove_missing");
-
-    incremental_free(state);
-    free(state);
-    PASS();
-}
-
-static void test_incremental_remove_missing(void) {
-    TEST(incremental_remove_missing);
-    incremental_state* state = calloc(1, sizeof(incremental_state));
-    ASSERT_NOT_NULL(state, "calloc incremental_state failed");
-    incremental_init(state);
-
-    /* Create one dir that exists */
-    mkdir("/tmp/archaic_unit_inc_test_dir", 0755);
-    incremental_record_dir(state, "/tmp/archaic_unit_inc_test_dir", 100);
-    /* Record a truly nonexistent path */
-    incremental_record_dir(state, "/tmp/archaic_unit_nonexistent_dir_xyz", 100);
-
-    /* Mark all stale first, then remove_missing should clear nonexistent ones */
-    incremental_mark_all_stale(state);
-    int removed = incremental_remove_missing(state);
-    /* At minimum the nonexistent dir should be removed (it doesn't exist on disk) */
-    /* But check existence: mark_all_stale uses 'exists' flag set by filesystem scan */
-    /* Since we didn't scan, all entries have exists=false -> all get removed */
-    ASSERT_TRUE(removed >= 1, "should remove at least 1 entry");
-
-    rmdir("/tmp/archaic_unit_inc_test_dir");
-    incremental_free(state);
-    free(state);
     PASS();
 }
 
@@ -1822,11 +1740,6 @@ int main(int argc, char* argv[]) {
     test_hashset_resize();
     test_hashset_duplicate_insert();
 
-    /* Group 7: Incremental Scanning */
-    printf("\n--- Incremental Scanning ---\n");
-    test_incremental_basic();
-    test_incremental_stale();
-    test_incremental_remove_missing();
 
     /* Group 8: Path Validation */
     printf("\n--- Path Validation ---\n");

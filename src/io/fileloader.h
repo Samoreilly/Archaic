@@ -2,7 +2,6 @@
 
 #include "../cache.h"
 #include "../config.h"
-#include "../incremental.h"
 #include "../metrics.h"
 #include "../recent-files.h"
 #include "../scanner.h"
@@ -47,7 +46,6 @@ typedef struct {
     atomic_bool rescan_timer_running;
     atomic_bool config_reload_requested;
     recent_files recent;
-    incremental_state incremental;
     bool case_insensitive;
     double hidden_file_penalty;
     char bookmarks[CONFIG_MAX_BOOKMARKS][CONFIG_MAX_STRING];
@@ -70,9 +68,6 @@ void daemon_shutdown(daemon_state* state);
 void daemon_run_scan(daemon_state* state, const char* path);
 void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_count);
 size_t daemon_unwatch(daemon_state* state, const char* path);
-/* Fill a watcher callback context that records events into the daemon's
- * incremental state. */
-void daemon_watcher_callback(watcher_cb_ctx* out, daemon_state* state);
 void daemon_start_rescan_timer(daemon_state* state);
 void daemon_stop_rescan_timer(daemon_state* state);
 scan_status daemon_scan_status(daemon_state* state);

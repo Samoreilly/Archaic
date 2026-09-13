@@ -316,18 +316,52 @@ void session_record_selection(const char* path) {
     pthread_mutex_unlock(&g_session_lock);
 }
 
+static int session_snapshot(const session_entry** out);
+static double session_boost_snapshot(const char* path, size_t path_len,
+                                     const session_entry* snap, int n);
+
 double session_get_boost(const char* path) {
     if (!path || path[0] == '\0')
         return 0.0;
 
+    const session_entry* snap = NULL;
+    int n = session_snapshot(&snap);
+    double boost = session_boost_snapshot(path, strlen(path), snap, n);
+    free((void*) snap);
+    return boost;
+}
+
+/* Snapshot the session list once per collect: candidates then score
+ * lock-free (typical sessions hold a handful of entries; the copy is
+ * bounded by the live count, not the 256 cap). */
+static int session_snapshot(const session_entry** out) {
     pthread_mutex_lock(&g_session_lock);
+    int n = g_session_count;
+    const session_entry* snap = NULL;
+    if (n > 0) {
+        session_entry* copy =
+            (session_entry*) malloc((size_t) n * sizeof(session_entry));
+        if (copy) {
+            memcpy(copy, g_session_entries, (size_t) n * sizeof(session_entry));
+            snap = copy;
+        } else {
+            n = 0;
+        }
+    }
+    pthread_mutex_unlock(&g_session_lock);
+    *out = snap;
+    return n;
+}
+
+static double session_boost_snapshot(const char* path, size_t path_len,
+                                     const session_entry* snap, int n) {
+    if (!path || path[0] == '\0' || !snap || n <= 0)
+        return 0.0;
 
     double boost = 0.0;
-    size_t path_len = strlen(path);
-
-    for (int i = 0; i < g_session_count; i++) {
-        const char* selected = g_session_entries[i].path;
-        size_t sel_len = g_session_entries[i].len;
+    for (int i = 0; i < n; i++) {
+        const char* selected = snap[i].path;
+        size_t sel_len = snap[i].len;
 
         double recency = 1.0 / (1.0 + (double) i * 0.15);
         if (path_len > sel_len && strncmp(path, selected, sel_len) == 0 && path[sel_len] == '/') {
@@ -335,15 +369,13 @@ double session_get_boost(const char* path) {
         }
         if (path_len == sel_len && strcmp(path, selected) == 0) {
             boost += 0.55 * recency;
-            if (g_session_entries[i].select_count > 1)
+            if (snap[i].select_count > 1)
                 boost += 0.08;
         }
     }
 
     if (boost > 0.85)
         boost = 0.85;
-
-    pthread_mutex_unlock(&g_session_lock);
     return boost;
 }
 
@@ -840,7 +872,8 @@ static inline double clampd(double val, double lo, double hi) {
 
 static double compute_score(const char* path, uint64_t freq, uint64_t last_access, bool is_dir,
                             uint64_t now, int max_depth, const char* cwd,
-                            const char* command, const char* prefix, double hidden_file_penalty) {
+                            const char* command, const char* prefix, double hidden_file_penalty,
+                            const session_entry* sess, int sess_n) {
     double score = 0.0;
 
     double freq_norm = (freq > 0) ? (1.0 - 1.0 / (1.0 + (double) freq)) : 0.0;
@@ -940,7 +973,7 @@ static double compute_score(const char* path, uint64_t freq, uint64_t last_acces
             score += (24.0 - age_hours) * (0.05 / 24.0);
     }
 
-    score += session_get_boost(path);
+    score += session_boost_snapshot(path, strlen(path), sess, sess_n);
 
     if (hidden_file_penalty > 0.0 && is_hidden_path(path)) {
         int user_typed_dot = 0;
@@ -1033,6 +1066,8 @@ typedef struct {
     double hidden_file_penalty;
     int dirs_only;
     size_t prune_from;
+    const session_entry* sess; /* per-collect snapshot: no per-candidate lock */
+    int sess_n;
 } scored_dfs_ctx;
 
 static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
@@ -1050,7 +1085,8 @@ static void scored_collect_dfs(RadixNode* node, scored_dfs_ctx* ctx) {
             if (one_level_child(ctx->prefix, ctx->prefix_len, full)) {
                 double score = compute_score(full, node->freq, node->last_access, node->is_dir,
                                              ctx->now, ctx->max_depth, ctx->cwd, ctx->command,
-                                             ctx->prefix, ctx->hidden_file_penalty);
+                                             ctx->prefix, ctx->hidden_file_penalty, ctx->sess,
+                                             ctx->sess_n);
                 scored_insert(ctx->out, full, score, node->freq, node->last_access, node->is_dir);
             }
         }
@@ -1107,6 +1143,10 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     if (!node)
         return;
 
+    /* One lock per collect (not per candidate) for session boosts. */
+    const session_entry* sess = NULL;
+    int sess_n = session_snapshot(&sess);
+
     scored_dfs_ctx ctx;
     ctx.depth = 0;
     ctx.prefix = prefix;
@@ -1119,6 +1159,8 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     ctx.hidden_file_penalty = hidden_file_penalty;
     ctx.dirs_only = dirs_only;
     ctx.prune_from = 0;
+    ctx.sess = sess;
+    ctx.sess_n = sess_n;
 
     ctx.max_depth = path_depth(prefix) + 10;
 
@@ -1127,7 +1169,8 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     if (node->is_leaf && matched_in_node == 0 && !prefix_is_dir &&
         !(dirs_only && !node->is_dir)) {
         double score = compute_score(prefix, node->freq, node->last_access, node->is_dir, now,
-                                     ctx.max_depth, cwd, command, prefix, hidden_file_penalty);
+                                     ctx.max_depth, cwd, command, prefix, hidden_file_penalty,
+                                     ctx.sess, ctx.sess_n);
         scored_insert(out, prefix, score, node->freq, node->last_access, node->is_dir);
     }
 
@@ -1148,7 +1191,8 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
                     if (one_level_child(prefix, prefix_len, full)) {
                         double score = compute_score(full, node->freq, node->last_access, node->is_dir,
                                                      now, ctx.max_depth, cwd, command,
-                                                     prefix, hidden_file_penalty);
+                                                     prefix, hidden_file_penalty, ctx.sess,
+                                                     ctx.sess_n);
                         scored_insert(out, full, score, node->freq, node->last_access, node->is_dir);
                     }
                 }
@@ -1159,6 +1203,7 @@ void scored_completions_collect(Trie* root, const char* prefix, scored_completio
     scored_collect_dfs(node, &ctx);
 
     qsort(out->entries, out->count, sizeof(scored_entry), cmp_score_desc);
+    free((void*) sess);
 }
 
 /*

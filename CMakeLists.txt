@@ -42,7 +42,6 @@ add_executable(
     src/cache.c
     src/log.c
     src/recent-files.c
-    src/incremental.c
     src/watcher.c
     src/path-utils.c
 )
@@ -146,7 +145,6 @@ add_executable(
     src/cache.c
     src/log.c
     src/recent-files.c
-    src/incremental.c
     src/watcher.c
     src/path-utils.c
     ipc/server.c

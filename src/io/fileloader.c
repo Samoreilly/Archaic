@@ -798,8 +798,6 @@ daemon_state* daemon_init(void) {
 
     recent_files_init(&state->recent, (int) cfg.storage.recent_files_capacity);
 
-    incremental_init(&state->incremental);
-
     state->case_insensitive = cfg.storage.case_insensitive;
     state->hidden_file_penalty = cfg.scoring.hidden_file_penalty;
 
@@ -886,8 +884,6 @@ void daemon_shutdown(daemon_state* state) {
     if (state->parent) {
         free(state->parent);
     }
-
-    incremental_free(&state->incremental);
 
     pthread_mutex_destroy(&state->scan_start_lock);
     free(state);
@@ -1122,30 +1118,6 @@ void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_cou
     }
     pthread_detach(state->scan_thread);
     pthread_mutex_unlock(&state->scan_start_lock);
-}
-
-/* Live watcher callback: record the changed path for future incremental
- * rescans. Runs on the watcher thread; incremental_state has its own lock.
- * Runs even when watcher_rescan_requested already covers the trigger. */
-static void daemon_watcher_event(watcher_event_type type, const char* path, int is_dir,
-                                 void* userdata) {
-    (void) type;
-    (void) is_dir;
-    daemon_state* state = (daemon_state*) userdata;
-    if (!state || !path || path[0] == '\0')
-        return;
-    struct stat st;
-    if (stat(path, &st) == 0)
-        incremental_record_dir(&state->incremental, path, st.st_mtime);
-    else
-        incremental_record_dir(&state->incremental, path, 0);
-}
-
-void daemon_watcher_callback(watcher_cb_ctx* out, daemon_state* state) {
-    if (!out)
-        return;
-    out->on_event = daemon_watcher_event;
-    out->userdata = state;
 }
 
 /* Live unwatch: drop a root from the scan list + the live watcher + the

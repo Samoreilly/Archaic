@@ -356,7 +356,10 @@ int main(int argc, char* argv[]) {
                 watcher_add_root(daemon->watcher, scan_roots[i]);
             }
             watcher_cb_ctx wcb;
-            daemon_watcher_callback(&wcb, daemon);
+            /* No per-event userspace work needed: the watcher marks its
+             * dirty flag internally and the rescan timer consumes it. */
+            wcb.on_event = NULL;
+            wcb.userdata = daemon;
 
             if (watcher_start(daemon->watcher, wcb) == 0) {
                 LOG_INFO("main", "filesystem watcher started");

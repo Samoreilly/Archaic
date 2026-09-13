@@ -394,8 +394,16 @@ _archaic_do_complete() {
         found=1
     fi
 
+    local hint=""
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
+        if [[ "$line" == \#hint\ * ]]; then
+            hint="${line#\#hint }"
+            continue
+        fi
+        if [[ "$line" == \#scanning || "$line" == \#* ]]; then
+            continue
+        fi
         local type="${line%% *}"
         local full_path="${line#* }"
 
@@ -482,6 +490,12 @@ _archaic_do_complete() {
     fi
 
     if [[ "$found" -eq 0 ]]; then
+        case "$hint" in
+            outside-roots) echo "archaic: outside scan roots — archaic-cli watch $PWD" >&2 ;;
+            ignored) echo "archaic: ignored by index rules" >&2 ;;
+            scanning) echo "archaic: still indexing…" >&2 ;;
+            empty) echo "archaic: no matches — archaic-cli explain ${COMP_WORDS[COMP_CWORD]}" >&2 ;;
+        esac
         return
     fi
 

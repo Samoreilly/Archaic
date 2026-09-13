@@ -428,8 +428,16 @@ _archaic_do_complete() {
         results="$(_archaic_c complete "$resolved" 50 "$PWD" "$dirs_only")"
     fi
 
+    local hint=""
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
+        if [[ "$line" == \#hint\ * ]]; then
+            hint="${line#\#hint }"
+            continue
+        fi
+        if [[ "$line" == \#scanning || "$line" == \#* ]]; then
+            continue
+        fi
         local type="${line%% *}"
         local full_path="${line#* }"
 
@@ -514,6 +522,12 @@ _archaic_do_complete() {
     fi
 
     if [[ "$found" -eq 0 ]]; then
+        case "$hint" in
+            outside-roots) print -u2 -- "archaic: outside scan roots — archaic-cli watch $PWD" ;;
+            ignored) print -u2 -- "archaic: ignored by index rules" ;;
+            scanning) print -u2 -- "archaic: still indexing…" ;;
+            empty) print -u2 -- "archaic: no matches — archaic-cli explain ${words[CURRENT]}" ;;
+        esac
         return
     fi
 

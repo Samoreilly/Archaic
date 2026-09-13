@@ -221,8 +221,7 @@ static int cmd_complete(helper_conn* conn, const char* prefix, uint32_t limit, c
     if (hdr.msg_type == IPC_MSG_COMPLETIONS) {
         ipc_completion_list* list = calloc(1, sizeof(*list));
         if (list && ipc_unpack_completions(buf, hdr.payload_len, list) == 0) {
-            if (list->scanning)
-                printf("#scanning\n");
+            ipc_print_hint(list->scanning, list->hint);
             for (uint32_t i = 0; i < list->count; i++)
                 print_colored(list->is_dirs[i] ? "D" : "F", list->paths[i]);
         } else {
@@ -429,8 +428,7 @@ static int cmd_fuzzy(helper_conn* conn, const char* prefix, uint32_t limit) {
     if (hdr.msg_type == IPC_MSG_FUZZY_COMPLETIONS) {
         ipc_completion_list* list = calloc(1, sizeof(*list));
         if (list && ipc_unpack_completions(buf, hdr.payload_len, list) == 0) {
-            if (list->scanning)
-                printf("#scanning\n");
+            ipc_print_hint(list->scanning, list->hint);
             for (uint32_t i = 0; i < list->count; i++)
                 print_colored(list->is_dirs[i] ? "D" : "F", list->paths[i]);
         } else {

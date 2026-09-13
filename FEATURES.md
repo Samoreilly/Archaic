@@ -3,9 +3,9 @@
 Status: in progress. Check boxes only after tests pass and the change is pushed.
 
 ## 1. doctor --fix + empty-Tab hint
-- [ ] `archaic-cli doctor --fix` repairs stale socket, missing user unit, missing plugins, missing config
-- [ ] Empty Tab prints one dim hint (outside roots / ignored / daemon down / indexing)
-- [ ] Tests + push
+- [x] `archaic-cli doctor --fix` repairs stale socket, missing user unit, missing plugins, missing config
+- [x] Empty Tab prints one dim hint (outside roots / ignored / daemon down / indexing)
+- [x] Tests + push
 
 ## 2. Persistent helper (one process per shell)
 - [ ] Helper stays connected to the daemon for the shell lifetime

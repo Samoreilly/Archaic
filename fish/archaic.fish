@@ -514,8 +514,13 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
     end
 
     set -l scanning 0
+    set -l hint ""
     if test (count $results) -gt 0; and test "$results[1]" = "#scanning"
         set scanning 1
+        set -e results[1]
+    end
+    if test (count $results) -gt 0; and string match -q '#hint *' -- "$results[1]"
+        set hint (string replace -r '^#hint ' '' -- "$results[1]")
         set -e results[1]
     end
 
@@ -596,8 +601,21 @@ function __archaic_do_complete -d "Query archaic daemon for completions"
         end
     end
 
-    if test $found -eq 0 -a $scanning -eq 1
-        echo "indexing…"\tarchaic is still scanning
+    if test $found -eq 0
+        switch "$hint"
+            case outside-roots
+                echo "archaic: outside scan roots — archaic-cli watch $PWD" >&2
+            case ignored
+                echo "archaic: ignored by index rules" >&2
+            case scanning
+                echo "archaic: still indexing…" >&2
+            case empty
+                echo "archaic: no matches — archaic-cli explain $typed" >&2
+            case '*'
+                if test $scanning -eq 1
+                    echo "archaic: still indexing…" >&2
+                end
+        end
     end
 end
 

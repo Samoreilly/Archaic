@@ -6,6 +6,7 @@
 #include "../src/trie.h"
 #include <errno.h>
 #include <dirent.h>
+#include <fnmatch.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -326,6 +327,36 @@ static void fs_fallback_fill(const char* expanded_prefix, int explicit_slash, in
     closedir(dp);
 }
 
+static uint8_t complete_empty_hint(daemon_state* d, const char* abs) {
+    if (!d || !abs || abs[0] == '\0')
+        return IPC_HINT_EMPTY;
+    int under = 0;
+    for (int i = 0; i < d->last_scan_path_count; i++) {
+        size_t rl = strlen(d->last_scan_paths[i]);
+        if (rl == 0)
+            continue;
+        if (strncmp(abs, d->last_scan_paths[i], rl) == 0 &&
+            (abs[rl] == '\0' || abs[rl] == '/')) {
+            under = 1;
+            break;
+        }
+    }
+    if (!under)
+        return IPC_HINT_OUTSIDE;
+    char tmp[4096];
+    strncpy(tmp, abs, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    for (char* tok = strtok(tmp, "/"); tok; tok = strtok(NULL, "/")) {
+        for (int i = 0; i < d->scanner.ignore_dir_count; i++) {
+            if (fnmatch(d->scanner.ignore_dirs[i], tok, 0) == 0)
+                return IPC_HINT_IGNORED;
+        }
+    }
+    if (atomic_load(&d->scanning))
+        return IPC_HINT_SCANNING;
+    return IPC_HINT_EMPTY;
+}
+
 /* Discard hdr.payload_len bytes so the next read starts at a header.
  * Prevents framing desync / request smuggling after a bad-length error. */
 static void drain_payload(int fd, uint32_t len) {
@@ -338,7 +369,8 @@ static void drain_payload(int fd, uint32_t len) {
     }
 }
 
-static void send_error(int fd, uint32_t req_id, int32_t code, const char* msg) {    ipc_header hdr;
+static void send_error(int fd, uint32_t req_id, int32_t code, const char* msg) {
+    ipc_header hdr;
     ipc_error_resp resp;
     resp.error_code = code;
     memset(resp.message, 0, sizeof(resp.message));
@@ -605,6 +637,12 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
     }
     dedup_free(&seen);
     ipc_pack_completions_finish(packed, packed_count);
+    if (packed_count == 0) {
+        uint8_t hint = complete_empty_hint(srv->daemon, expanded_prefix);
+        if (scanning)
+            hint = IPC_HINT_SCANNING;
+        ipc_pack_completions_set_hint(packed, hint);
+    }
     if (sr_dirs.data)
         daemon_release_scored(srv->daemon, sr_dirs);
     if (sr_files.data)

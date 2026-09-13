@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #define IPC_SOCK_PATH "/tmp/archaic-daemon.sock"
@@ -120,9 +121,16 @@ typedef struct {
     char path[4096];
 } __attribute__((packed)) ipc_select_req;
 
+#define IPC_HINT_NONE 0
+#define IPC_HINT_SCANNING 1
+#define IPC_HINT_OUTSIDE 2
+#define IPC_HINT_IGNORED 3
+#define IPC_HINT_EMPTY 4
+
 typedef struct {
     uint32_t count;
     uint8_t scanning;
+    uint8_t hint;
     uint8_t is_dirs[IPC_COMPLETE_MAX];
     float scores[IPC_COMPLETE_MAX];
     char paths[IPC_COMPLETE_MAX][4096];
@@ -161,12 +169,41 @@ static inline void ipc_pack_completions_finish(uint8_t* buf, uint32_t count) {
     memcpy(buf, &count, sizeof(count));
 }
 
+static inline void ipc_pack_completions_set_hint(uint8_t* buf, uint8_t hint) {
+    if (buf)
+        buf[5] = hint;
+}
+
+static inline const char* ipc_hint_tag(uint8_t hint) {
+    switch (hint) {
+    case IPC_HINT_SCANNING:
+        return "scanning";
+    case IPC_HINT_OUTSIDE:
+        return "outside-roots";
+    case IPC_HINT_IGNORED:
+        return "ignored";
+    case IPC_HINT_EMPTY:
+        return "empty";
+    default:
+        return NULL;
+    }
+}
+
+static inline void ipc_print_hint(uint8_t scanning, uint8_t hint) {
+    if (scanning)
+        printf("#scanning\n");
+    const char* tag = ipc_hint_tag(hint);
+    if (tag && hint != IPC_HINT_SCANNING)
+        printf("#hint %s\n", tag);
+}
+
 static inline int ipc_unpack_completions(const uint8_t* buf, size_t len, ipc_completion_list* out) {
     if (!buf || !out || len < 8)
         return -1;
     memset(out, 0, sizeof(*out));
     memcpy(&out->count, buf, sizeof(out->count));
     out->scanning = buf[4];
+    out->hint = buf[5];
     if (out->count > IPC_COMPLETE_MAX)
         out->count = IPC_COMPLETE_MAX;
     size_t pos = 8;

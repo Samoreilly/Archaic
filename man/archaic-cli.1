@@ -49,9 +49,12 @@ Detailed daemon health: pid, uptime, watcher, cache, memory, scan roots.
 .B scan-status
 Check the current scan progress and status.
 .TP
-.B doctor
+.B doctor [\-\-fix]
 Diagnose setup: config source, socket, scan paths, state file, ping, cache,
 watcher, index totals. Start here when completions are empty.
+.B --fix
+writes a default config if missing, installs shell plugins, removes a stale
+socket, and starts or restarts the user daemon.
 .TP
 .B explain \fIprefix\fR [\fIcwd\fR]
 Explain why a prefix does or does not complete: roots, ignore rules,

@@ -439,10 +439,11 @@ void store_enforce_budget(t_bucket_store* store) {
 
     /* Evict least-recently-used buckets from the tail of the LRU list */
     while (store->lru_size > 0) {
-        if (store->max_total_nodes > 0 &&
-            atomic_load(&store->total_nodes) <= store->max_total_nodes &&
-            store->max_memory_bytes > 0 &&
-            store_calculate_memory_bytes(store) <= store->max_memory_bytes)
+        bool nodes_ok = store->max_total_nodes == 0 ||
+                        atomic_load(&store->total_nodes) <= store->max_total_nodes;
+        bool mem_ok = store->max_memory_bytes == 0 ||
+                      store_calculate_memory_bytes(store) <= store->max_memory_bytes;
+        if (nodes_ok && mem_ok)
             break;
 
         t_bucket* victim = remove_last(store);

@@ -328,6 +328,9 @@ static void* scanner_worker(void* arg) {
             if (atomic_compare_exchange_strong(&scanner->last_progress_log, &last_log, now)) {
                 int files = atomic_load(&scanner->files_scanned);
                 LOG_INFO("scanner", "progress: %d dirs, %d files indexed", dirs, files);
+                /* Refresh the heap estimate on the same throttle so the
+                 * budget check below reads a live value, not a stale one. */
+                update_memory_estimate(scanner->lfu);
             }
         }
 

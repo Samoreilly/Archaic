@@ -29,6 +29,7 @@
 #include "../src/config.h"
 #include "../src/hashset.h"
 #include "../src/incremental.h"
+#include "../src/lru.h"
 #include "../src/path-utils.h"
 #include "../src/scanner.h"
 #include "../src/threadmanager.h"
@@ -1571,6 +1572,105 @@ static void test_config_validate_paths_empty(void) {
     PASS();
 }
 
+/* ── Memory budget (#5) ─────────────────────────────────────────────────── */
+
+static t_bucket_store* budget_test_store(void) {
+    t_bucket_store* s = (t_bucket_store*) calloc(1, sizeof(t_bucket_store));
+    if (!s)
+        return NULL;
+    pthread_mutex_init(&s->store_lock, NULL);
+    s->max_buckets = BUCKETS;
+    s->max_total_nodes = 0; /* node budget disabled, like the daemon default */
+    s->parent = (node*) calloc(1, sizeof(node));
+    if (!s->parent) {
+        free(s);
+        return NULL;
+    }
+    s->parent->is_parent = true;
+    insert_bucket(s, "/mem/a");
+    insert_bucket(s, "/mem/b");
+    insert_bucket(s, "/mem/c");
+    for (size_t i = 0; i < s->right_index; i++) {
+        if (!s->buckets[i] || !s->buckets[i]->dir_trie)
+            continue;
+        char buf[64];
+        for (int j = 0; j < 20; j++) {
+            snprintf(buf, sizeof(buf), "/mem/x/file%d.txt", j);
+            insert(s->buckets[i]->dir_trie, buf);
+        }
+    }
+    return s;
+}
+
+static void budget_free_store(t_bucket_store* s) {
+    if (!s)
+        return;
+    for (size_t i = 0; i < s->right_index; i++) {
+        if (s->buckets[i])
+            destroy_bucket(s->buckets[i]);
+    }
+    pthread_mutex_destroy(&s->store_lock);
+    free(s->parent);
+    free(s);
+}
+
+static void test_memory_budget_disabled(void) {
+    TEST(memory_budget_disabled);
+    t_bucket_store* s = budget_test_store();
+    ASSERT_NOT_NULL(s, "store setup");
+    ASSERT_EQ_INT(3, (int) s->right_index, "three buckets inserted");
+    store_set_max_memory(s, 0);
+    ASSERT_EQ_INT(0, store_check_memory_budget(s), "disabled budget reports 0");
+    store_enforce_budget(s);
+    ASSERT_EQ_INT(3, (int) s->right_index, "disabled budget evicts nothing");
+    budget_free_store(s);
+    PASS();
+}
+
+static void test_memory_budget_evicts_to_fit(void) {
+    TEST(memory_budget_evicts_to_fit);
+    t_bucket_store* s = budget_test_store();
+    ASSERT_NOT_NULL(s, "store setup");
+    size_t used = store_calculate_memory_bytes(s);
+    ASSERT_TRUE(used > 0, "populated store costs memory");
+    ASSERT_TRUE(store_check_memory_budget(s) == 0, "no budget set yet");
+    /* Tight but satisfiable: fixed store overhead + ~1.2 buckets, so
+     * enforcement must evict exactly two of the three equal buckets. */
+    size_t one_bucket = 0, fixed = 0, cap = 0;
+    {
+        t_bucket_store* e = (t_bucket_store*) calloc(1, sizeof(t_bucket_store));
+        ASSERT_NOT_NULL(e, "empty store setup");
+        pthread_mutex_init(&e->store_lock, NULL);
+        fixed = store_calculate_memory_bytes(e);
+        pthread_mutex_destroy(&e->store_lock);
+        free(e);
+        ASSERT_TRUE(used > fixed, "buckets cost memory beyond fixed overhead");
+        one_bucket = (used - fixed) / 3;
+        cap = fixed + one_bucket * 120 / 100;
+        store_set_max_memory(s, cap);
+    }
+    ASSERT_TRUE(store_calculate_memory_bytes(s) > cap, "store starts over budget");
+    ASSERT_TRUE(store_check_memory_budget(s) >= 100, "over budget reports >=100%");
+    store_enforce_budget(s);
+    ASSERT_EQ_INT(1, (int) s->right_index, "eviction stops with one bucket left");
+    ASSERT_TRUE(store_calculate_memory_bytes(s) <= cap, "store fits budget after evict");
+    budget_free_store(s);
+    PASS();
+}
+
+static void test_memory_budget_no_evict_under_cap(void) {
+    TEST(memory_budget_no_evict_under_cap);
+    t_bucket_store* s = budget_test_store();
+    ASSERT_NOT_NULL(s, "store setup");
+    size_t used = store_calculate_memory_bytes(s);
+    store_set_max_memory(s, used * 2);
+    ASSERT_TRUE(store_check_memory_budget(s) <= 100, "under budget reports <=100%");
+    store_enforce_budget(s);
+    ASSERT_EQ_INT(3, (int) s->right_index, "under-budget store keeps all buckets");
+    budget_free_store(s);
+    PASS();
+}
+
 int main(int argc, char* argv[]) {
     (void) argc;
     (void) argv;
@@ -1711,6 +1811,12 @@ int main(int argc, char* argv[]) {
     test_config_validate_paths();
     test_config_validate_paths_invalid();
     test_config_validate_paths_empty();
+
+    /* Memory budget */
+    printf("\n--- Memory Budget ---\n");
+    test_memory_budget_disabled();
+    test_memory_budget_evicts_to_fit();
+    test_memory_budget_no_evict_under_cap();
 
     /* Summary */
     printf("\n========================================\n");

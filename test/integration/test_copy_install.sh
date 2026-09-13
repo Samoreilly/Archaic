@@ -32,6 +32,7 @@ cleanup() {
             kill -9 "$DPID" 2>/dev/null || true
         fi
     fi
+    sleep 0.3
     rm -rf "$T"
 }
 trap cleanup EXIT INT TERM

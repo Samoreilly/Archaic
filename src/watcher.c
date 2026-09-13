@@ -26,6 +26,15 @@ fs_watcher* watcher_create(void) {
     w->fd = -1;
     w->root_count = 0;
     w->watch_count = 0;
+    /* Heap arrays: ~16MB by value would fault RSS even with zero watches. */
+    w->watch_descriptors = calloc(WATCHER_MAX_EVENTS, sizeof(int));
+    w->watch_paths = calloc(WATCHER_MAX_EVENTS, sizeof(*w->watch_paths));
+    if (!w->watch_descriptors || !w->watch_paths) {
+        free(w->watch_descriptors);
+        free(w->watch_paths);
+        free(w);
+        return NULL;
+    }
     atomic_store(&w->running, false);
     atomic_store(&w->initialized, false);
     atomic_store(&w->fallback_running, false);
@@ -40,6 +49,8 @@ void watcher_destroy(fs_watcher* w) {
     if (atomic_load(&w->running))
         watcher_stop(w);
     pthread_mutex_destroy(&w->watch_lock);
+    free(w->watch_descriptors);
+    free(w->watch_paths);
     free(w);
 }
 
@@ -322,6 +333,7 @@ static void* watcher_thread_linux(void* arg) {
                 continue;
             }
 
+            atomic_store(&w->dirty, true);
             if (w->callback.on_event) {
                 w->callback.on_event(type, event_path, event->mask & IN_ISDIR ? 1 : 0,
                                      w->callback.userdata);
@@ -454,6 +466,7 @@ static void* watcher_thread_kqueue(void* arg) {
             continue;
         }
 
+        atomic_store(&w->dirty, true);
         if (w->callback.on_event) {
             w->callback.on_event(type, watch_path, 1, w->callback.userdata);
         }
@@ -632,7 +645,11 @@ void watcher_notify_scan_complete(fs_watcher* w) {
 #endif
 }
 
+/* Test-and-clear: true once per batch of filesystem events. The daemon's
+ * rescan timer consumes this to rescan promptly instead of waiting for
+ * the full periodic interval. */
 int watcher_rescan_requested(fs_watcher* w) {
-    (void) w;
-    return 0;
+    if (!w)
+        return 0;
+    return atomic_exchange(&w->dirty, false) ? 1 : 0;
 }

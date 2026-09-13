@@ -1,23 +1,24 @@
 #include "incremental.h"
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void incremental_init(incremental_state* state) {
     if (!state)
         return;
     state->count = 0;
+    /* Heap-allocated: 10000x4KB by value would fault ~40MB on every start. */
+    state->dirs = calloc((size_t) MAX_INCR_TRACKED_DIRS, sizeof(dir_timestamp));
     pthread_mutex_init(&state->lock, NULL);
-    for (int i = 0; i < MAX_INCR_TRACKED_DIRS; i++) {
-        state->dirs[i].path[0] = '\0';
-        state->dirs[i].mtime = 0;
-        state->dirs[i].exists = false;
-    }
 }
 
 void incremental_free(incremental_state* state) {
     if (!state)
         return;
+    free(state->dirs);
+    state->dirs = NULL;
+    state->count = 0;
     pthread_mutex_destroy(&state->lock);
 }
 
@@ -106,10 +107,12 @@ void incremental_clear(incremental_state* state) {
 
     pthread_mutex_lock(&state->lock);
     state->count = 0;
-    for (int i = 0; i < MAX_INCR_TRACKED_DIRS; i++) {
-        state->dirs[i].path[0] = '\0';
-        state->dirs[i].mtime = 0;
-        state->dirs[i].exists = false;
+    if (state->dirs) {
+        for (int i = 0; i < MAX_INCR_TRACKED_DIRS; i++) {
+            state->dirs[i].path[0] = '\0';
+            state->dirs[i].mtime = 0;
+            state->dirs[i].exists = false;
+        }
     }
     pthread_mutex_unlock(&state->lock);
 }

@@ -356,9 +356,7 @@ int main(int argc, char* argv[]) {
                 watcher_add_root(daemon->watcher, scan_roots[i]);
             }
             watcher_cb_ctx wcb;
-            wcb.on_event = NULL;
-            wcb.userdata = daemon;
-            atomic_store(&daemon->watcher_dirty, false);
+            daemon_watcher_callback(&wcb, daemon);
 
             if (watcher_start(daemon->watcher, wcb) == 0) {
                 LOG_INFO("main", "filesystem watcher started");

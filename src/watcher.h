@@ -35,12 +35,17 @@ typedef struct fs_watcher {
     char roots[WATCHER_MAX_ROOTS][4096];
     int root_count;
 
-    int watch_descriptors[WATCHER_MAX_EVENTS];
-    char watch_paths[WATCHER_MAX_EVENTS][4096];
+    /* Heap-allocated (16MB+ by value): only faulted when watches exist. */
+    int* watch_descriptors;    /* [WATCHER_MAX_EVENTS] */
+    char (*watch_paths)[4096]; /* [WATCHER_MAX_EVENTS][4096] */
     int watch_count;
     pthread_mutex_t watch_lock;
 
     watcher_cb_ctx callback;
+
+    /* Set on any filesystem event; consumed by the daemon's rescan timer
+     * via watcher_rescan_requested() to trigger a timely rescan. */
+    atomic_bool dirty;
 
     int fallback_interval;
     pthread_t fallback_thread;

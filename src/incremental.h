@@ -15,7 +15,7 @@ typedef struct dir_timestamp {
 } dir_timestamp;
 
 typedef struct incremental_state {
-    dir_timestamp dirs[MAX_INCR_TRACKED_DIRS];
+    dir_timestamp* dirs; /* heap-allocated [MAX_INCR_TRACKED_DIRS] */
     int count;
     pthread_mutex_t lock;
 } incremental_state;

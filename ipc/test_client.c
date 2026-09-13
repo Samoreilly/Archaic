@@ -395,6 +395,12 @@ int main(int argc, char* argv[]) {
         if (client) {
             if (strcmp(argv[1], "watch") == 0)
                 ipc_client_scan(client, argv[2]);
+            else if (strcmp(argv[1], "unwatch") == 0) {
+                if (ipc_client_unwatch(client, argv[2]) == 0)
+                    printf("live unwatch applied (watcher + scan list, no restart)\n");
+                else
+                    printf("live unwatch failed (daemon down? file entry removed anyway)\n");
+            }
             ipc_client_disconnect(client);
         }
         return 0;

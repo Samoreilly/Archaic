@@ -25,9 +25,9 @@ Status: in progress. Check boxes only after tests pass and the change is pushed.
 - [x] Tests + push
 
 ## 5. Memory budget in doctor + enforcement
-- [ ] `doctor`/`health` report RSS vs `max_memory_mb`
-- [ ] Scanner/index sheds or refuses when over cap
-- [ ] Tests + push
+- [x] `doctor`/`health` report RSS vs `max_memory_mb`
+- [x] Scanner/index sheds or refuses when over cap
+- [x] Tests + push
 
 ## 6. Per-root policy + live unwatch
 - [ ] Per-root depth / ignore / watch in config

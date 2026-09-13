@@ -490,6 +490,15 @@ int main(int argc, char* argv[]) {
                        (unsigned long) health.buckets_indexed, (unsigned long) health.files_scanned,
                        (unsigned long) health.dirs_scanned);
                 printf("  rss:        %lu bytes\n", (unsigned long) health.estimated_memory_bytes);
+                {
+                    uint64_t cap = (uint64_t) cfg.storage.max_memory_mb * 1024ull * 1024ull;
+                    if (cap > 0) {
+                        double pct = 100.0 * (double) health.estimated_memory_bytes / (double) cap;
+                        printf("  budget:     %u MB (%.0f%% used)\n", cfg.storage.max_memory_mb, pct);
+                        if (pct > 100.0)
+                            printf("  warn:       over max_memory_mb; scanner will evict LRU buckets\n");
+                    }
+                }
                 printf("  protocol:   daemon=%d cli=%d\n", health.protocol_version,
                        IPC_PROTOCOL_VERSION);
                 if (health.protocol_version != IPC_PROTOCOL_VERSION) {

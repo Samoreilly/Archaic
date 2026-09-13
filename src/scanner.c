@@ -331,6 +331,12 @@ static void* scanner_worker(void* arg) {
             }
         }
 
+        if (scanner->lfu->max_memory_bytes > 0 &&
+            atomic_load(&scanner->lfu->estimated_memory_bytes) > scanner->lfu->max_memory_bytes) {
+            atomic_store(&scanner->stop, true);
+            LOG_WARN("scanner", "stopping scan: memory budget exceeded");
+        }
+
         for (int i = 0; i < entry_count; i++) {
             if (atomic_load(&scanner->stop))
                 break;

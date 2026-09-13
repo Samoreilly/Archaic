@@ -771,6 +771,7 @@ daemon_state* daemon_init(void) {
     state->store->max_buckets = BUCKETS;
     state->store->max_nodes_per_bucket = cfg.storage.max_nodes_per_bucket;
     state->store->max_total_nodes = cfg.storage.max_total_nodes;
+    store_set_max_memory(state->store, (size_t) cfg.storage.max_memory_mb * 1024u * 1024u);
     atomic_store(&state->store->total_nodes, 0);
     atomic_store(&state->store->estimated_memory_bytes, 0);
 
@@ -963,6 +964,7 @@ static void* scan_thread_func(void* arg) {
     atomic_store(&state->scanning, false);
 
     update_memory_estimate(state->store);
+    store_enforce_budget(state->store);
     if (state->cache)
         cache_invalidate(state->cache);
     /* Refresh inotify watches so directories created during the scan are

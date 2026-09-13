@@ -808,8 +808,8 @@ function __archaic_get_suggestion -d "Get suggestion from archaic daemon"
         return
     end
 
-    # Parse: "D /path" or "F /path"
-    set -l parts (string split " " "$output")
+    # Parse: "D /path" or "F /path" (split once: paths may contain spaces)
+    set -l parts (string split -m 1 " " -- "$output")
     if test (count $parts) -lt 2
         set -g __archaic_suggestion ""
         set -g __archaic_last_suggest_token "$prefix"
@@ -905,7 +905,8 @@ function __archaic_fetch_completions -d "Fetch completions for cycling"
     set -g __archaic_cycle_active 1
 
     for line in $results
-        set -l parts (string split " " "$line")
+        # Split once: paths may contain spaces.
+        set -l parts (string split -m 1 " " -- "$line")
         if test (count $parts) -ge 2
             set -g __archaic_cycle_completions $__archaic_cycle_completions "$parts[2]"
             set -g __archaic_cycle_full_paths $__archaic_cycle_full_paths "$parts[2]"

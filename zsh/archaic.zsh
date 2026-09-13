@@ -182,9 +182,19 @@ _archaic_resolve_paths() {
         if [[ -n "$sock" ]]; then
             _archaic_sock="$sock"
         fi
+        # Honor [daemon] max_completions like fish (default 256).
+        local cfg_max
+        cfg_max="$(sed -n '/^\[daemon\]/,/^\[/p' "$config_file" | grep 'max_completions' | sed 's/.*= *\([0-9]*\).*/\1/' 2>/dev/null)"
+        if [[ "$cfg_max" =~ ^[0-9]+$ ]]; then
+            (( cfg_max < 1 )) && cfg_max=1
+            (( cfg_max > 256 )) && cfg_max=256
+            _archaic_max_completions="$cfg_max"
+        fi
     fi
 }
 
+# Default cap; _archaic_resolve_paths may raise it from config (max 256).
+_archaic_max_completions=256
 _archaic_resolve_paths
 
 # ── Bounded daemon calls (Tab must never block) ──────────────────────────────
@@ -244,14 +254,16 @@ _archaic_ping() {
 # single shell, so there is no per-shell PID to track here.
 
 # ── Daemon health check ──────────────────────────────────────────────────────
+# Self-healing like fish: a live socket always clears the latched state.
 _archaic_daemon_healthy=1
 
 _archaic_check_daemon() {
+    if [[ -S "$_archaic_sock" ]]; then
+        _archaic_daemon_healthy=1
+        return 0
+    fi
     if [[ "$_archaic_daemon_healthy" -eq 0 ]]; then
         return 1
-    fi
-    if [[ -S "$_archaic_sock" ]]; then
-        return 0
     fi
     _archaic_daemon_healthy=0
     return 1
@@ -433,10 +445,10 @@ _archaic_do_complete() {
         found=1
     fi
 
-    results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" 50 "$PWD" "$resolved")")"
+    results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" "$_archaic_max_completions" "$PWD" "$resolved")")"
 
     if [[ -z "$results" ]]; then
-        results="$(_archaic_c complete "$resolved" 50 "$PWD" "$dirs_only")"
+        results="$(_archaic_c complete "$resolved" "$_archaic_max_completions" "$PWD" "$dirs_only")"
     fi
 
     local hint=""
@@ -484,9 +496,9 @@ _archaic_do_complete() {
             fuzzy_token=1
         fi
         local fuzzy_results=""
-        fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q 50")"
+        fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q $_archaic_max_completions")"
         if [[ -z "$fuzzy_results" ]]; then
-            fuzzy_results="$(_archaic_c fuzzy "$fuzzy_q" 50)"
+            fuzzy_results="$(_archaic_c fuzzy "$fuzzy_q" "$_archaic_max_completions")"
         fi
 
         while IFS= read -r line; do
@@ -706,9 +718,9 @@ _archaic_fetch_completions() {
     local cmd="$(_archaic_active_cmd_from_line "$LBUFFER")"
     [[ -z "$cmd" ]] && cmd="${LBUFFER%% *}"
     local results=""
-    results="$(_archaic_q "complete $resolved 20 $PWD $cmd")"
+    results="$(_archaic_q "complete $resolved $_archaic_max_completions $PWD $cmd")"
     if [[ -z "$results" ]]; then
-        results="$(_archaic_c complete "$resolved" 20)" || return
+        results="$(_archaic_c complete "$resolved" "$_archaic_max_completions")" || return
     fi
 
     _archaic_cycle_matches=()

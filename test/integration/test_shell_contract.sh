@@ -31,8 +31,8 @@ DSOCK="$T/daemon.sock"
 export XDG_CONFIG_HOME="$T/config"
 export XDG_CACHE_HOME="$CACHE"
 export ARCHAIC_CONFIG="$T/config.toml"
-mkdir -p "$FIX/alpha" "$FIX/beta" "$CACHE" "$XDG_CONFIG_HOME"
-touch "$FIX/alpha/a.txt" "$FIX/beta/b.txt" "$FIX/gamma.txt" "$FIX/delta.md"
+mkdir -p "$FIX/alpha" "$FIX/beta" "$FIX/sp ace" "$CACHE" "$XDG_CONFIG_HOME"
+touch "$FIX/alpha/a.txt" "$FIX/beta/b.txt" "$FIX/gamma.txt" "$FIX/delta.md" "$FIX/sp ace/f.txt"
 
 cli() { timeout 5 "$CLI" --sock "$DSOCK" "$@" 2>/dev/null; }
 
@@ -126,7 +126,8 @@ bash_complete() { # $1 $2... = COMP_WORDS
 }
 
 cli_set() { # remaining args: complete args; prints normalized set
-    cli "$@" | grep -E '^[DF] ' | awk '{print $2}' | normset "$FIX"
+    # Strip the "D "/"F " prefix (sed, not awk: paths may contain spaces).
+    cli "$@" | grep -E '^[DF] ' | sed 's/^[DF] //' | normset "$FIX"
 }
 
 check_agree() { # $1 = label, $2 = expected set, $3... = actual sets
@@ -159,6 +160,17 @@ EXP="$(cli_set complete "$FIX/gam" 20 "$FIX")"
 check_agree "file prefix agrees" "$EXP" \
     "$(fish_complete "vim gam")" \
     "$(bash_complete "vim gam")"
+
+# ── 3b. Paths with spaces survive end to end ─────────────────────────────────
+EXP="$(cli_set complete "$FIX/sp" 20 "$FIX")"
+if echo "$EXP" | grep -qF "$FIX/sp ace"; then
+    ok "cli returns space paths intact"
+else
+    bad "cli returns space paths intact" "got [$EXP]"
+fi
+check_agree "space paths agree" "$EXP" \
+    "$(fish_complete "cd $FIX/sp")" \
+    "$(bash_complete "cd $FIX/sp")"
 
 # ── 4. Empty token lists the directory ───────────────────────────────────────
 # The dir itself renders absolute in the CLI but as a basename in shells;
@@ -283,6 +295,43 @@ fish_ghost() { # $1 = space-separated tokens, first line = current token
     || bad "fish ghost stays off in command position" "got '$(fish_ghost "vim")'"
 [ -z "$(fish_ghost "git al")" ] && ok "fish ghost stays off for non-file commands" \
     || bad "fish ghost stays off for non-file commands" "got '$(fish_ghost "git al")'"
+
+# ── 10c. Static pins: no bare space-split, no hardcoded limits ───────────────
+if grep -q 'string split " "' "$ROOT/fish/archaic.fish"; then
+    bad "fish never bare-splits on space"
+else
+    ok "fish never bare-splits on space"
+fi
+if grep -Eq '"(complete|fuzzy) [^"]* (50|20)([" ]|$)' "$ROOT/bash/archaic.bash" \
+    || grep -Eq '"(complete|fuzzy) [^"]* (50|20)([" ]|$)' "$ROOT/zsh/archaic.zsh"; then
+    bad "bash/zsh use the shared completion cap, not 50/20"
+else
+    ok "bash/zsh use the shared completion cap, not 50/20"
+fi
+
+# ── 10d. Health latch clears when the daemon returns ─────────────────────────
+for sh in bash zsh; do
+    if [ "$sh" = bash ]; then
+        SRC="$ROOT/bash/archaic.bash"
+        LISTENSET="_archaic_helper_listen=$T/x.sock"
+    else
+        SRC="$ROOT/zsh/archaic.zsh"
+        LISTENSET="_archaic_helper_listen=$T/x.sock"
+    fi
+    if env $ENV $sh $([ "$sh" = zsh ] && echo -f) -c "
+        source $SRC >/dev/null 2>&1
+        $LISTENSET
+        _archaic_sock=/tmp/definitely-not-here.sock
+        _archaic_check_daemon; first=\$?
+        _archaic_sock=$DSOCK
+        _archaic_check_daemon; second=\$?
+        [ \$first -ne 0 ] && [ \$second -eq 0 ]
+    " 2>/dev/null; then
+        ok "$sh health latch clears on recovery"
+    else
+        bad "$sh health latch clears on recovery"
+    fi
+done
 
 # ── 11. Regression: shell queries never harm the daemon socket ───────────────# (fish once deleted the live socket on first use via a broken ping.)
 if env $ENV fish -c "source $ROOT/fish/archaic.fish; __archaic_ping" >/dev/null 2>&1; then

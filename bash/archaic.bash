@@ -83,9 +83,19 @@ _archaic_resolve_paths() {
         if [[ -n "$sock" ]]; then
             _archaic_sock="$sock"
         fi
+        # Honor [daemon] max_completions like fish (default 256).
+        local cfg_max
+        cfg_max="$(sed -n '/^\[daemon\]/,/^\[/p' "$config_file" | grep 'max_completions' | sed 's/.*= *\([0-9]*\).*/\1/' 2>/dev/null)"
+        if [[ "$cfg_max" =~ ^[0-9]+$ ]]; then
+            (( cfg_max < 1 )) && cfg_max=1
+            (( cfg_max > 256 )) && cfg_max=256
+            _archaic_max_completions="$cfg_max"
+        fi
     fi
 }
 
+# Default cap; _archaic_resolve_paths may raise it from config (max 256).
+_archaic_max_completions=256
 _archaic_resolve_paths
 
 # ── Bounded daemon calls (Tab must never block) ──────────────────────────────
@@ -186,14 +196,17 @@ _archaic_expand_path() {
 # single shell, so there is no per-shell PID to reap here.
 
 # ── Daemon health check ──────────────────────────────────────────────────────
+# Self-healing like fish: a live socket always clears the latched state so
+# a restarted daemon works without opening a new shell.
 _archaic_daemon_healthy=1
 
 _archaic_check_daemon() {
+    if [[ -S "$_archaic_sock" ]]; then
+        _archaic_daemon_healthy=1
+        return 0
+    fi
     if [[ "$_archaic_daemon_healthy" -eq 0 ]]; then
         return 1
-    fi
-    if [[ -S "$_archaic_sock" ]]; then
-        return 0
     fi
     _archaic_daemon_healthy=0
     return 1
@@ -394,9 +407,9 @@ _archaic_do_complete() {
     # Persistent helper first (one process per user, daemon socket kept warm);
     # falls back to one-shot helper, then to archaic-cli.
     local results=""
-    results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" 50 "$PWD" "$resolved")")"
+    results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" "$_archaic_max_completions" "$PWD" "$resolved")")"
     if [[ -z "$results" ]]; then
-        results="$(_archaic_c complete "$resolved" 50 "$PWD" "$dirs_only")" || return
+        results="$(_archaic_c complete "$resolved" "$_archaic_max_completions" "$PWD" "$dirs_only")" || return
     fi
 
     local found=0
@@ -460,9 +473,9 @@ _archaic_do_complete() {
             fuzzy_token=1
         fi
         local fuzzy_results=""
-        fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q 50")"
+        fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q $_archaic_max_completions")"
         if [[ -z "$fuzzy_results" ]]; then
-            fuzzy_results="$(_archaic_c fuzzy "$fuzzy_q" 50)" || return
+            fuzzy_results="$(_archaic_c fuzzy "$fuzzy_q" "$_archaic_max_completions")" || return
         fi
 
         while IFS= read -r line; do

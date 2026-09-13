@@ -37,7 +37,7 @@ cd Archaic
 
 `install.sh` copies files into `~/.local/bin` and your shell config. You do not need to keep the clone.
 
-Default index is existing dirs among `~/src`, `~/projects`, `~/dev`, `~/code`, `~/git`, `~/samdev`, `~/work` — not all of `$HOME`.
+Default index is existing dirs among `~/src`, `~/projects`, `~/project`, `~/dev`, `~/code`, `~/git`, `~/repos`, `~/samdev`, `~/work` — not all of `$HOME`. (If none of those exist, it falls back to `$HOME`.)
 
 ```bash
 archaic-cli doctor

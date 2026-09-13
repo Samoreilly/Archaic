@@ -1563,6 +1563,10 @@ void daemon_record_selection(daemon_state* state, const char* path) {
 
     session_record_selection(path);
 
+    /* Accept learning changes ranking immediately: expire cached orderings
+     * so the next Tab reflects the selection instead of stale scores. */
+    cache_invalidate(state->cache);
+
     struct stat st;
     bool is_dir = (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
     daemon_touch_recent(state, path, is_dir);

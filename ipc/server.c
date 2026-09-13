@@ -592,22 +592,6 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
                 }
             }
 
-            if (req->cwd[0] != '\0') {
-                size_t cwd_len = strlen(req->cwd);
-                int match = 0;
-                if (effective_path_len == cwd_len && strncmp(p, req->cwd, cwd_len) == 0)
-                    match = 1;
-                else if (path_len == cwd_len + 1 && p[cwd_len] == '/' &&
-                         strncmp(p, req->cwd, cwd_len) == 0)
-                    match = 1;
-                else if (cwd_len == effective_path_len + 1 &&
-                         req->cwd[effective_path_len] == '/' &&
-                         strncmp(p, req->cwd, effective_path_len) == 0)
-                    match = 1;
-                if (match)
-                    continue;
-            }
-
             char clean[4096];
             if (path_len > 0 && p[path_len - 1] == '/') {
                 memcpy(clean, p, path_len - 1);

@@ -132,7 +132,20 @@ end
 # recv timeout so we do not need timeout(1). Fall back to one-shot.
 function __archaic_ensure_serve -d "Start persistent helper if needed"
     if test -S "$archaic_helper_listen"
-        return 0
+        # Serve writes "$listen.pid". A stale socket (SIGKILLed serve) must
+        # not pin every Tab to a failing --ask + one-shot fallback.
+        set -l pidf "$archaic_helper_listen.pid"
+        if test -f "$pidf"
+            set -l pid (cat "$pidf" 2>/dev/null)
+            if test -n "$pid"; and kill -0 "$pid" 2>/dev/null
+                return 0
+            end
+            rm -f "$archaic_helper_listen" "$pidf" 2>/dev/null
+        else
+            # No pid file (older serve): trust the socket; --ask failure
+            # below still falls back to one-shot.
+            return 0
+        end
     end
     if not test -x "$archaic_helper_path"
         return 1
@@ -1104,7 +1117,12 @@ function __archaic_status -d "Show archaic daemon status"
         echo "Archaic daemon: not running"
     end
     echo "CLI: $archaic_cli_path"
-    echo "Helper: $archaic_helper_path (one-shot per Tab)"
+    echo "Helper: $archaic_helper_path (persistent via $archaic_helper_listen)"
+    if test -S "$archaic_helper_listen"
+        echo "Helper serve: running ($archaic_helper_listen)"
+    else
+        echo "Helper serve: not running (one-shot fallback)"
+    end
     echo "Socket: $archaic_sock_path"
     echo "Commands: $__archaic_commands"
     echo "Accept hint: Ctrl+Space (Alt+Down/Up to cycle)"

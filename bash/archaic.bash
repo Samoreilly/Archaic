@@ -100,7 +100,19 @@ _archaic_to() {
 }
 
 _archaic_ensure_serve() {
-    [[ -S "${_archaic_helper_listen:-}" ]] && return 0
+    if [[ -S "${_archaic_helper_listen:-}" ]]; then
+        # Serve writes "$listen.pid". A stale socket (SIGKILLed serve) must
+        # not pin every Tab to a failing --ask + one-shot fallback.
+        local _pidf="${_archaic_helper_listen}.pid" _pid=""
+        if [[ -f "$_pidf" ]]; then
+            _pid="$(cat "$_pidf" 2>/dev/null)"
+        fi
+        if [[ -n "$_pid" ]] && kill -0 "$_pid" 2>/dev/null; then
+            return 0
+        fi
+        # Stale or orphaned socket: clear it so we can re-serve below.
+        rm -f "$_archaic_helper_listen" "$_pidf" 2>/dev/null
+    fi
     [[ -x "${_archaic_helper:-}" ]] || return 1
     "$_archaic_helper" "$_archaic_sock" --serve "$_archaic_helper_listen" >/dev/null 2>&1 &
     disown 2>/dev/null || true
@@ -169,32 +181,9 @@ _archaic_expand_path() {
     echo "$expanded"
 }
 
-# ── Helper lifecycle ─────────────────────────────────────────────────────────
-_archaic_helper_pid=""
-
-_archaic_ensure_helper() {
-    if [[ -n "$_archaic_helper_pid" ]]; then
-        if kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-            return
-        fi
-        _archaic_helper_pid=""
-    fi
-
-    if [[ -z "$_archaic_helper" || ! -x "$_archaic_helper" ]]; then
-        return
-    fi
-
-    "$_archaic_helper" "$_archaic_sock" </dev/null >/dev/null 2>&1 &
-    _archaic_helper_pid=$!
-}
-
 # ── Cleanup on exit ──────────────────────────────────────────────────────────
-_archaic_cleanup() {
-    if [[ -n "$_archaic_helper_pid" ]]; then
-        kill "$_archaic_helper_pid" 2>/dev/null
-    fi
-}
-trap _archaic_cleanup EXIT
+# Persistent helper is a per-user singleton (shared socket); it outlives a
+# single shell, so there is no per-shell PID to reap here.
 
 # ── Daemon health check ──────────────────────────────────────────────────────
 _archaic_daemon_healthy=1
@@ -394,12 +383,10 @@ _archaic_do_complete() {
 
     local norm_resolved="${resolved%/}"
 
-    _archaic_ensure_helper
-
+    # Persistent helper first (one process per user, daemon socket kept warm);
+    # falls back to one-shot helper, then to archaic-cli.
     local results=""
-    if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-        results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" 50 "$PWD" "$resolved")")"
-    fi
+    results="$(_archaic_q "$(printf 'complete\t%s\t%s\t%s\t%s' "$dirs_only" 50 "$PWD" "$resolved")")"
     if [[ -z "$results" ]]; then
         results="$(_archaic_c complete "$resolved" 50 "$PWD" "$dirs_only")" || return
     fi
@@ -462,9 +449,7 @@ _archaic_do_complete() {
             fuzzy_token=1
         fi
         local fuzzy_results=""
-        if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-            fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q 50")"
-        fi
+        fuzzy_results="$(_archaic_q "fuzzy $fuzzy_q 50")"
         if [[ -z "$fuzzy_results" ]]; then
             fuzzy_results="$(_archaic_c fuzzy "$fuzzy_q" 50)" || return
         fi
@@ -580,11 +565,11 @@ archaic-status() {
         echo "Archaic daemon: not running"
     fi
     echo "CLI: $_archaic_cli"
-    echo "Helper: ${_archaic_helper:-not found}"
-    if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-        echo "Helper PID: $_archaic_helper_pid (running)"
+    echo "Helper: ${_archaic_helper:-not found} (persistent via ${_archaic_helper_listen:-?})"
+    if [[ -S "${_archaic_helper_listen:-}" ]]; then
+        echo "Helper serve: running (${_archaic_helper_listen})"
     else
-        echo "Helper PID: (not running)"
+        echo "Helper serve: not running (one-shot fallback)"
     fi
     echo "Socket: $_archaic_sock"
     echo "Commands: ${_archaic_commands[*]}"
@@ -634,13 +619,9 @@ _archaic_get_suggestion() {
     cmd="$(_archaic_active_cmd_from_line "$READLINE_LINE" "$READLINE_POINT")"
     [[ -z "$cmd" ]] && cmd="${READLINE_LINE%% *}"
 
-    _archaic_ensure_helper
-
-    # Query daemon (try helper first, then CLI)
+    # Query daemon (persistent helper first, then CLI)
     local output=""
-    if [[ -n "$_archaic_helper_pid" ]] && kill -0 "$_archaic_helper_pid" 2>/dev/null; then
-        output="$(_archaic_q "complete $resolved 1 $PWD $cmd")"
-    fi
+    output="$(_archaic_q "complete $resolved 1 $PWD $cmd")"
     if [[ -z "$output" ]]; then
         output="$(_archaic_c complete "$resolved" 1)" || return
     fi

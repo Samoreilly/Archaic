@@ -123,8 +123,19 @@ static void helper_disconnect(helper_conn* conn) {
 }
 
 static int helper_ensure_connected(helper_conn* conn) {
-    if (conn->fd >= 0)
-        return 0;
+    if (conn->fd >= 0) {
+        /* The daemon never pushes, so a readable daemon socket means the
+         * peer closed (e.g. daemon restart). Reconnect proactively so the
+         * first query after a restart succeeds instead of failing once. */
+        char b;
+        ssize_t r = recv(conn->fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
+            helper_disconnect(conn);
+        else if (r < 0)
+            return 0;
+        else
+            helper_disconnect(conn); /* unexpected data: resync via reconnect */
+    }
     return helper_connect(conn);
 }
 

@@ -11,23 +11,23 @@ Status: in progress. Check boxes only after tests pass and the change is pushed.
 - [x] Helper stays connected to the daemon for the shell lifetime
 - [x] Shells do not fork `timeout` + helper + cli on every Tab
 - [x] Fallback to one-shot if persist fails
-- [x] Tests + push
+- [ ] Tests + push (`test/integration/test_persistent_helper.sh`: 15/15 pass; awaiting push)
 
 ## 3. Recent-first ranking + accept learning
-- [x] Last-used / cwd-proximate paths beat alphabetical siblings
-- [x] Accept (Tab/ghost/cd) records selection and affects next Tab
-- [x] Tests + push
+- [ ] Last-used / cwd-proximate paths beat alphabetical siblings
+- [ ] Accept (Tab/ghost/cd) records selection and affects next Tab
+- [ ] Tests + push
 
 ## 4. Copy-install + generated config + honest README
-- [x] `install.sh` copies plugins (no clone symlink requirement)
-- [x] Writes `~/.config/archaic/config.toml` if missing
-- [x] README matches actual roots / install / commands
-- [x] Tests + push
+- [ ] `install.sh` copies plugins (no clone symlink requirement)
+- [ ] Writes `~/.config/archaic/config.toml` if missing
+- [ ] README matches actual roots / install / commands
+- [ ] Tests + push
 
 ## 5. Memory budget in doctor + enforcement
-- [x] `doctor`/`health` report RSS vs `max_memory_mb`
-- [x] Scanner/index sheds or refuses when over cap
-- [x] Tests + push
+- [ ] `doctor`/`health` report RSS vs `max_memory_mb`
+- [ ] Scanner/index sheds or refuses when over cap
+- [ ] Tests + push
 
 ## 6. Per-root policy + live unwatch
 - [ ] Per-root depth / ignore / watch in config

@@ -8,8 +8,10 @@
 # ── Global state ──────────────────────────────────────────────────────────────
 if set -q XDG_RUNTIME_DIR; and test -n "$XDG_RUNTIME_DIR"
     set -g archaic_sock_path "$XDG_RUNTIME_DIR/archaic.sock"
+    set -g archaic_helper_listen "$XDG_RUNTIME_DIR/archaic-helper.sock"
 else
     set -g archaic_sock_path /tmp/archaic-(id -u).sock
+    set -g archaic_helper_listen /tmp/archaic-helper-(id -u).sock
 end
 set -g __archaic_daemon_healthy 1
 set -g __archaic_version_checked 0
@@ -126,12 +128,33 @@ if test -n "$config_file"
 end
 
 # ── Bounded daemon calls (Tab must never block) ───────────────────────────────
-# One-shot helper per query: no fifos, no persistent process, no fifo-open
-# deadlocks. Every call is capped so a wedged daemon degrades to Fish's
-# builtin completion instead of freezing the terminal.
-function __archaic_helper_query -a line -d "One-shot helper query with timeout"
+# One persistent helper keeps the daemon socket warm. --ask has a 400ms
+# recv timeout so we do not need timeout(1). Fall back to one-shot.
+function __archaic_ensure_serve -d "Start persistent helper if needed"
+    if test -S "$archaic_helper_listen"
+        return 0
+    end
     if not test -x "$archaic_helper_path"
         return 1
+    end
+    "$archaic_helper_path" "$archaic_sock_path" --serve "$archaic_helper_listen" >/dev/null 2>&1 &
+    disown 2>/dev/null
+    for i in 1 2 3 4 5 6 7 8
+        if test -S "$archaic_helper_listen"
+            return 0
+        end
+        sleep 0.05
+    end
+    return 1
+end
+
+function __archaic_helper_query -a line -d "Query persistent helper, else one-shot"
+    if not test -x "$archaic_helper_path"
+        return 1
+    end
+    if __archaic_ensure_serve
+        printf '%s\n' "$line" | "$archaic_helper_path" --ask "$archaic_helper_listen" 2>/dev/null
+        and return 0
     end
     if command -sq timeout
         printf '%s\n' "$line" | timeout $__archaic_query_timeout "$archaic_helper_path" "$archaic_sock_path" 2>/dev/null

@@ -147,8 +147,10 @@ _archaic_resolve_paths() {
 
     if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
         _archaic_sock="$XDG_RUNTIME_DIR/archaic.sock"
+        _archaic_helper_listen="$XDG_RUNTIME_DIR/archaic-helper.sock"
     else
         _archaic_sock="/tmp/archaic-$(id -u).sock"
+        _archaic_helper_listen="/tmp/archaic-helper-$(id -u).sock"
     fi
 
     # Single source of truth: ask archaic-cli (C TOML parser) first.
@@ -196,8 +198,24 @@ _archaic_to() {
     fi
 }
 
+_archaic_ensure_serve() {
+    [[ -S "${_archaic_helper_listen:-}" ]] && return 0
+    [[ -x "${_archaic_helper:-}" ]] || return 1
+    "$_archaic_helper" "$_archaic_sock" --serve "$_archaic_helper_listen" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5 6 7 8; do
+        [[ -S "$_archaic_helper_listen" ]] && return 0
+        sleep 0.05
+    done
+    return 1
+}
+
 _archaic_q() {
     [[ -x "${_archaic_helper:-}" ]] || return 1
+    if _archaic_ensure_serve; then
+        printf '%s\n' "$1" | "$_archaic_helper" --ask "$_archaic_helper_listen" 2>/dev/null && return 0
+    fi
     printf '%s\n' "$1" | _archaic_to 0.4 "$_archaic_helper" "$_archaic_sock" 2>/dev/null
 }
 

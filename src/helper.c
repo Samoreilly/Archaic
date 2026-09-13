@@ -21,11 +21,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -465,20 +468,240 @@ static int cmd_select(helper_conn* conn, const char* path) {
     return hdr.msg_type == IPC_MSG_OK ? 0 : -1;
 }
 
-/* ------------------------------------------------------------------ */
-/* Main loop                                                           */
-/* ------------------------------------------------------------------ */
+static int dispatch_line(helper_conn* conn, const char* line, int fifo_mode) {
+    char cmd[64] = {0};
+    if (sscanf(line, "%63s", cmd) < 1)
+        return 0;
+
+    int rc = -1;
+
+    if (strcmp(cmd, "complete") == 0) {
+        char prefix[4096] = {0};
+        char cwd_path[4096] = {0};
+        char dirs_only_str[8] = {0};
+        uint32_t limit = 50;
+        int dirs_only = 0;
+        if (strchr(line, '\t')) {
+            char* save = NULL;
+            char buf[8192];
+            strncpy(buf, line, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            strtok_r(buf, "\t", &save);
+            char* d_tok = strtok_r(NULL, "\t", &save);
+            char* l_tok = strtok_r(NULL, "\t", &save);
+            char* c_tok = strtok_r(NULL, "\t", &save);
+            char* p_tok = strtok_r(NULL, "\t", &save);
+            if (d_tok && (strcmp(d_tok, "1") == 0 || strcmp(d_tok, "true") == 0))
+                dirs_only = 1;
+            if (l_tok)
+                limit = (uint32_t) atoi(l_tok);
+            if (c_tok)
+                strncpy(cwd_path, c_tok, sizeof(cwd_path) - 1);
+            if (p_tok)
+                strncpy(prefix, p_tok, sizeof(prefix) - 1);
+            if (p_tok)
+                rc = cmd_complete(conn, prefix, limit, cwd_path, dirs_only);
+        } else {
+            int n = sscanf(line, "%*s %4095s %u %4095s %7s", prefix, &limit, cwd_path,
+                           dirs_only_str);
+            if (n >= 4 && (strcmp(dirs_only_str, "1") == 0 || strcmp(dirs_only_str, "true") == 0))
+                dirs_only = 1;
+            if (n >= 1)
+                rc = cmd_complete(conn, prefix, limit, cwd_path, dirs_only);
+        }
+    } else if (strcmp(cmd, "suggest") == 0) {
+        char prefix[4096] = {0};
+        char cwd_path[4096] = {0};
+        if (sscanf(line, "%*s %4095s %4095s", prefix, cwd_path) >= 1)
+            rc = cmd_suggest(conn, prefix, cwd_path);
+    } else if (strcmp(cmd, "query") == 0) {
+        char cwd[4096] = {0};
+        char input[4096] = {0};
+        if (sscanf(line, "%*s %4095s", cwd) == 1) {
+            const char* p = line + 5;
+            while (*p == ' ')
+                p++;
+            while (*p && *p != ' ')
+                p++;
+            while (*p == ' ')
+                p++;
+            if (*p)
+                strncpy(input, p, sizeof(input) - 1);
+            rc = cmd_query(conn, cwd, input);
+        }
+    } else if (strcmp(cmd, "ping") == 0) {
+        rc = cmd_ping(conn);
+    } else if (strcmp(cmd, "metrics") == 0) {
+        rc = cmd_metrics(conn);
+    } else if (strcmp(cmd, "scan-status") == 0) {
+        rc = cmd_scan_status(conn);
+    } else if (strcmp(cmd, "fuzzy") == 0) {
+        char prefix[4096] = {0};
+        uint32_t limit = 50;
+        int n = sscanf(line, "%*s %4095s %u", prefix, &limit);
+        if (n >= 1)
+            rc = cmd_fuzzy(conn, prefix, limit);
+    } else if (strcmp(cmd, "select") == 0) {
+        char path[4096] = {0};
+        if (sscanf(line, "%*s %4095s", path) >= 1)
+            rc = cmd_select(conn, path);
+    } else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
+        return 1;
+    } else {
+        fprintf(stderr, "helper: unknown command: %s\n", cmd);
+        rc = 0;
+    }
+
+    if (rc < 0)
+        fprintf(stderr, "helper: command '%s' failed\n", cmd);
+    if (fifo_mode)
+        fputs(".\n", stdout);
+    fflush(stdout);
+    return 0;
+}
+
+static void helper_default_listen(char* buf, size_t n) {
+    const char* rt = getenv("XDG_RUNTIME_DIR");
+    if (rt && rt[0])
+        snprintf(buf, n, "%s/archaic-helper.sock", rt);
+    else
+        snprintf(buf, n, "/tmp/archaic-helper-%d.sock", (int) getuid());
+}
+
+static int helper_serve(const char* daemon_sock, const char* listen_path) {
+    helper_conn conn;
+    helper_conn_init(&conn);
+    strncpy(conn.sock_path, daemon_sock, sizeof(conn.sock_path) - 1);
+    if (helper_connect(&conn) != 0)
+        return 1;
+
+    unlink(listen_path);
+    int lfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (lfd < 0) {
+        helper_disconnect(&conn);
+        return 1;
+    }
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, listen_path, sizeof(addr.sun_path) - 1);
+    mode_t old = umask(077);
+    if (bind(lfd, (struct sockaddr*) &addr, sizeof(addr)) < 0 || listen(lfd, 32) < 0) {
+        umask(old);
+        close(lfd);
+        helper_disconnect(&conn);
+        return 1;
+    }
+    umask(old);
+
+    char pidp[4096];
+    snprintf(pidp, sizeof(pidp), "%s.pid", listen_path);
+    FILE* pf = fopen(pidp, "w");
+    if (pf) {
+        fprintf(pf, "%d\n", getpid());
+        fclose(pf);
+    }
+
+    fcntl(lfd, F_SETFL, O_NONBLOCK);
+    while (running) {
+        struct pollfd pfd = {.fd = lfd, .events = POLLIN, .revents = 0};
+        int pr = poll(&pfd, 1, 200);
+        if (pr <= 0)
+            continue;
+        int fd = accept(lfd, NULL, NULL);
+        if (fd < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
+            break;
+        }
+        char line[8192];
+        size_t n = 0;
+        while (n + 1 < sizeof(line)) {
+            ssize_t r = read(fd, line + n, 1);
+            if (r <= 0)
+                break;
+            if (line[n] == '\n')
+                break;
+            n += (size_t) r;
+        }
+        line[n] = '\0';
+        if (n > 0 && line[n - 1] == '\r')
+            line[n - 1] = '\0';
+        int saved = dup(STDOUT_FILENO);
+        if (saved >= 0)
+            dup2(fd, STDOUT_FILENO);
+        if (line[0])
+            dispatch_line(&conn, line, 0);
+        fflush(stdout);
+        if (saved >= 0) {
+            dup2(saved, STDOUT_FILENO);
+            close(saved);
+        }
+        close(fd);
+    }
+    close(lfd);
+    unlink(listen_path);
+    unlink(pidp);
+    helper_disconnect(&conn);
+    return 0;
+}
+
+static int helper_ask(const char* listen_path, const char* line) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return 1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, listen_path, sizeof(addr.sun_path) - 1);
+    if (connect(fd, (struct sockaddr*) &addr, sizeof(addr)) < 0) {
+        close(fd);
+        return 1;
+    }
+    struct timeval tv = {.tv_sec = 0, .tv_usec = 400000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    char buf[8192];
+    int len = snprintf(buf, sizeof(buf), "%s\n", line ? line : "");
+    if (len < 0 || write(fd, buf, (size_t) len) < 0) {
+        close(fd);
+        return 1;
+    }
+    shutdown(fd, SHUT_WR);
+    char out[4096];
+    ssize_t r;
+    while ((r = read(fd, out, sizeof(out))) > 0)
+        fwrite(out, 1, (size_t) r, stdout);
+    close(fd);
+    return 0;
+}
 
 int main(int argc, char* argv[]) {
     const char* sock_path = NULL;
     const char* cmd_fifo = NULL;
     const char* out_fifo = NULL;
+    const char* serve_listen = NULL;
+    const char* ask_listen = NULL;
     int fifo_mode = 0;
+    int serve_mode = 0;
+    int ask_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
             printf("archaic-helper 0.9.0\n");
             return 0;
+        }
+        if (strcmp(argv[i], "--serve") == 0) {
+            serve_mode = 1;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                serve_listen = argv[++i];
+            continue;
+        }
+        if (strcmp(argv[i], "--ask") == 0) {
+            ask_mode = 1;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                ask_listen = argv[++i];
+            continue;
         }
         if (strcmp(argv[i], "--cmd-fifo") == 0 && i + 1 < argc) {
             cmd_fifo = argv[++i];
@@ -492,6 +715,19 @@ int main(int argc, char* argv[]) {
             sock_path = argv[i];
     }
 
+    char listen_buf[4096];
+    if (ask_mode) {
+        if (!ask_listen) {
+            helper_default_listen(listen_buf, sizeof(listen_buf));
+            ask_listen = listen_buf;
+        }
+        char line[8192];
+        if (!fgets(line, sizeof(line), stdin))
+            return 1;
+        line[strcspn(line, "\r\n")] = '\0';
+        return helper_ask(ask_listen, line);
+    }
+
     if (!sock_path) {
         sock_path = IPC_SOCK_PATH;
         archaic_config cfg;
@@ -499,6 +735,18 @@ int main(int argc, char* argv[]) {
         if (config_load_default(&cfg) == 0 && cfg.daemon.socket_path[0] != '\0') {
             sock_path = cfg.daemon.socket_path;
         }
+    }
+
+    if (serve_mode) {
+        if (!serve_listen) {
+            helper_default_listen(listen_buf, sizeof(listen_buf));
+            serve_listen = listen_buf;
+        }
+        check_color_env();
+        signal(SIGINT, handle_signal);
+        signal(SIGTERM, handle_signal);
+        signal(SIGPIPE, SIG_IGN);
+        return helper_serve(sock_path, serve_listen);
     }
 
     if (cmd_fifo) {
@@ -534,106 +782,11 @@ int main(int argc, char* argv[]) {
 
     char line[8192];
     while (running && fgets(line, sizeof(line), stdin)) {
-        /* Strip trailing newline */
         line[strcspn(line, "\r\n")] = '\0';
         if (line[0] == '\0')
             continue;
-
-        /* Parse command name */
-        char cmd[64] = {0};
-        if (sscanf(line, "%63s", cmd) < 1)
-            continue;
-
-        int rc = -1;
-
-        if (strcmp(cmd, "complete") == 0) {
-            char prefix[4096] = {0};
-            char cwd_path[4096] = {0};
-            char dirs_only_str[8] = {0};
-            uint32_t limit = 50;
-            int dirs_only = 0;
-            if (strchr(line, '\t')) {
-                char* save = NULL;
-                char buf[8192];
-                strncpy(buf, line, sizeof(buf) - 1);
-                buf[sizeof(buf) - 1] = '\0';
-                strtok_r(buf, "\t", &save);
-                char* d_tok = strtok_r(NULL, "\t", &save);
-                char* l_tok = strtok_r(NULL, "\t", &save);
-                char* c_tok = strtok_r(NULL, "\t", &save);
-                char* p_tok = strtok_r(NULL, "\t", &save);
-                if (d_tok && (strcmp(d_tok, "1") == 0 || strcmp(d_tok, "true") == 0))
-                    dirs_only = 1;
-                if (l_tok)
-                    limit = (uint32_t) atoi(l_tok);
-                if (c_tok)
-                    strncpy(cwd_path, c_tok, sizeof(cwd_path) - 1);
-                if (p_tok)
-                    strncpy(prefix, p_tok, sizeof(prefix) - 1);
-                if (p_tok)
-                    rc = cmd_complete(&conn, prefix, limit, cwd_path, dirs_only);
-            } else {
-                int n = sscanf(line, "%*s %4095s %u %4095s %7s", prefix, &limit, cwd_path,
-                               dirs_only_str);
-                if (n >= 4 && (strcmp(dirs_only_str, "1") == 0 || strcmp(dirs_only_str, "true") == 0))
-                    dirs_only = 1;
-                if (n >= 1)
-                    rc = cmd_complete(&conn, prefix, limit, cwd_path, dirs_only);
-            }
-        } else if (strcmp(cmd, "suggest") == 0) {
-            char prefix[4096] = {0};
-            char cwd_path[4096] = {0};
-            if (sscanf(line, "%*s %4095s %4095s", prefix, cwd_path) >= 1) {
-                rc = cmd_suggest(&conn, prefix, cwd_path);
-            }
-        } else if (strcmp(cmd, "query") == 0) {
-            char cwd[4096] = {0};
-            char input[4096] = {0};
-            /* query <cwd> <input> - input may contain spaces */
-            if (sscanf(line, "%*s %4095s", cwd) == 1) {
-                /* Find the input after "query <cwd> " */
-                const char* p = line + 5; /* skip "query" */
-                while (*p == ' ')
-                    p++;
-                while (*p && *p != ' ')
-                    p++; /* skip cwd */
-                while (*p == ' ')
-                    p++;
-                if (*p) {
-                    strncpy(input, p, sizeof(input) - 1);
-                }
-                rc = cmd_query(&conn, cwd, input);
-            }
-        } else if (strcmp(cmd, "ping") == 0) {
-            rc = cmd_ping(&conn);
-        } else if (strcmp(cmd, "metrics") == 0) {
-            rc = cmd_metrics(&conn);
-        } else if (strcmp(cmd, "scan-status") == 0) {
-            rc = cmd_scan_status(&conn);
-        } else if (strcmp(cmd, "fuzzy") == 0) {
-            char prefix[4096] = {0};
-            uint32_t limit = 50;
-            int n = sscanf(line, "%*s %4095s %u", prefix, &limit);
-            if (n >= 1) {
-                rc = cmd_fuzzy(&conn, prefix, limit);
-            }
-        } else if (strcmp(cmd, "select") == 0) {
-            char path[4096] = {0};
-            if (sscanf(line, "%*s %4095s", path) >= 1)
-                rc = cmd_select(&conn, path);
-        } else if (strcmp(cmd, "quit") == 0 || strcmp(cmd, "exit") == 0) {
+        if (dispatch_line(&conn, line, fifo_mode) == 1)
             break;
-        } else {
-            fprintf(stderr, "helper: unknown command: %s\n", cmd);
-            rc = 0; /* not a fatal error */
-        }
-
-        if (rc < 0) {
-            fprintf(stderr, "helper: command '%s' failed\n", cmd);
-        }
-        if (fifo_mode)
-            fputs(".\n", stdout);
-        fflush(stdout);
     }
 
     helper_disconnect(&conn);

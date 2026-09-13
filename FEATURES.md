@@ -8,10 +8,10 @@ Status: in progress. Check boxes only after tests pass and the change is pushed.
 - [x] Tests + push
 
 ## 2. Persistent helper (one process per shell)
-- [ ] Helper stays connected to the daemon for the shell lifetime
-- [ ] Shells do not fork `timeout` + helper + cli on every Tab
-- [ ] Fallback to one-shot if persist fails
-- [ ] Tests + push
+- [x] Helper stays connected to the daemon for the shell lifetime
+- [x] Shells do not fork `timeout` + helper + cli on every Tab
+- [x] Fallback to one-shot if persist fails
+- [x] Tests + push
 
 ## 3. Recent-first ranking + accept learning
 - [ ] Last-used / cwd-proximate paths beat alphabetical siblings

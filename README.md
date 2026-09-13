@@ -31,14 +31,17 @@ Needs CMake 3.22+, a C23 compiler, and [libfmt](https://fmt.dev).
 
 git clone https://github.com/Samoreilly/Archaic.git
 cd Archaic
-./install.sh              # indexes $HOME
-# ./install.sh ~/projects # or a specific tree
+./install.sh              # copies binaries + plugins; indexes workspace dirs
+# ./install.sh ~/projects # also watch this tree
 ```
 
-Keep the clone if you use `./install.sh` (the shell plugin is a symlink into it).
+`install.sh` copies files into `~/.local/bin` and your shell config. You do not need to keep the clone.
+
+Default index is existing dirs among `~/src`, `~/projects`, `~/dev`, `~/code`, `~/git`, `~/samdev`, `~/work` — not all of `$HOME`.
 
 ```bash
 archaic-cli doctor
+# archaic-cli doctor --fix
 ```
 
 ## After install
@@ -46,6 +49,7 @@ archaic-cli doctor
 | Command | What it does |
 |---|---|
 | `archaic-cli doctor` | Is the daemon up? |
+| `archaic-cli doctor --fix` | Write config, install plugins, start daemon |
 | `./run.sh status` | Socket / running |
 | `./run.sh rescan` | Re-index |
 | `./run.sh restart` | Restart |
@@ -55,10 +59,10 @@ On Linux the user systemd unit starts the daemon at login.
 
 ## Config
 
-Optional. Copy [config.example.toml](config.example.toml) to
-`~/.config/archaic/config.toml`.
+`install.sh` writes `~/.config/archaic/config.toml` if missing. See
+[config.example.toml](config.example.toml) for every key.
 
-Default index is `~/src`, `~/projects`, `~/dev`, `~/code`, `~/git`, `~/samdev`, `~/work` if those directories exist — not all of `$HOME`. Add more without reinstalling:
+Add more trees without reinstalling:
 
 ```bash
 archaic-cli watch ~/whatever

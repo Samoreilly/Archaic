@@ -191,7 +191,7 @@ install_fish() {
         mkdir -p "$FISH_CONF_DIR"
     fi
 
-    ln -sf "$FISH_PLUGIN" "$FISH_CONF_DIR/archaic.fish"
+    cp -f "$FISH_PLUGIN" "$FISH_CONF_DIR/archaic.fish"
     echo "Fish plugin installed: $FISH_CONF_DIR/archaic.fish -> $FISH_PLUGIN"
     echo "Restart fish or run: source $FISH_CONF_DIR/archaic.fish"
 }
@@ -209,7 +209,7 @@ install_bash() {
         mkdir -p "$BASH_COMP_DIR"
     fi
 
-    ln -sf "$BASH_COMP_SCRIPT" "$BASH_COMP_DIR/archaic.bash"
+    cp -f "$BASH_COMP_SCRIPT" "$BASH_COMP_DIR/archaic.bash"
     echo "Bash completion installed: $BASH_COMP_DIR/archaic.bash -> $BASH_COMP_SCRIPT"
     echo "Restart bash or run: source $BASH_COMP_DIR/archaic.bash"
 }
@@ -224,7 +224,7 @@ ZSH_PLUGIN="$SCRIPT_DIR/zsh/archaic.zsh"
 
 install_zsh() {
     mkdir -p "$ZSH_CONF_DIR"
-    ln -sf "$ZSH_PLUGIN" "$ZSH_CONF_DIR/archaic.zsh"
+    cp -f "$ZSH_PLUGIN" "$ZSH_CONF_DIR/archaic.zsh"
     echo "Zsh plugin installed: $ZSH_CONF_DIR/archaic.zsh -> $ZSH_PLUGIN"
     echo "Add to ~/.zshrc: source $ZSH_CONF_DIR/archaic.zsh"
 }

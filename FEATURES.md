@@ -19,10 +19,10 @@ Status: in progress. Check boxes only after tests pass and the change is pushed.
 - [x] Tests + push
 
 ## 4. Copy-install + generated config + honest README
-- [ ] `install.sh` copies plugins (no clone symlink requirement)
-- [ ] Writes `~/.config/archaic/config.toml` if missing
-- [ ] README matches actual roots / install / commands
-- [ ] Tests + push
+- [x] `install.sh` copies plugins (no clone symlink requirement)
+- [x] Writes `~/.config/archaic/config.toml` if missing
+- [x] README matches actual roots / install / commands
+- [x] Tests + push
 
 ## 5. Memory budget in doctor + enforcement
 - [ ] `doctor`/`health` report RSS vs `max_memory_mb`

@@ -32,6 +32,8 @@ cleanup() {
             kill -9 "$DPID" 2>/dev/null || true
         fi
     fi
+    # Backstop: the install-spawned daemon must never outlive the test.
+    pkill -9 -f "archaic --daemon $FAKERUN/archaic.sock" 2>/dev/null || true
     sleep 0.3
     rm -rf "$T"
 }

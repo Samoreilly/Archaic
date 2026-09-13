@@ -330,19 +330,37 @@ static void test_score_hidden_demotion(void) {
 
 static void test_git_tracked(void) {
     TEST(git_tracked);
-    /* Without a git repo, is_git_tracked should return false */
-    /* Just verify it doesn't crash */
-    is_git_tracked("/tmp/nonexistent");
+    /* is_git_tracked is currently a stub (always false); pin that so a
+     * future real implementation must update this test deliberately. */
+    ASSERT_TRUE(!is_git_tracked("/tmp/nonexistent"), "stub returns false off-repo");
+    ASSERT_TRUE(!is_git_tracked(NULL), "stub returns false for NULL");
     PASS();
 }
 
 static void test_relevant_extension(void) {
     TEST(relevant_extension);
-    /* is_relevant_extension needs an actual project context to determine relevance */
-    /* Just verify it doesn't crash */
-    is_relevant_extension("/src/main.c", "/src");
-    is_relevant_extension("/src/data.bin", "/src");
-    is_relevant_extension("/src/header.h", "/src");
+    ASSERT_TRUE(!is_relevant_extension(NULL, "/src"), "NULL path is never relevant");
+    ASSERT_TRUE(!is_relevant_extension("/src/README", "/src"), "extensionless is never relevant");
+    /* Deterministic project context: Makefile => .c relevant, .py not. */
+    char tmpl[] = "/tmp/archaic_ext_XXXXXX";
+    char* proj = mkdtemp(tmpl);
+    ASSERT_NOT_NULL(proj, "mkdtemp failed");
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "%s/Makefile", proj);
+    FILE* f = fopen(buf, "w");
+    if (f)
+        fclose(f);
+    snprintf(buf, sizeof(buf), "%s/main.c", proj);
+    char main_c[4096];
+    strncpy(main_c, buf, sizeof(main_c) - 1);
+    snprintf(buf, sizeof(buf), "%s/main.py", proj);
+    char main_py[4096];
+    strncpy(main_py, buf, sizeof(main_py) - 1);
+    ASSERT_TRUE(is_relevant_extension(main_c, proj), ".c relevant under Makefile project");
+    ASSERT_TRUE(!is_relevant_extension(main_py, proj), ".py not relevant under Makefile project");
+    snprintf(buf, sizeof(buf), "%s/Makefile", proj);
+    unlink(buf);
+    rmdir(proj);
     PASS();
 }
 
@@ -414,8 +432,9 @@ static void test_fuzzy_subsequence_match(void) {
     char* paths[50];
     bool is_dirs[50];
     int count = trie_fuzzy_collect(root, "si", paths, is_dirs, 50);
-    /* "si" should match paths containing 's' followed by 'i' */
-    ASSERT_TRUE(count >= 0, "fuzzy should handle subsequence queries");
+    /* "si" matches 's' (src) followed by 'i' (io) in exactly one path */
+    ASSERT_EQ_INT(1, count, "subsequence query matches exactly one path");
+    ASSERT_EQ_STR("/home/user/src/io/main.c", paths[0], "matched path is the inserted one");
     for (int i = 0; i < count; i++)
         free(paths[i]);
     trie_free_recursive(root);
@@ -791,9 +810,9 @@ static void test_incremental_remove_missing(void) {
 static void test_path_validation_existing(void) {
     TEST(path_validation_existing);
     setup_temp_dir();
+    /* setup_temp_dir creates $root/README.md: existence must be reported. */
     path_validation v = validate_input_path(test_root, "README.md");
-    /* If the file exists from our setup, v.exists should be true */
-    /* If not, it may not exist yet; at least verify it doesn't crash */
+    ASSERT_TRUE(v.exists, "created README.md must validate as existing");
     free_path_validation(&v);
     cleanup_temp_dir();
     PASS();
@@ -1013,7 +1032,7 @@ static void test_completions_with_limit(void) {
     ASSERT_NOT_NULL(c, "completions_create should succeed");
 
     completions_collect(root, "/test", c);
-    ASSERT_TRUE(c->count >= 0, "completions_collect should not crash");
+    ASSERT_EQ_INT(10, (int) c->count, "collect honors the capacity cap");
 
     completions_free(c);
     trie_free_recursive(root);
@@ -1145,6 +1164,7 @@ static void test_concurrent_cache_ops(void) {
         pthread_join(threads[i], NULL);
 
     printf("(errors: %d) ", atomic_load(&g_cache_errors));
+    ASSERT_EQ_INT(0, atomic_load(&g_cache_errors), "no lost updates under concurrency");
 
     trie_free_recursive(root);
     cache_destroy(cache);
@@ -1609,8 +1629,17 @@ static void budget_free_store(t_bucket_store* s) {
         if (s->buckets[i])
             destroy_bucket(s->buckets[i]);
     }
+    /* LRU wrapper nodes are owned by the list, not the buckets. */
+    if (s->parent) {
+        node* n = s->parent->first;
+        while (n) {
+            node* next = n->next;
+            free(n);
+            n = next;
+        }
+        free(s->parent);
+    }
     pthread_mutex_destroy(&s->store_lock);
-    free(s->parent);
     free(s);
 }
 

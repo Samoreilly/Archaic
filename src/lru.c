@@ -118,7 +118,9 @@ t_bucket* remove_last(t_bucket_store* lfu) {
         lfu->by_id[victim->bucket->id] = NULL;
     }
 
-    return victim->bucket;
+    t_bucket* bucket = victim->bucket;
+    free(victim);
+    return bucket;
 }
 
 /*

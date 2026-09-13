@@ -2,6 +2,22 @@ cmake_minimum_required(VERSION 3.22)
 project(archaic)
 set(CMAKE_C_STANDARD 23)
 
+# cmake -S . -B build-asan -DARCHAIC_SANITIZE=address|undefined|thread
+# then: cmake --build build-asan && ./build-asan/archaic-unit
+set(ARCHAIC_SANITIZE "" CACHE STRING "Sanitizer to build with (address, undefined, thread)")
+if(ARCHAIC_SANITIZE STREQUAL "address")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address)
+elseif(ARCHAIC_SANITIZE STREQUAL "undefined")
+    add_compile_options(-fsanitize=undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=undefined)
+elseif(ARCHAIC_SANITIZE STREQUAL "thread")
+    add_compile_options(-fsanitize=thread -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=thread)
+elseif(NOT ARCHAIC_SANITIZE STREQUAL "")
+    message(FATAL_ERROR "Unknown ARCHAIC_SANITIZE value: ${ARCHAIC_SANITIZE}")
+endif()
+
 find_package(fmt REQUIRED)
 find_package(PkgConfig QUIET)
 if(PKG_CONFIG_FOUND)

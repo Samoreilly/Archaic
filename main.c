@@ -224,6 +224,10 @@ int main(int argc, char* argv[]) {
         config_load_default(&cfg);
         config_expand_vars(&cfg);
         config_sandbox_validate(&cfg);
+        /* Init logging before any LOG_* so validation/clamp messages
+         * actually surface (g_output is NULL until log_init). */
+        log_init((log_level) cfg.daemon.log_level, stderr);
+        config_validate_paths(&cfg);
 
         const char* scan_path = NULL;
         const char* sock_path = cfg.daemon.socket_path;
@@ -261,6 +265,13 @@ int main(int argc, char* argv[]) {
             cfg.daemon.scan_threads = (nproc > 0 && nproc < SCANNER_MAX_THREADS) ? (int) nproc : 4;
             LOG_INFO("main", "auto-detected %d scanner threads", cfg.daemon.scan_threads);
         }
+        /* The worker array holds SCANNER_MAX_THREADS; anything above is
+         * silently shrunk later, so clamp loudly here instead. */
+        if (cfg.daemon.scan_threads > SCANNER_MAX_THREADS) {
+            LOG_WARN("main", "scan_threads=%d exceeds worker capacity %d; clamping",
+                     cfg.daemon.scan_threads, SCANNER_MAX_THREADS);
+            cfg.daemon.scan_threads = SCANNER_MAX_THREADS;
+        }
 
         struct sigaction sa_int, sa_term, sa_hup, sa_pipe;
         memset(&sa_int, 0, sizeof(sa_int));
@@ -288,9 +299,7 @@ int main(int argc, char* argv[]) {
             sigaction(SIGUSR1, &sa_usr1, NULL);
         }
 
-        log_init((log_level) cfg.daemon.log_level, stderr);
         LOG_INFO("main", "archaic daemon starting (v%d)", IPC_PROTOCOL_VERSION);
-
         daemon_state* daemon = daemon_init();
         if (!daemon) {
             LOG_ERR("main", "init failed");

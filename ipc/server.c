@@ -1378,7 +1378,10 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
 
     umask(old_umask);
 
-    if (listen(srv->listen_fd, 8) < 0) {
+    /* Backlog comfortably above Tab-burst concurrency (3 shells ×
+     * helper + CLI + ping + serve); tiny queue + 0.3s shell timeouts
+     * were the backpressure before. */
+    if (listen(srv->listen_fd, 32) < 0) {
         threadpool_shutdown(srv->pool);
         close(srv->listen_fd);
         unlink(sock_path);

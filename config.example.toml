@@ -6,6 +6,8 @@
 scan_path = "/home/user"
 # Multiple roots (uncomment to use instead of scan_path):
 # scan_paths = ["/home/user/projects", "/home/user/work", "/home/user/docs"]
+# Max Tab completions per query (1-256, default 256). All shells honor it.
+# max_completions = 256
 # Per-root policy lives in the roots file (~/.config/archaic/roots,
 # managed by `archaic-cli watch/unwatch`). One path per line, with
 # optional tokens: depth (default: global max_depth), watch (default 1),

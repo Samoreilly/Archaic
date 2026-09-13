@@ -311,6 +311,17 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
     if (strlen(prefix) >= (size_t) CACHE_MAX_KEY_LEN)
         return; /* bound disk/memory: skip absurd keys */
 
+    /* Deep-copy OUTSIDE the shard lock: strdup-per-path is the expensive
+     * part and needs no table state. Table mutation stays under lock. */
+    char* keycopy = strdup(prefix);
+    if (!keycopy)
+        return;
+    scored_completions* valcopy = deep_copy_scored(sc);
+    if (!valcopy) {
+        free(keycopy);
+        return;
+    }
+
     size_t si = shard_for_key(prefix);
     cache_shard* s = &cache->shards[si];
 
@@ -328,13 +339,11 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
             if (s->count > 0)
                 s->count--;
         } else {
-            scored_completions* copy = deep_copy_scored(sc);
-            if (copy) {
-                shard_free_entry_value(existing);
-                existing->value = copy;
-                existing->timestamp = now_seconds();
-                shard_lru_move_to_front(s, existing);
-            }
+            shard_free_entry_value(existing);
+            existing->value = valcopy;
+            existing->timestamp = now_seconds();
+            shard_lru_move_to_front(s, existing);
+            free(keycopy);
             pthread_mutex_unlock(&s->lock);
             return;
         }
@@ -375,21 +384,12 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
     }
 
     if (!slot) {
+        free(keycopy);
+        scored_completions_free(valcopy);
         pthread_mutex_unlock(&s->lock);
         return;
     }
 
-    char* keycopy = strdup(prefix);
-    if (!keycopy) {
-        pthread_mutex_unlock(&s->lock);
-        return;
-    }
-    scored_completions* valcopy = deep_copy_scored(sc);
-    if (!valcopy) {
-        free(keycopy);
-        pthread_mutex_unlock(&s->lock);
-        return;
-    }
     /* slot is free (empty or tombstone): key must be NULL here */
     if (slot->key) {
         free(slot->key);

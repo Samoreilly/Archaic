@@ -109,10 +109,10 @@ backlog tracker is FEATURES.md (all 8 items done+pushed).
 - [ ] **tmux integration** — Completion pane for tmux sessions
 
 ### Security
-- [ ] **Path traversal protection** — Validate that completions don't escape scan root
+- [x] **Path traversal protection** — Validate that completions don't escape scan root (shipped: dotdot rejection + normalization; see TODO-50 #31)
 - [ ] **Symlink following control** — Configurable symlink depth limit
-- [ ] **Permission-aware scanning** — Skip directories without read permission gracefully
-- [ ] **Audit logging** — Log all completion queries for compliance environments
+- [x] **Permission-aware scanning** — Skip directories without read permission gracefully (shipped; see TODO-50 #39)
+- [ ] **Audit logging** — Log all completion queries for compliance environments (daemon_log_query exists but dedupes; not audit-grade)
 
 ## Infrastructure
 

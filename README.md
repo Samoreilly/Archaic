@@ -73,6 +73,10 @@ archaic-cli roots
 Per-root policy goes on `~/.config/archaic/roots` lines:
 `/path depth=3 watch=0 ignore_dirs=target,dist` (see `config.example.toml`).
 
+File changes are picked up by rescanning, not patched into the index:
+the watcher triggers a prompt full rescan of the roots (per-file
+incremental updates don't exist; `unwatch` drops whole roots only).
+
 - Socket: `$XDG_RUNTIME_DIR/archaic.sock` (else `/tmp/archaic-$UID.sock`)
 - State: `$XDG_CACHE_HOME/archaic/state.bin` (else `~/.cache/archaic/state.bin`)
 - `cd` / `mkdir` complete directories only

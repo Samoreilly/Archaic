@@ -161,8 +161,28 @@ int save_trie(daemon_state* state, const char* path) {
     if (!f)
         return -1;
 
+    /* Snapshot bucket pointers (+refcounts) under the store lock, then
+     * serialize WITHOUT it: queries only ever block on the lock for the
+     * pointer copy, and per-bucket trie_locks serialize writers the same
+     * way query walks already do. Previously the whole fwrite ran under
+     * store_lock (pause-the-world on SIGTERM/USR save). */
     store_lock(state->store);
     uint32_t bucket_count = (uint32_t) state->store->right_index;
+    t_bucket** snap = NULL;
+    if (bucket_count > 0) {
+        snap = (t_bucket**) malloc((size_t) bucket_count * sizeof(t_bucket*));
+        if (!snap) {
+            store_unlock(state->store);
+            fclose(f);
+            return -1;
+        }
+        for (uint32_t i = 0; i < bucket_count; i++) {
+            snap[i] = state->store->buckets[i];
+            if (snap[i])
+                atomic_fetch_add(&snap[i]->refcount, 1);
+        }
+    }
+    store_unlock(state->store);
 
     uint32_t magic = STATE_MAGIC, version = STATE_VERSION, reserved = 0;
     if (fwrite(&magic, sizeof(magic), 1, f) != 1)
@@ -175,9 +195,12 @@ int save_trie(daemon_state* state, const char* path) {
         goto werr;
 
     for (uint32_t b = 0; b < bucket_count; b++) {
-        t_bucket* bucket = state->store->buckets[b];
-        if (!bucket || !bucket->dir_trie)
+        t_bucket* bucket = snap[b];
+        if (!bucket || !bucket->dir_trie) {
+            if (bucket)
+                bucket_release(bucket);
             continue;
+        }
 
         trie_lock(bucket);
 
@@ -289,12 +312,22 @@ int save_trie(daemon_state* state, const char* path) {
         }
         trie_unlock(bucket);
     }
-    store_unlock(state->store);
+    /* Release the snapshot refs (deferred destroys run here if eviction
+     * marked anything pending mid-save). */
+    for (uint32_t b = 0; b < bucket_count; b++) {
+        if (snap[b])
+            bucket_release(snap[b]);
+    }
+    free(snap);
     fclose(f);
     return 0;
 
 werr:
-    store_unlock(state->store);
+    for (uint32_t b = 0; b < bucket_count; b++) {
+        if (snap[b])
+            bucket_release(snap[b]);
+    }
+    free(snap);
     fclose(f);
     return -1;
 }

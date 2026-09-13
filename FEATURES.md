@@ -1,6 +1,6 @@
 # Archaic PE backlog
 
-Status: in progress. Check boxes only after tests pass and the change is pushed.
+Status: done. Boxes checked only after tests passed and the change was pushed.
 
 ## 1. doctor --fix + empty-Tab hint
 - [x] `archaic-cli doctor --fix` repairs stale socket, missing user unit, missing plugins, missing config
@@ -11,35 +11,35 @@ Status: in progress. Check boxes only after tests pass and the change is pushed.
 - [x] Helper stays connected to the daemon for the shell lifetime
 - [x] Shells do not fork `timeout` + helper + cli on every Tab
 - [x] Fallback to one-shot if persist fails
-- [ ] Tests + push (`test/integration/test_persistent_helper.sh`: 15/15 pass; awaiting push)
+- [x] Tests + push (`test/integration/test_persistent_helper.sh`: 15/15)
 
 ## 3. Recent-first ranking + accept learning
-- [ ] Last-used / cwd-proximate paths beat alphabetical siblings
-- [ ] Accept (Tab/ghost/cd) records selection and affects next Tab
-- [ ] Tests + push
+- [x] Last-used / cwd-proximate paths beat alphabetical siblings
+- [x] Accept (Tab/ghost/cd) records selection and affects next Tab
+- [x] Tests + push (`test/integration/test_recent_first.sh`: 5/5)
 
 ## 4. Copy-install + generated config + honest README
-- [ ] `install.sh` copies plugins (no clone symlink requirement)
-- [ ] Writes `~/.config/archaic/config.toml` if missing
-- [ ] README matches actual roots / install / commands
-- [ ] Tests + push
+- [x] `install.sh` copies plugins (no clone symlink requirement)
+- [x] Writes `~/.config/archaic/config.toml` if missing
+- [x] README matches actual roots / install / commands
+- [x] Tests + push (`test/integration/test_copy_install.sh`: 33/33)
 
 ## 5. Memory budget in doctor + enforcement
-- [ ] `doctor`/`health` report RSS vs `max_memory_mb`
-- [ ] Scanner/index sheds or refuses when over cap
-- [ ] Tests + push
+- [x] `doctor`/`health` report RSS vs `max_memory_mb`
+- [x] Scanner/index sheds or refuses when over cap
+- [x] Tests + push (unit `memory_budget_*` + `test/integration/test_memory_budget.sh`: 4/4)
 
 ## 6. Per-root policy + live unwatch
-- [ ] Per-root depth / ignore / watch in config
-- [ ] `unwatch` drops the live watcher + scan list without restart
-- [ ] Tests + push
+- [x] Per-root depth / ignore / watch in config
+- [x] `unwatch` drops the live watcher + scan list without restart
+- [x] Tests + push (unit `root_*` + `test/integration/test_per_root_unwatch.sh`: 14/14)
 
 ## 7. Ghost-text
-- [ ] Hints work without requiring `/` in the token
-- [ ] Bash actually renders the ghost
-- [ ] Accept key documented in status / doctor
-- [ ] Tests + push
+- [x] Hints work without requiring `/` in the token
+- [x] Bash actually renders the ghost
+- [x] Accept key documented in status / doctor
+- [x] Tests + push (covered by `test/integration/test_shell_contract.sh`: 21/21)
 
 ## 8. Shell contract tests
-- [ ] Fixture tree test: fish/bash/zsh/`archaic-cli complete` agree
-- [ ] Tests + push
+- [x] Fixture tree test: fish/bash/zsh/`archaic-cli complete` agree
+- [x] Tests + push (`test/integration/test_shell_contract.sh`: 21/21)

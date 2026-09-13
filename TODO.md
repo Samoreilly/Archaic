@@ -1,6 +1,8 @@
 # Archaic — Feature & Improvement TODO
 
 Generated: 2026-05-17 | Status: Planning phase
+Reconciled: 2026-09-13 — items verified shipped are checked; the PE
+backlog tracker is FEATURES.md (all 8 items done+pushed).
 
 ## Core Engine
 
@@ -15,10 +17,10 @@ Generated: 2026-05-17 | Status: Planning phase
 
 ### Scoring & Ranking
 - [ ] **TF-IDF scoring** — Weight rare paths higher than common ones (e.g., `src/` vs `.git/hooks/`)
-- [ ] **Contextual awareness** — Boost completions based on current working directory proximity
+- [x] **Contextual awareness** — Boost completions based on current working directory proximity (shipped + tested)
 - [ ] **Usage decay function** — Exponential decay for recency instead of linear timestamp comparison
 - [ ] **File type awareness** — Prefer executables/scripts when completing after commands like `./`
-- [ ] **Learned preferences** — Track which completions users actually select and adjust weights
+- [x] **Learned preferences** — Track which completions users actually select and adjust weights (shipped: session select boost, tested)
 
 ### Fuzzy Matching
 - [ ] **Levenshtein distance fallback** — When subsequence matching returns too many results, rank by edit distance
@@ -29,23 +31,23 @@ Generated: 2026-05-17 | Status: Planning phase
 ## Shell Integration
 
 ### Fish
-- [ ] **ZSH completion support** — Port Fish plugin to ZSH with equivalent tab completion + suggestions
-- [ ] **Bash suggestion display** — Implement inline ghost text suggestions for Bash (currently tab-only)
+- [x] **ZSH completion support** — Port Fish plugin to ZSH with equivalent tab completion + suggestions (shipped: zsh/archaic.zsh, contract-tested)
+- [x] **Bash suggestion display** — Implement inline ghost text suggestions for Bash (shipped: Tab ghost render + Ctrl+Space accept, contract-tested)
 - [ ] **Command-specific scoring** — Different completion behavior for `cd` vs `vim` vs `cat`
-- [ ] **Multi-command chaining** — Complete paths in `cd dir && vim file` scenarios
+- [x] **Multi-command chaining** — Complete paths in `cd dir && vim file` scenarios (shipped: chain-aware command detection in all shells)
 - [ ] **Git branch completion** — Integrate with git to complete branch names after `git checkout`
-- [ ] **Environment variable expansion** — Complete `$HOME/` and other env vars in paths
+- [x] **Environment variable expansion** — Complete `$HOME/` and other env vars in paths (shipped in all shells)
 
 ### UX
 - [ ] **Color-coded completions** — Directories in blue, executables in green, symlinks in cyan
 - [ ] **File size/type hints** — Show file size and type alongside completion entries
-- [ ] **Recent files list** — Quick access to recently accessed paths
+- [x] **Recent files list** — Quick access to recently accessed paths (shipped: `recent` command + persistence)
 - [ ] **Bookmark system** — User-defined shortcuts for frequently accessed directories
 
 ## Daemon & IPC
 
 ### Reliability
-- [ ] **Daemon auto-restart** — systemd watchdog integration for automatic crash recovery
+- [x] **Daemon auto-restart** — systemd watchdog integration for automatic crash recovery (shipped: Restart=always units + IPC watchdog)
 - [ ] **Graceful degradation** — Serve cached results when scanner is busy or crashed
 - [ ] **Health check endpoint** — HTTP endpoint for monitoring tools (Prometheus, Nagios)
 - [ ] **Socket activation** — systemd socket activation for on-demand daemon startup
@@ -61,12 +63,12 @@ Generated: 2026-05-17 | Status: Planning phase
 
 ### Config
 - [ ] **`.archaicignore` file** — Per-project ignore file (like `.gitignore`) that merges with global config
-- [ ] **Config validation** — Validate config file on daemon startup with helpful error messages
+- [x] **Config validation** — Validate config file on daemon startup with helpful error messages (shipped: validate_paths + sandbox)
 - [ ] **Hot config reload** — SIGHUP triggers config reload without daemon restart
 - [ ] **Config schema documentation** — JSON schema for IDE autocomplete on config files
 
 ### Installation
-- [ ] **Homebrew formula** — `brew install archaic` for macOS users
+- [x] **Homebrew formula** — `brew install archaic` for macOS users (shipped: Formula/archaic.rb)
 - [ ] **APT/YUM packages** — Debian and RPM package builds via GitHub Actions
 - [ ] **NixOS module** — Declarative configuration for NixOS users
 - [ ] **Docker image** — Containerized daemon for CI/CD environments
@@ -88,7 +90,7 @@ Generated: 2026-05-17 | Status: Planning phase
 
 ### Documentation
 - [ ] **Architecture diagram** — Visual diagram of daemon, scanner, trie, cache, IPC flow
-- [ ] **Contributing guide** — Code style, testing requirements, PR template
+- [x] **Contributing guide** — Code style, testing requirements, PR template (shipped: CONTRIBUTING.md)
 - [ ] **API reference** — Complete IPC protocol documentation
 - [ ] **Performance tuning guide** — How to optimize for specific workloads (large monorepos, etc.)
 

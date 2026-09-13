@@ -1,10 +1,11 @@
-.TH ARCHAIC-CLI 1 "December 2024" "Archaic 1.0" "User Commands"
+.TH ARCHAIC-CLI 1 "September 2026" "Archaic 0.9.0" "User Commands"
 .SH NAME
 archaic-cli \- command-line interface for the Archaic autocomplete daemon
 .SH SYNOPSIS
 .B archaic-cli
-.RI [ COMMAND ]
-.RI [ OPTIONS ]
+.RI [ --sock PATH ]
+.RI COMMAND
+.RI [ ARGS... ]
 .SH DESCRIPTION
 .B archaic-cli
 is the command-line interface for interacting with the Archaic autocomplete daemon.
@@ -17,11 +18,21 @@ Trigger a filesystem scan starting at the specified path.
 .B query \ficwd\fR \fIinput\fR
 Validate a path query. Returns whether the path exists and its type.
 .TP
-.B complete \fiprefix\fR [\fIn\fR]
-Get completions for the given prefix. Optional limit n (default: 20).
+.B complete \fIprefix\fR [\fIlimit\fR] [\fIcwd\fR] [\fIdirs_only\fR]
+Get completions for the given prefix. Optional limit (default: 10), cwd for
+proximity boosting, dirs_only (1 = directories only).
 .TP
-.B suggest \fiprefix\fR
+.B suggest \fIprefix\fR [\fIcwd\fR]
 Get the best suggestion for the given prefix.
+.TP
+.B fuzzy \fIquery\fR [\fIlimit\fR]
+Get fuzzy completions matching the query pattern.
+.TP
+.B select \fIpath\fR
+Record that the user selected a path (feeds frequency/recency scoring).
+.TP
+.B recent [\fIn\fR]
+Get the n most recently accessed files (default: 10).
 .TP
 .B ping
 Check if the daemon is running and responsive.
@@ -29,30 +40,53 @@ Check if the daemon is running and responsive.
 .B metrics
 Display daemon performance metrics and statistics.
 .TP
+.B stats
+Same as metrics, plus cache hit-rate and index totals.
+.TP
+.B health
+Detailed daemon health: pid, uptime, watcher, cache, memory, scan roots.
+.TP
 .B scan-status
 Check the current scan progress and status.
+.TP
+.B doctor
+Diagnose setup: config source, socket, scan paths, state file, ping, cache,
+watcher, index totals. Start here when completions are empty.
+.TP
+.B explain \fIprefix\fR [\fIcwd\fR]
+Explain why a prefix does or does not complete: roots, ignore rules,
+on-disk state, daemon scanning flag, live result count.
+.TP
+.B watch \fIpath\fR
+Add a tree to ~/.config/archaic/roots and trigger a scan.
+.TP
+.B unwatch \fIpath\fR
+Remove a tree from ~/.config/archaic/roots.
+.TP
+.B roots
+List configured scan roots (config file plus roots file).
 .TP
 .B save \fIpath\fR
 Save daemon state to the specified file path.
 .TP
+.B clear-cache
+Flush the query cache without restarting (uses IPC_MSG_CLEAR_CACHE).
+.TP
+.B reindex [\fIpath\fR]
+Rescan a path, or all configured roots when omitted. Never defaults to /.
+.TP
+.B reload
+Ask the daemon to reload configuration (sets reload flag; SIGHUP applies it).
+.TP
+.B reset-stats
+Zero metrics counters and flush the query cache.
+.TP
 .B shutdown
 Stop the daemon gracefully.
-.TP
-.B fuzzy \fIquery\fR [\fIn\fR]
-Get fuzzy completions matching the query pattern.
-.TP
-.B recent [\fIn\fR]
-Get the n most recently accessed files.
-.TP
-.B export-freq \fIpath\fR
-Export path frequency data to a TSV file.
-.TP
-.B import-freq \fIpath\fR
-Import path frequency data from a TSV file.
 .SH OPTIONS
 .TP
-.B \-h, \-\-help
-Display help message and exit.
+.B --sock \fIPATH\fR
+Use PATH instead of the configured socket.
 .TP
 .B \-v, \-\-version
 Display version information and exit.
@@ -61,8 +95,9 @@ Display version information and exit.
 .B ARCHAIC_CONFIG
 Path to configuration file (default: ~/.config/archaic/config.toml).
 .TP
-.B ARCHAIC_SOCKET
-Path to daemon socket (default: /tmp/archaic-daemon.sock).
+.B XDG_RUNTIME_DIR
+Socket defaults to $XDG_RUNTIME_DIR/archaic.sock, else /tmp/archaic-$UID.sock
+(where UID is the numeric user id).
 .SH FILES
 .TP
 .I ~/.config/archaic/config.toml
@@ -71,8 +106,11 @@ User configuration file.
 .I /etc/archaic/config.toml
 System-wide configuration file.
 .TP
-.I /tmp/archaic-daemon.sock
-Default daemon socket path.
+.I ~/.config/archaic/roots
+Extra scan roots, one per line (managed by watch/unwatch).
+.TP
+.I $XDG_RUNTIME_DIR/archaic.sock
+Default daemon socket path (else /tmp/archaic-$UID.sock).
 .SH EXAMPLES
 .PP
 Start a scan:
@@ -93,13 +131,18 @@ Check daemon status:
 .RS
 .nf
 $ archaic-cli ping
+$ archaic-cli doctor
+$ archaic-cli explain ~/pro
 .fi
 .RE
 .PP
-Export learned preferences:
+Manage roots and cache:
 .RS
 .nf
-$ archaic-cli export-freq ~/archaic-frequencies.tsv
+$ archaic-cli watch ~/src
+$ archaic-cli roots
+$ archaic-cli reindex
+$ archaic-cli clear-cache
 .fi
 .RE
 .SH SEE ALSO

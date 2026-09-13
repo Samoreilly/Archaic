@@ -52,6 +52,21 @@ _archaic_resolve_paths() {
         _archaic_sock="/tmp/archaic-$(id -u).sock"
     fi
 
+    # Single source of truth: ask archaic-cli (C TOML parser) first, fall
+    # back to shell grep only if the CLI is missing or fails.
+    if [[ -n "${_archaic_cli:-}" ]]; then
+        local cli_sock=""
+        if command -v timeout &>/dev/null; then
+            cli_sock="$(timeout 0.3 "$_archaic_cli" print-socket 2>/dev/null)"
+        else
+            cli_sock="$("$_archaic_cli" print-socket 2>/dev/null)"
+        fi
+        if [[ -n "$cli_sock" ]]; then
+            _archaic_sock="$cli_sock"
+            return
+        fi
+    fi
+
     local config_file=""
     for p in "${ARCHAIC_CONFIG:-}" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml"; do
         if [[ -n "$p" && -f "$p" ]]; then
@@ -179,7 +194,7 @@ _archaic_check_daemon() {
 
 # ── Active command detection (multi-command lines) ─────────────────────────
 # `cd foo && vim <Tab>` completes for vim, not cd. Unwraps sudo/doas/env.
-_arhcaic_is_sep() {
+_archaic_is_sep() {
     case "$1" in
         ';'|'&'|'|'|'&&'|'||'|'('|'{') return 0 ;;
     esac
@@ -187,23 +202,25 @@ _arhcaic_is_sep() {
 }
 
 # Assignment prefix (`VAR=1 vim …`): not a command, skip it.
-_arhcaic_is_assign() {
+_archaic_is_assign() {
     case "$1" in
         -*|*=*) [[ "$1" == -* ]] && return 1; return 0 ;;
     esac
     return 1
 }
-
+# Backward-compat aliases for the pre-fix typo (_arhcaic_*).
+_arhcaic_is_sep() { _archaic_is_sep "$@"; }
+_arhcaic_is_assign() { _archaic_is_assign "$@"; }
 _archaic_active_cmd() {
     # $1 = index of current word (exclusive upper bound), defaults to COMP_CWORD
     local upto="${1:-$COMP_CWORD}"
     local active=""
     local i
     for (( i=0; i<upto; i++ )); do
-        if _arhcaic_is_sep "${COMP_WORDS[i]:-}"; then
+        if _archaic_is_sep "${COMP_WORDS[i]:-}"; then
             continue
         fi
-        if _arhcaic_is_assign "${COMP_WORDS[i]:-}"; then
+        if _archaic_is_assign "${COMP_WORDS[i]:-}"; then
             continue
         fi
         active="${COMP_WORDS[i]}"
@@ -211,11 +228,11 @@ _archaic_active_cmd() {
     done
     [[ -z "$active" ]] && active="${COMP_WORDS[0]:-}"
     for (( i=0; i<upto; i++ )); do
-        if _arhcaic_is_sep "${COMP_WORDS[i]:-}"; then
+        if _archaic_is_sep "${COMP_WORDS[i]:-}"; then
             local j=$((i+1))
             while (( j < upto )); do
-                if _arhcaic_is_sep "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
-                if _arhcaic_is_assign "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
+                if _archaic_is_sep "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
+                if _archaic_is_assign "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
                 case "${COMP_WORDS[j]:-}" in
                     '') j=$((j+1)); continue ;;
                     *) active="${COMP_WORDS[j]}"; break ;;
@@ -231,7 +248,7 @@ _archaic_active_cmd() {
                     local j=$((i+1))
                     while (( j < upto )); do
                         if [[ "${COMP_WORDS[j]:-}" == -* ]]; then j=$((j+1)); continue; fi
-                        if _arhcaic_is_assign "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
+                        if _archaic_is_assign "${COMP_WORDS[j]:-}"; then j=$((j+1)); continue; fi
                         active="${COMP_WORDS[j]}"
                         break
                     done
@@ -475,6 +492,20 @@ _archaic_do_complete() {
 _archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip source .)
 
 _archaic_load_commands() {
+    # Prefer the C parser via archaic-cli; fall back to shell grep.
+    if [[ -n "${_archaic_cli:-}" ]]; then
+        local cli_cmds=""
+        if command -v timeout &>/dev/null; then
+            cli_cmds="$(timeout 0.3 "$_archaic_cli" print-commands bash 2>/dev/null)"
+        else
+            cli_cmds="$("$_archaic_cli" print-commands bash 2>/dev/null)"
+        fi
+        if [[ -n "$cli_cmds" ]]; then
+            # shellcheck disable=SC2206
+            _archaic_commands=($cli_cmds)
+            return
+        fi
+    fi
     local config_file=""
     for p in "${ARCHAIC_CONFIG:-}" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml"; do
         if [[ -n "$p" && -f "$p" ]]; then
@@ -615,15 +646,40 @@ _archaic_render_suggestion() {
     fi
 }
 
-# Hook into PROMPT_COMMAND: update suggestion + preserve existing hooks
-_archaic_orig_prompt_command="${PROMPT_COMMAND:-}"
+# Hook into PROMPT_COMMAND: update suggestion + preserve existing hooks.
+# Idempotent on re-source, preserves array-form PROMPT_COMMAND (bash 5+),
+# and never clobbers hooks added after us: we append once instead of
+# overwriting. Opt out entirely with ARCHAIC_SUGGEST_ON_PROMPT=0 (Tab
+# completion keeps working).
 _archaic_prompt_hook() {
     _archaic_get_suggestion
-    if [[ -n "$_archaic_orig_prompt_command" ]]; then
-        eval "$_archaic_orig_prompt_command"
-    fi
+    _archaic_render_suggestion
 }
-PROMPT_COMMAND="_archaic_prompt_hook"
+if [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" != "0" ]]; then
+    if declare -p PROMPT_COMMAND 2>/dev/null | grep -q 'declare -a'; then
+        _archaic_in_pc=0
+        for _pc_elt in "${PROMPT_COMMAND[@]}"; do
+            [[ "$_pc_elt" == *"_archaic_prompt_hook"* ]] && _archaic_in_pc=1
+        done
+        [[ "$_archaic_in_pc" -eq 0 ]] && PROMPT_COMMAND+=("_archaic_prompt_hook")
+        unset _archaic_in_pc _pc_elt
+    else
+        case "${PROMPT_COMMAND:-}" in
+            *"_archaic_prompt_hook"*) ;;
+            "" ) PROMPT_COMMAND="_archaic_prompt_hook" ;;
+            * ) PROMPT_COMMAND="${PROMPT_COMMAND}; _archaic_prompt_hook" ;;
+        esac
+    fi
+    # Back-compat for the pre-append layout: if a previous version saved the
+    # original hook, keep running it once (avoids dropping user hooks that
+    # existed before upgrade).
+    if [[ -n "${_archaic_orig_prompt_command:-}" && "${_archaic_orig_prompt_command}" != *"_archaic_prompt_hook"* ]]; then
+        case "${PROMPT_COMMAND:-}" in
+            *"_archaic_orig_prompt_command"*) ;;
+            *) PROMPT_COMMAND="${PROMPT_COMMAND}; eval \"\$_archaic_orig_prompt_command\"" ;;
+        esac
+    fi
+fi
 
 # Accept the ghost-text suggestion with Ctrl+Space (reliable in every
 # terminal, unbound by default). Alt+Right also works where the

@@ -69,8 +69,11 @@ t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir) {
     }
 
     if (lfu->right_index + 1 < BUCKETS) {
+        t_bucket* nb = create_bucket(curr_dir);
+        if (!nb)
+            return NULL;
         shift_right(lfu, insertion, lfu->right_index);
-        lfu->buckets[insertion] = create_bucket(curr_dir);
+        lfu->buckets[insertion] = nb;
         lfu->buckets[insertion]->id = insertion;
         lfu->buckets[insertion]->array_index = insertion;
         create_or_to_front(lfu, lfu->buckets[insertion]);
@@ -103,9 +106,11 @@ t_bucket* insert_bucket(t_bucket_store* lfu, char* curr_dir) {
         lfu->buckets[lfu->right_index - 1] = NULL;
         destroy_bucket(removed);
 
+        t_bucket* nb = create_bucket(curr_dir);
+        if (!nb)
+            return NULL;
         shift_right(lfu, insertion, lfu->right_index - 1);
-
-        lfu->buckets[insertion] = create_bucket(curr_dir);
+        lfu->buckets[insertion] = nb;
         lfu->buckets[insertion]->id = insertion;
         lfu->buckets[insertion]->array_index = insertion;
 
@@ -158,12 +163,22 @@ size_t find_insertion_point(t_bucket_store* lfu, char* curr_dir) {
 */
 t_bucket* create_bucket(char* dir_name) {
     t_bucket* bucket = (t_bucket*) malloc(sizeof(t_bucket));
-
+    if (!bucket)
+        return NULL;
     atomic_store(&bucket->refcount, 0);
     bucket->pending_destroy = false;
-    bucket->dir_name = strdup(dir_name);
+    bucket->dir_name = dir_name ? strdup(dir_name) : NULL;
+    if (dir_name && !bucket->dir_name) {
+        free(bucket);
+        return NULL;
+    }
     bucket->dir_count = 0;
     bucket->dir_trie = create_trie();
+    if (!bucket->dir_trie) {
+        free(bucket->dir_name);
+        free(bucket);
+        return NULL;
+    }
     pthread_mutex_init(&bucket->lock, NULL);
 
     return bucket;

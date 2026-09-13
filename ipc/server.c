@@ -7,49 +7,73 @@
 #include <errno.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
 #define DEDUP_CAPACITY 256
-#define DEDUP_EMPTY 0U
+#define DEDUP_EMPTY 0ULL
 
 typedef struct {
-    uint32_t hashes[DEDUP_CAPACITY];
+    uint64_t hashes[DEDUP_CAPACITY];
+    char* entries[DEDUP_CAPACITY];
     int count;
 } dedup_set;
 
-static uint32_t dedup_hash(const char* str) {
-    uint32_t h = 2166136261U;
+static uint64_t dedup_hash(const char* str) {
+    /* FNV-1a 64-bit: far lower collision rate than 32-bit, plus we
+     * strcmp on hash match so collisions can never drop results. */
+    uint64_t h = 14695981039346656037ULL;
     for (const char* p = str; *p; p++) {
-        h ^= (uint32_t) (unsigned char) *p;
-        h *= 16777619U;
+        h ^= (uint64_t) (unsigned char) *p;
+        h *= 1099511628211ULL;
     }
-    return h;
+    return h ? h : 1ULL;
 }
 
 static void dedup_init(dedup_set* ds) {
     memset(ds->hashes, 0, sizeof(ds->hashes));
+    memset(ds->entries, 0, sizeof(ds->entries));
+    ds->count = 0;
+}
+
+static void dedup_free(dedup_set* ds) {
+    if (!ds)
+        return;
+    for (int i = 0; i < DEDUP_CAPACITY; i++) {
+        free(ds->entries[i]);
+        ds->entries[i] = NULL;
+        ds->hashes[i] = DEDUP_EMPTY;
+    }
     ds->count = 0;
 }
 
 static int dedup_contains(dedup_set* ds, const char* path) {
-    uint32_t h = dedup_hash(path);
-    uint32_t slot = h ? h : 1;
-    uint32_t idx = h % DEDUP_CAPACITY;
+    uint64_t h = dedup_hash(path);
+    uint32_t idx = (uint32_t) (h % DEDUP_CAPACITY);
     for (uint32_t i = 0; i < DEDUP_CAPACITY; i++) {
         uint32_t pos = (idx + i) % DEDUP_CAPACITY;
         if (ds->hashes[pos] == DEDUP_EMPTY)
             return 0;
-        if (ds->hashes[pos] == slot)
-            return 1;
+        if (ds->hashes[pos] == h) {
+            /* Hash match: confirm with strcmp so a collision never
+             * causes a false dedup drop. NULL entry = hash-only
+             * fallback from a failed strdup (still dedup on hash). */
+            if (!ds->entries[pos] || strcmp(ds->entries[pos], path) == 0)
+                return 1;
+            /* Hash collision with different string: keep probing. */
+        }
     }
     return 0;
 }
@@ -57,16 +81,20 @@ static int dedup_contains(dedup_set* ds, const char* path) {
 static void dedup_insert(dedup_set* ds, const char* path) {
     if (ds->count >= DEDUP_CAPACITY)
         return;
-    uint32_t h = dedup_hash(path);
-    uint32_t slot = h ? h : 1;
-    uint32_t idx = h % DEDUP_CAPACITY;
+    uint64_t h = dedup_hash(path);
+    uint32_t idx = (uint32_t) (h % DEDUP_CAPACITY);
     for (uint32_t i = 0; i < DEDUP_CAPACITY; i++) {
         uint32_t pos = (idx + i) % DEDUP_CAPACITY;
         if (ds->hashes[pos] == DEDUP_EMPTY) {
-            ds->hashes[pos] = slot;
+            ds->hashes[pos] = h;
+            ds->entries[pos] = strdup(path);
+            /* If strdup fails, keep hash-only entry: degrades to
+             * hash dedup rather than failing the whole request. */
             ds->count++;
             return;
         }
+        if (ds->hashes[pos] == h && ds->entries[pos] && strcmp(ds->entries[pos], path) == 0)
+            return; /* already present */
     }
 }
 
@@ -84,7 +112,7 @@ struct ipc_server {
     daemon_state* daemon;
     int listen_fd;
     pthread_t worker;
-    int running;
+    atomic_bool running;
     char sock_path[4096];
     threadpool* pool;
     struct timespec start_time;
@@ -100,9 +128,14 @@ static int read_exact(int fd, void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
         ssize_t n = read(fd, (char*) buf + total, len - total);
-        if (n <= 0)
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
             return -1;
-        total += n;
+        }
+        if (n == 0)
+            return -1;
+        total += (size_t) n;
     }
     return 0;
 }
@@ -110,10 +143,15 @@ static int read_exact(int fd, void* buf, size_t len) {
 static int write_exact(int fd, const void* buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = write(fd, (const char*) buf + total, len - total);
-        if (n <= 0)
+        ssize_t n = send(fd, (const char*) buf + total, len - total, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
             return -1;
-        total += n;
+        }
+        if (n == 0)
+            return -1;
+        total += (size_t) n;
     }
     return 0;
 }
@@ -154,10 +192,13 @@ static uint8_t* packed_buffer_reuse(bool* owned) {
 /* ── Filesystem fallback: index must never veto the filesystem ──────
  * If the trie has no results (stale index, outside scan roots, ignored
  * dir, new file before rescan), list the parent directory directly.
- * Bounded: single opendir + readdir, no recursion, stops once `want`
- * is reached, caps directory scan to avoid huge-dir stalls. Uses
- * d_type to avoid stat() per entry except symlinks/unknown. */
+ * Bounded three ways: single opendir + readdir, no recursion, stops once
+ * `want` is reached, caps directory scan to avoid huge-dir stalls, and a
+ * wall-clock budget so hung mounts (NFS/Lustre) can't wedge a threadpool
+ * worker past the client's 400ms Tab timeout. Uses d_type to avoid
+ * stat() per entry except symlinks/unknown. */
 #define FS_FALLBACK_MAX_SCAN 5000
+#define FS_FALLBACK_BUDGET_MS 150
 static void fs_fallback_fill(const char* expanded_prefix, int explicit_slash, int dirs_only,
                              int typed_dot, uint32_t want, uint32_t* out_idx,
                              uint32_t* packed_count, uint8_t* packed, size_t* pack_pos,
@@ -220,6 +261,9 @@ static void fs_fallback_fill(const char* expanded_prefix, int explicit_slash, in
     if (!dp)
         return; /* ENOENT/EACCES: nothing to add, stay silent */
 
+    struct timespec t_start;
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
+
     size_t scanned = 0;
     struct dirent* de;
     while ((de = readdir(dp)) != NULL) {
@@ -227,6 +271,17 @@ static void fs_fallback_fill(const char* expanded_prefix, int explicit_slash, in
             break;
         if (*out_idx >= want)
             break;
+        /* Time budget: bail out so a hung mount can't wedge this worker
+         * past the shell's 400ms Tab timeout. Index results (packed
+         * first) are already returned; fallback is best-effort. */
+        if ((scanned & 63) == 0) {
+            struct timespec t_now;
+            clock_gettime(CLOCK_MONOTONIC, &t_now);
+            long elapsed_ms = (t_now.tv_sec - t_start.tv_sec) * 1000L +
+                              (t_now.tv_nsec - t_start.tv_nsec) / 1000000L;
+            if (elapsed_ms > FS_FALLBACK_BUDGET_MS)
+                break;
+        }
         const char* name = de->d_name;
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
             continue;
@@ -271,8 +326,19 @@ static void fs_fallback_fill(const char* expanded_prefix, int explicit_slash, in
     closedir(dp);
 }
 
-static void send_error(int fd, uint32_t req_id, int32_t code, const char* msg) {
-    ipc_header hdr;
+/* Discard hdr.payload_len bytes so the next read starts at a header.
+ * Prevents framing desync / request smuggling after a bad-length error. */
+static void drain_payload(int fd, uint32_t len) {
+    char buf[1024];
+    while (len > 0) {
+        size_t chunk = len > sizeof(buf) ? sizeof(buf) : len;
+        if (read_exact(fd, buf, chunk) < 0)
+            break;
+        len -= (uint32_t) chunk;
+    }
+}
+
+static void send_error(int fd, uint32_t req_id, int32_t code, const char* msg) {    ipc_header hdr;
     ipc_error_resp resp;
     resp.error_code = code;
     memset(resp.message, 0, sizeof(resp.message));
@@ -298,11 +364,44 @@ static void handle_scan(ipc_server* srv, int fd, uint32_t req_id, const ipc_scan
         send_error(fd, req_id, -6, "invalid path: not null-terminated");
         return;
     }
-    if (strstr(req->path, "..") != NULL) {
-        send_error(fd, req_id, -8, "path traversal not allowed");
+    /* Backward compat: old clients sent scan "__clear_cache__" to flush
+     * the query cache. Honor it as a cache clear so we never index a
+     * magic path or pollute last_scan_paths. New clients use
+     * IPC_MSG_CLEAR_CACHE. */
+    if (strcmp(req->path, "__clear_cache__") == 0) {
+        cache_clear(srv->daemon->cache);
+        send_ok(fd, req_id);
         return;
     }
-    daemon_run_scan(srv->daemon, req->path);
+    /* Empty path = rescan all known roots (used by `reindex` with no arg).
+     * Never default to "/" server-side either. */
+    if (req->path[0] == '\0') {
+        if (srv->daemon->last_scan_path_count <= 0) {
+            send_error(fd, req_id, -9, "no scan roots configured");
+            return;
+        }
+        const char* roots[CONFIG_MAX_ROOTS];
+        for (int i = 0; i < srv->daemon->last_scan_path_count; i++)
+            roots[i] = srv->daemon->last_scan_paths[i];
+        daemon_run_scan_multi(srv->daemon, roots, srv->daemon->last_scan_path_count);
+        send_ok(fd, req_id);
+        return;
+    }
+    /* Normalize first so "/a/../b" and "~/x" resolve safely. Only exact
+     * ".." components are traversal; substrings like "a..b" are legit
+     * filenames. path_normalize already collapses ".." without escaping
+     * "/", so no rejection is needed for normalized absolute paths. */
+    {
+        char expanded[4096];
+        char normalized[4096];
+        path_expand_abbrev(expanded, req->path, sizeof(expanded));
+        path_normalize(normalized, expanded, sizeof(normalized));
+        if (normalized[0] == '\0') {
+            send_error(fd, req_id, -6, "invalid path");
+            return;
+        }
+        daemon_run_scan(srv->daemon, normalized);
+    }
     send_ok(fd, req_id);
 }
 
@@ -328,10 +427,10 @@ static void handle_query(ipc_server* srv, int fd, uint32_t req_id, const ipc_que
     char expanded_input[4096];
     path_expand_abbrev(expanded_input, req->input, sizeof(expanded_input));
 
-    if (strstr(req->cwd, "..") != NULL || strstr(expanded_input, "..") != NULL) {
-        send_error(fd, req_id, -8, "path traversal not allowed");
-        return;
-    }
+    /* ".." components (e.g. "cd ../foo") are legitimate shell navigation.
+     * Downstream join_path()/normalise_dir() resolves them safely without
+     * escaping "/", and substrings like "a..b" are valid filenames, so do
+     * not reject here. */
 
     path_validation v = daemon_process_query(srv->daemon, req->cwd, expanded_input);
 
@@ -504,6 +603,7 @@ static void handle_complete(ipc_server* srv, int fd, uint32_t req_id, const ipc_
         fs_fallback_fill(expanded_prefix, explicit_slash, req->dirs_only ? 1 : 0, typed_dot, want,
                          &out_idx, &packed_count, packed, &pack_pos, &seen);
     }
+    dedup_free(&seen);
     ipc_pack_completions_finish(packed, packed_count);
     if (sr_dirs.data)
         daemon_release_scored(srv->daemon, sr_dirs);
@@ -606,6 +706,7 @@ static void handle_recent(ipc_server* srv, int fd, uint32_t req_id, const ipc_re
         out_idx++;
     }
     resp.count = out_idx;
+    dedup_free(&seen);
 
     for (uint32_t i = 0; i < limit; i++) {
         free(paths[i]);
@@ -679,7 +780,9 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
         send_error(fd, req_id, -6, "invalid prefix: not null-terminated");
         return;
     }
-    if (strstr(req->prefix, "..") != NULL) {
+    /* Only exact ".." components are traversal; "a..b" is a valid
+     * filename fragment for fuzzy matching. */
+    if (path_has_dotdot_component(req->prefix)) {
         send_error(fd, req_id, -8, "path traversal not allowed");
         return;
     }
@@ -729,6 +832,7 @@ static void handle_fuzzy_complete(ipc_server* srv, int fd, uint32_t req_id,
                                          is_dir, 0.0f) != 0)
                 break;
         }
+        dedup_free(&seen);
         completions_free(fc);
     }
 
@@ -753,7 +857,7 @@ static void handle_select(ipc_server* srv, int fd, uint32_t req_id, const ipc_se
 static void handle_client(ipc_server* srv, int fd) {
     ipc_header hdr;
 
-    while (srv->running) {
+    while (atomic_load(&srv->running)) {
         if (read_exact(fd, &hdr, sizeof(hdr)) < 0) {
             break;
         }
@@ -778,8 +882,12 @@ static void handle_client(ipc_server* srv, int fd) {
         switch (hdr.msg_type) {
         case IPC_MSG_SCAN: {
             ipc_scan_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid scan payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_scan(srv, fd, hdr.request_id, &req);
@@ -787,8 +895,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_SAVE: {
             ipc_save_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid save payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_save(srv, fd, hdr.request_id, &req);
@@ -796,8 +908,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_QUERY: {
             ipc_query_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid query payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_query(srv, fd, hdr.request_id, &req);
@@ -805,8 +921,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_COMPLETE: {
             ipc_complete_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid complete payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_complete(srv, fd, hdr.request_id, &req);
@@ -814,35 +934,60 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_SUGGEST: {
             ipc_suggest_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid suggest payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_suggest(srv, fd, hdr.request_id, &req);
             break;
         }
         case IPC_MSG_SHUTDOWN: {
+            if (hdr.payload_len != 0)
+                drain_payload(fd, hdr.payload_len);
             send_ok(fd, hdr.request_id);
-            srv->running = 0;
+            atomic_store(&srv->running, false);
             close(fd);
             return;
         }
         case IPC_MSG_PING: {
+            if (hdr.payload_len != 0) {
+                drain_payload(fd, hdr.payload_len);
+                send_error(fd, hdr.request_id, -3, "invalid ping payload");
+                break;
+            }
             handle_ping(srv, fd, hdr.request_id);
             break;
         }
         case IPC_MSG_METRICS: {
+            if (hdr.payload_len != 0) {
+                drain_payload(fd, hdr.payload_len);
+                send_error(fd, hdr.request_id, -3, "invalid metrics payload");
+                break;
+            }
             handle_metrics(srv, fd, hdr.request_id);
             break;
         }
         case IPC_MSG_SCAN_STATUS: {
+            if (hdr.payload_len != 0) {
+                drain_payload(fd, hdr.payload_len);
+                send_error(fd, hdr.request_id, -3, "invalid scan-status payload");
+                break;
+            }
             handle_scan_status(srv, fd, hdr.request_id);
             break;
         }
         case IPC_MSG_FUZZY_COMPLETE: {
             ipc_complete_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid fuzzy complete payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_fuzzy_complete(srv, fd, hdr.request_id, &req);
@@ -850,8 +995,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_SELECT: {
             ipc_select_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid select payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_select(srv, fd, hdr.request_id, &req);
@@ -859,8 +1008,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_RECENT: {
             ipc_recent_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid recent payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             handle_recent(srv, fd, hdr.request_id, &req);
@@ -868,8 +1021,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_BOOKMARKS: {
             ipc_bookmarks_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid bookmarks payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             ipc_header resp_hdr;
@@ -898,10 +1055,12 @@ static void handle_client(ipc_server* srv, int fd) {
             resp.daemon_running = 1;
             resp.scanning = atomic_load(&srv->daemon->scanning) ? 1 : 0;
             resp.watcher_active = (srv->daemon->watcher != NULL) ? 1 : 0;
+            store_lock(srv->daemon->store);
             resp.buckets_indexed = srv->daemon->store ? srv->daemon->store->right_index : 0;
-            resp.queries_total = srv->daemon->metrics.queries_total;
-            resp.cache_hits = srv->daemon->metrics.cache_hits;
-            resp.cache_misses = srv->daemon->metrics.cache_misses;
+            store_unlock(srv->daemon->store);
+            resp.queries_total = atomic_load(&srv->daemon->metrics.queries_total);
+            resp.cache_hits = atomic_load(&srv->daemon->metrics.cache_hits);
+            resp.cache_misses = atomic_load(&srv->daemon->metrics.cache_misses);
             resp.rescan_interval = (uint32_t) srv->daemon->rescan_interval_seconds;
             resp.bookmark_count = (uint32_t) srv->daemon->bookmark_count;
             resp.recent_count = (uint32_t) srv->daemon->recent.count;
@@ -954,6 +1113,8 @@ static void handle_client(ipc_server* srv, int fd) {
             break;
         }
         case IPC_MSG_RELOAD_CONFIG: {
+            if (hdr.payload_len != 0)
+                drain_payload(fd, hdr.payload_len);
             atomic_store(&srv->daemon->config_reload_requested, true);
             ipc_header resp_hdr;
             ipc_ok_resp resp;
@@ -964,7 +1125,24 @@ static void handle_client(ipc_server* srv, int fd) {
             break;
         }
         case IPC_MSG_RESET_STATS: {
+            if (hdr.payload_len != 0)
+                drain_payload(fd, hdr.payload_len);
             memset(&srv->daemon->metrics, 0, sizeof(srv->daemon->metrics));
+            cache_clear(srv->daemon->cache);
+            ipc_header resp_hdr;
+            ipc_ok_resp resp;
+            resp.status = 0;
+            ipc_write_header(&resp_hdr, IPC_MSG_OK, sizeof(resp), hdr.request_id);
+            write_exact(fd, &resp_hdr, sizeof(resp_hdr));
+            write_exact(fd, &resp, sizeof(resp));
+            break;
+        }
+        case IPC_MSG_CLEAR_CACHE: {
+            if (hdr.payload_len != 0) {
+                drain_payload(fd, hdr.payload_len);
+                send_error(fd, hdr.request_id, -3, "invalid clear-cache payload");
+                break;
+            }
             cache_clear(srv->daemon->cache);
             ipc_header resp_hdr;
             ipc_ok_resp resp;
@@ -976,8 +1154,12 @@ static void handle_client(ipc_server* srv, int fd) {
         }
         case IPC_MSG_FUZZY_SUGGEST: {
             ipc_fuzzy_suggest_req req;
-            if (hdr.payload_len != sizeof(req) || read_exact(fd, &req, sizeof(req)) < 0) {
+            if (hdr.payload_len != sizeof(req)) {
+                drain_payload(fd, hdr.payload_len);
                 send_error(fd, hdr.request_id, -3, "invalid fuzzy suggest payload");
+                break;
+            }
+            if (read_exact(fd, &req, sizeof(req)) < 0) {
                 break;
             }
             if (validate_string_field(req.query, sizeof(req.query)) != 0) {
@@ -1011,6 +1193,7 @@ static void handle_client(ipc_server* srv, int fd) {
             break;
         }
         default:
+            drain_payload(fd, hdr.payload_len);
             send_error(fd, hdr.request_id, -4, "unknown message type");
             break;
         }
@@ -1030,17 +1213,29 @@ static void handle_client_threaded(void* arg) {
 static void* server_loop(void* arg) {
     ipc_server* srv = (ipc_server*) arg;
 
-    while (srv->running) {
+    while (atomic_load(&srv->running)) {
         int fd = accept(srv->listen_fd, NULL, NULL);
         if (fd < 0) {
             if (errno == EINTR)
                 continue;
+            if (errno == EMFILE || errno == ENFILE || errno == ENOMEM || errno == EAGAIN ||
+                errno == ECONNABORTED)
+                continue;
+            if (!atomic_load(&srv->running))
+                break;
             break;
         }
         client_ctx* ctx = malloc(sizeof(client_ctx));
+        if (!ctx) {
+            close(fd);
+            continue;
+        }
         ctx->srv = srv;
         ctx->fd = fd;
-        threadpool_submit(srv->pool, handle_client_threaded, ctx);
+        if (threadpool_submit(srv->pool, handle_client_threaded, ctx) != 0) {
+            close(fd);
+            free(ctx);
+        }
     }
 
     return NULL;
@@ -1052,7 +1247,7 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
         return NULL;
 
     srv->daemon = daemon;
-    srv->running = 1;
+    atomic_store(&srv->running, true);
     strncpy(srv->sock_path, sock_path, sizeof(srv->sock_path) - 1);
     atomic_store(&srv->active_connections, 0);
 
@@ -1070,6 +1265,9 @@ ipc_server* ipc_server_start(daemon_state* daemon, const char* sock_path) {
         free(srv);
         return NULL;
     }
+
+    /* A client disconnecting mid-reply must not kill the daemon. */
+    signal(SIGPIPE, SIG_IGN);
 
     clock_gettime(CLOCK_MONOTONIC, &srv->start_time);
 
@@ -1124,7 +1322,7 @@ void ipc_server_stop(ipc_server* srv) {
     if (!srv)
         return;
 
-    srv->running = 0;
+    atomic_store(&srv->running, false);
 
     /* Wake up accept with a dummy connection */
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);

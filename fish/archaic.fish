@@ -54,6 +54,32 @@ set -g __archaic_exec_cmds python python3 pytest lua ruby perl php node bun deno
 set -g __archaic_commands $__archaic_file_cmds $__archaic_exec_cmds
 
 # ── Load config (socket path + command list) ─────────────────────────────────
+# Single source of truth is `archaic-cli print-socket/print-commands` (C TOML
+# parser). Shell grep is fallback only, so fish/bash/zsh can't drift.
+set -g __archaic_cli_sock_ok 0
+set -g __archaic_cli_cmds_ok 0
+if test -x "$archaic_cli_path"
+    set -l cli_sock ""
+    if command -sq timeout
+        set cli_sock (timeout 0.3 "$archaic_cli_path" print-socket 2>/dev/null)
+    else
+        set cli_sock ("$archaic_cli_path" print-socket 2>/dev/null)
+    end
+    if test -n "$cli_sock"
+        set -g archaic_sock_path "$cli_sock"
+        set -g __archaic_cli_sock_ok 1
+    end
+    set -l cli_cmds ""
+    if command -sq timeout
+        set cli_cmds (timeout 0.3 "$archaic_cli_path" print-commands fish 2>/dev/null)
+    else
+        set cli_cmds ("$archaic_cli_path" print-commands fish 2>/dev/null)
+    end
+    if test -n "$cli_cmds"
+        set -g __archaic_commands (string split ' ' -- $cli_cmds)
+        set -g __archaic_cli_cmds_ok 1
+    end
+end
 set -l config_file ""
 for p in "$ARCHAIC_CONFIG" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml"
     if test -n "$p" -a -f "$p"
@@ -63,22 +89,26 @@ for p in "$ARCHAIC_CONFIG" "$HOME/.config/archaic/config.toml" "/etc/archaic/con
 end
 
 if test -n "$config_file"
-    # Extract socket path from [daemon] section
-    set -l cfg_sock (grep -A10 '^\[daemon\]' "$config_file" 2>/dev/null | grep 'socket_path' | string replace -r '.*=\s*"([^"]*)"' '$1')
-    if test -n "$cfg_sock"
-        set -g archaic_sock_path "$cfg_sock"
+    # Fallback when archaic-cli is unavailable or has no value.
+    if test "$__archaic_cli_sock_ok" = "0"
+        set -l cfg_sock (grep -A10 '^\[daemon\]' "$config_file" 2>/dev/null | grep 'socket_path' | string replace -r '.*=\s*"([^"]*)"' '$1')
+        if test -n "$cfg_sock"
+            set -g archaic_sock_path "$cfg_sock"
+        end
     end
 
-    # Extract command list from [fish] section
-    set -l cfg_cmds (grep -A10 '^\[fish\]' "$config_file" 2>/dev/null | grep 'commands' | string replace -r '.*=\s*\[(.*)\]' '$1' | string replace -r '"' '' | string split ',')
-    if test (count $cfg_cmds) -gt 0
-        # Trim whitespace from each command
-        set -l trimmed_cmds
-        for c in $cfg_cmds
-            set trimmed_cmds $trimmed_cmds (string trim "$c")
-        end
-        if test (count $trimmed_cmds) -gt 0
-            set -g __archaic_commands $trimmed_cmds
+    # Extract command list from [fish] section (fallback only).
+    if test "$__archaic_cli_cmds_ok" = "0"
+        set -l cfg_cmds (grep -A10 '^\[fish\]' "$config_file" 2>/dev/null | grep 'commands' | string replace -r '.*=\s*\[(.*)\]' '$1' | string replace -r '"' '' | string split ',')
+        if test (count $cfg_cmds) -gt 0
+            # Trim whitespace from each command
+            set -l trimmed_cmds
+            for c in $cfg_cmds
+                set trimmed_cmds $trimmed_cmds (string trim "$c")
+            end
+            if test (count $trimmed_cmds) -gt 0
+                set -g __archaic_commands $trimmed_cmds
+            end
         end
     end
 
@@ -983,11 +1013,14 @@ bind \e\[1\;4C __archaic_accept_and_continue
 # Ctrl+Shift+Space: accept and continue (alternative)
 bind \e\[27\;6\;32~ __archaic_accept_and_continue
 
-# Ctrl+R: must use fish_user_key_bindings to override Fish's default history search
+# Ctrl+R is Fish's history search by default. Archaic does NOT steal it
+# unless you opt in: set -gx ARCHAIC_BIND_CTRL_R 1
 # (conf.d scripts load before default key bindings, so direct bind gets overridden)
 function __archaic_user_key_bindings
-    bind --mode insert \cr __archaic_accept_suggestion
-    bind --mode default \cr __archaic_accept_suggestion
+    if set -q ARCHAIC_BIND_CTRL_R; and test "$ARCHAIC_BIND_CTRL_R" = "1"
+        bind --mode insert \cr __archaic_accept_suggestion
+        bind --mode default \cr __archaic_accept_suggestion
+    end
     bind --mode insert ctrl-space __archaic_accept_suggestion 2>/dev/null
     bind --mode default ctrl-space __archaic_accept_suggestion 2>/dev/null
     bind --mode insert -k nul __archaic_accept_suggestion 2>/dev/null

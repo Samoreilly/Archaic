@@ -34,6 +34,7 @@ typedef struct {
     query_cache* cache;
     pthread_t scan_thread;
     atomic_bool scanning;
+    pthread_mutex_t scan_start_lock;
     atomic_bool scanner_healthy;
     atomic_size_t scan_bucket_count;
     char last_scan_paths[CONFIG_MAX_ROOTS][CONFIG_MAX_STRING];
@@ -45,6 +46,7 @@ typedef struct {
     recent_files recent;
     incremental_state incremental;
     bool case_insensitive;
+    double hidden_file_penalty;
     char bookmarks[CONFIG_MAX_BOOKMARKS][CONFIG_MAX_STRING];
     int bookmark_count;
     fs_watcher* watcher;

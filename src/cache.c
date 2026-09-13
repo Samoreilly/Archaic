@@ -318,15 +318,27 @@ void cache_put(query_cache* cache, const char* prefix, const scored_completions*
 
     cache_entry* existing = shard_find(s, prefix);
     if (existing) {
-        scored_completions* copy = deep_copy_scored(sc);
-        if (copy) {
-            shard_free_entry_value(existing);
-            existing->value = copy;
-            existing->timestamp = now_seconds();
-            shard_lru_move_to_front(s, existing);
+        int refs = atomic_load(&existing->refs);
+        if (refs > 0) {
+            /* Borrowed via cache_get: mirror evict/expiry path. Mark
+             * deleted + detach, insert fresh slot below instead of
+             * freeing in place (UAF). Borrowers release to free. */
+            existing->deleted = true;
+            shard_lru_detach(existing);
+            if (s->count > 0)
+                s->count--;
+        } else {
+            scored_completions* copy = deep_copy_scored(sc);
+            if (copy) {
+                shard_free_entry_value(existing);
+                existing->value = copy;
+                existing->timestamp = now_seconds();
+                shard_lru_move_to_front(s, existing);
+            }
+            pthread_mutex_unlock(&s->lock);
+            return;
         }
-        pthread_mutex_unlock(&s->lock);
-        return;
+        /* refs>0: fall through to fresh-slot insert with new copy. */
     }
 
     if (s->count >= s->capacity) {

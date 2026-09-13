@@ -60,11 +60,16 @@ void scan_queue_init(scan_queue* q) {
 }
 
 int scan_queue_push(scan_queue* q, const char* path, int depth) {
+    if (!q || !path)
+        return -1;
+    char* copy = strdup(path);
+    if (!copy)
+        return -1;
     pthread_mutex_lock(&q->queue_lock);
     while (q->queue_count >= SCANNER_QUEUE_SIZE)
         pthread_cond_wait(&q->queue_not_full, &q->queue_lock);
     scan_work_item* item = &q->queue[q->queue_tail];
-    item->path = strdup(path);
+    item->path = copy;
     item->depth = depth;
     q->queue_tail = (q->queue_tail + 1) % SCANNER_QUEUE_SIZE;
     q->queue_count++;
@@ -74,12 +79,21 @@ int scan_queue_push(scan_queue* q, const char* path, int depth) {
 }
 
 int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_cap) {
+    if (!q || !path_out || !depth_out || path_cap == 0)
+        return -1;
     pthread_mutex_lock(&q->queue_lock);
     if (q->queue_count == 0) {
         pthread_mutex_unlock(&q->queue_lock);
         return -1;
     }
     scan_work_item* item = &q->queue[q->queue_head];
+    if (!item->path) {
+        q->queue_head = (q->queue_head + 1) % SCANNER_QUEUE_SIZE;
+        q->queue_count--;
+        pthread_cond_signal(&q->queue_not_full);
+        pthread_mutex_unlock(&q->queue_lock);
+        return -1;
+    }
     strncpy(path_out, item->path, path_cap - 1);
     path_out[path_cap - 1] = '\0';
     *depth_out = item->depth;
@@ -87,6 +101,7 @@ int scan_queue_pop(scan_queue* q, char* path_out, int* depth_out, size_t path_ca
     item->path = NULL;
     q->queue_head = (q->queue_head + 1) % SCANNER_QUEUE_SIZE;
     q->queue_count--;
+    pthread_cond_signal(&q->queue_not_full);
     pthread_mutex_unlock(&q->queue_lock);
     return 0;
 }
@@ -460,6 +475,7 @@ void parallel_scanner_stop(parallel_scanner* scanner) {
     atomic_store(&scanner->stop, true);
     pthread_mutex_lock(&scanner->queue->queue_lock);
     pthread_cond_broadcast(&scanner->queue->queue_not_empty);
+    pthread_cond_broadcast(&scanner->queue->queue_not_full);
     pthread_mutex_unlock(&scanner->queue->queue_lock);
     for (int i = 0; i < scanner->num_threads; i++) {
         if (scanner->workers[i]) {

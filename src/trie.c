@@ -460,6 +460,10 @@ void insert(Trie* root, const char* str) {
             if (!new_node)
                 return;
             new_node->key = strdup(str + i);
+            if (!new_node->key) {
+                free(new_node);
+                return;
+            }
             new_node->key_len = len - i;
             new_node->children = new_node->inline_storage;
             new_node->child_capacity = RADIX_INLINE_CHILDREN;
@@ -495,6 +499,10 @@ void insert(Trie* root, const char* str) {
             if (!new_node)
                 return;
             new_node->key = strdup(str + i);
+            if (!new_node->key) {
+                free(new_node);
+                return;
+            }
             new_node->key_len = len - i;
             new_node->children = new_node->inline_storage;
             new_node->child_capacity = RADIX_INLINE_CHILDREN;
@@ -509,6 +517,10 @@ void insert(Trie* root, const char* str) {
             if (!split)
                 return;
             split->key = strndup(child_node->key, match);
+            if (!split->key) {
+                free(split);
+                return;
+            }
             split->key_len = match;
             split->children = split->inline_storage;
             split->child_capacity = RADIX_INLINE_CHILDREN;
@@ -535,6 +547,10 @@ void insert(Trie* root, const char* str) {
                 if (!new_node)
                     return;
                 new_node->key = strdup(str + i + match);
+                if (!new_node->key) {
+                    free(new_node);
+                    return;
+                }
                 new_node->key_len = len - i - match;
                 new_node->children = new_node->inline_storage;
                 new_node->child_capacity = RADIX_INLINE_CHILDREN;

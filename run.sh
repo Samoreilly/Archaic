@@ -81,7 +81,22 @@ usage() {
 
 is_running() {
     local sock="${1:-$(resolve_sock_path)}"
-    [ -S "$sock" ] && kill -0 "$(cat "${sock}.pid" 2>/dev/null)" 2>/dev/null
+    [ -S "$sock" ] || return 1
+    local pid
+    pid="$(cat "${sock}.pid" 2>/dev/null)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    # PID file missing/stale (e.g. daemon started by systemd, or pid race):
+    # fall back to a bounded ping so a live daemon isn't reported as down.
+    local cli="$SCRIPT_DIR/build/archaic-cli"
+    [ -x "$cli" ] || cli="archaic-cli"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 1 "$cli" --sock "$sock" ping >/dev/null 2>&1 && return 0
+    else
+        "$cli" --sock "$sock" ping >/dev/null 2>&1 && return 0
+    fi
+    return 1
 }
 
 start_daemon() {
@@ -106,6 +121,9 @@ start_daemon() {
 
     rm -f "$sock_path"
 
+    # Note: the daemon writes "${sock_path}.pid" itself (write_pid_file).
+    # The shell must NOT write it too (double-writer race): wait for the
+    # daemon's file plus a live socket instead.
     if [ -n "$scan_path" ]; then
         echo "Starting archaic daemon, scanning: $scan_path"
         "$SCRIPT_DIR/build/archaic" --daemon "$scan_path" "$sock_path" &
@@ -113,17 +131,22 @@ start_daemon() {
         echo "Starting archaic daemon (using config scan_paths)"
         "$SCRIPT_DIR/build/archaic" --daemon "" "$sock_path" &
     fi
-    echo $! > "${sock_path}.pid"
+    local daemon_pid=$!
     echo "Socket: $sock_path"
 
-    sleep 1
-
-    if is_running "$sock_path"; then
-        echo "Daemon started (PID: $!)"
-    else
-        echo "Failed to start daemon"
-        return 1
-    fi
+    for _ in $(seq 1 20); do
+        sleep 0.25
+        if is_running "$sock_path"; then
+            echo "Daemon started (PID: $(cat "${sock_path}.pid" 2>/dev/null || echo "$daemon_pid"))"
+            return 0
+        fi
+        if ! kill -0 "$daemon_pid" 2>/dev/null; then
+            echo "Failed to start daemon (process exited)"
+            return 1
+        fi
+    done
+    echo "Failed to start daemon (timed out waiting for socket)"
+    return 1
 }
 
 stop_daemon() {
@@ -137,7 +160,7 @@ stop_daemon() {
     fi
 
     echo "Stopping daemon..."
-    "$SCRIPT_DIR/build/archaic-cli" shutdown 2>/dev/null || true
+    "$SCRIPT_DIR/build/archaic-cli" --sock "$sock_path" shutdown 2>/dev/null || true
     sleep 2
 
     if is_running "$sock_path"; then

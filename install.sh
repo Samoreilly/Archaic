@@ -131,10 +131,10 @@ else
         mkdir -p "$HOME/.config/archaic"
         grep -qxF "$SCAN_PATH" "$HOME/.config/archaic/roots" 2>/dev/null || echo "$SCAN_PATH" >> "$HOME/.config/archaic/roots"
     fi
-    info "Starting daemon"
+    info "Starting daemon (pid file written by the daemon itself)"
     "$BUILD_DIR/archaic" --daemon "$SOCK_PATH" &
-    echo $! > "${SOCK_PATH}.pid"
-    disown $! 2>/dev/null || true
+    daemon_pid=$!
+    disown $daemon_pid 2>/dev/null || true
 fi
 
 ok=0

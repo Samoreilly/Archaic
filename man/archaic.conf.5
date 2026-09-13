@@ -11,19 +11,33 @@ of the daemon's behavior, from scanning parameters to scoring weights.
 Core daemon configuration.
 .TP
 .B scan_path = "\fIpath\fR"
-Root directory to index (required).
+Single root directory to index. If scan_paths is set, scan_path is ignored.
+Workspace defaults (~/src, ~/projects, ~/dev, ~/code, ~/git, ~/samdev,
+~/work) apply when neither is configured.
+.TP
+.B scan_paths = [\fI"path1"\fR, \fI"path2"\fR, ...]
+Multiple roots to index (max 16). Extra roots from ~/.config/archaic/roots
+(managed by archaic-cli watch/unwatch) are merged in.
 .TP
 .B socket_path = "\fIpath\fR"
-Unix socket location (default: /tmp/archaic-daemon.sock).
+Unix socket location (default: $XDG_RUNTIME_DIR/archaic.sock, else
+/tmp/archaic-$UID.sock).
 .TP
 .B scan_threads = \fIn\fR
-Number of parallel scanner threads (default: 4).
+Number of parallel scanner threads (default: 4, 0 = auto-detect, max: 32).
 .TP
 .B max_depth = \fIn\fR
-Maximum directory traversal depth (default: 10).
+Maximum directory traversal depth (default: 10, max: 20).
 .TP
 .B rescan_interval_seconds = \fIn\fR
-Auto-rescan interval, 0 to disable (default: 300).
+Auto-rescan interval, 0 to disable (default: 300, max: 86400).
+.TP
+.B log_level = \fIn\fR
+0=debug, 1=info, 2=warn, 3=error (default: 1).
+.TP
+.B colored_output = \fIbool\fR
+Enable ANSI colors (default: true). Also accepted under [storage] for
+backward compatibility with wizard-generated configs.
 .SS [storage]
 Memory and storage configuration.
 .TP
@@ -37,13 +51,20 @@ Max entries per bucket (default: 100000).
 Query cache size (default: 1024).
 .TP
 .B cache_ttl_seconds = \fIn\fR
-Query cache time-to-live (default: 2).
+Query cache time-to-live (default: 30, range: 1-300).
 .TP
 .B colored_output = \fIbool\fR
 Enable colored output in completions (default: true).
 .TP
 .B case_insensitive = \fIbool\fR
-Enable case-insensitive matching (default: false).
+Enable case-insensitive matching (default: false). Booleans accept
+true/false, 1/0, yes/no, on/off (case-insensitive).
+.TP
+.B max_memory_mb = \fIn\fR
+Memory budget in MB (default: 512, range: 64-8192).
+.TP
+.B max_total_nodes = \fIn\fR
+Cap on total index nodes, 0 = unlimited (default: 0).
 .TP
 .B recent_files_capacity = \fIn\fR
 Max recent files to track (default: 50, max: 100).
@@ -64,6 +85,12 @@ File type preference weight (default: 0.10).
 .TP
 .B weight_cwd_proximity = \fIn\fR
 Current directory proximity weight (default: 0.05).
+.TP
+.B min_score_threshold = \fIn\fR
+Minimum score to return (default: 0.0).
+.TP
+.B hidden_file_penalty = \fIn\fR
+Penalty for hidden files when not explicitly typed (default: 0.50).
 .SS [scanner]
 Filesystem scanning options.
 .TP

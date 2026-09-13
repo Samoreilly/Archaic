@@ -2,6 +2,7 @@
 #include "io/fileloader.h"
 #include "log.h"
 #include "metrics.h"
+#include "path-utils.h"
 #include "threadpool.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -89,11 +90,34 @@ static void tcp_handle_scan(tcp_server* srv, int fd, uint32_t req_id, const ipc_
         tcp_send_error(fd, req_id, -6, "invalid path: not null-terminated");
         return;
     }
-    if (strstr(req->path, "..") != NULL) {
-        tcp_send_error(fd, req_id, -8, "path traversal not allowed");
+    if (strcmp(req->path, "__clear_cache__") == 0) {
+        cache_clear(srv->daemon->cache);
+        tcp_send_ok(fd, req_id);
         return;
     }
-    daemon_run_scan(srv->daemon, req->path);
+    if (req->path[0] == '\0') {
+        if (srv->daemon->last_scan_path_count <= 0) {
+            tcp_send_error(fd, req_id, -9, "no scan roots configured");
+            return;
+        }
+        const char* roots[CONFIG_MAX_ROOTS];
+        for (int i = 0; i < srv->daemon->last_scan_path_count; i++)
+            roots[i] = srv->daemon->last_scan_paths[i];
+        daemon_run_scan_multi(srv->daemon, roots, srv->daemon->last_scan_path_count);
+        tcp_send_ok(fd, req_id);
+        return;
+    }
+    {
+        char expanded[4096];
+        char normalized[4096];
+        path_expand_abbrev(expanded, req->path, sizeof(expanded));
+        path_normalize(normalized, expanded, sizeof(normalized));
+        if (normalized[0] == '\0') {
+            tcp_send_error(fd, req_id, -6, "invalid path");
+            return;
+        }
+        daemon_run_scan(srv->daemon, normalized);
+    }
     tcp_send_ok(fd, req_id);
 }
 
@@ -115,10 +139,8 @@ static void tcp_handle_query(tcp_server* srv, int fd, uint32_t req_id, const ipc
         tcp_send_error(fd, req_id, -6, "invalid input: not null-terminated");
         return;
     }
-    if (strstr(req->cwd, "..") != NULL || strstr(req->input, "..") != NULL) {
-        tcp_send_error(fd, req_id, -8, "path traversal not allowed");
-        return;
-    }
+    /* ".." components are legitimate shell navigation; downstream
+     * join_path()/normalise_dir() resolves them safely. */
 
     path_validation v = daemon_process_query(srv->daemon, req->cwd, req->input);
 
@@ -149,14 +171,24 @@ static void tcp_handle_complete(tcp_server* srv, int fd, uint32_t req_id,
         tcp_send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
         return;
     }
-    if (strstr(req->prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
-        tcp_send_error(fd, req_id, -8, "path traversal not allowed");
-        return;
+    /* Match unix-socket server: expand, join relative with cwd, normalize.
+     * ".." components resolve safely; only exact components would be
+     * traversal and normalize already collapses them. */
+
+    char expanded_tmp[4096];
+    char expanded_prefix[4096];
+    path_expand_abbrev(expanded_tmp, req->prefix, sizeof(expanded_tmp));
+    if (expanded_tmp[0] != '/' && req->cwd[0] == '/') {
+        char joined[4096];
+        int n = snprintf(joined, sizeof(joined), "%s/%s", req->cwd, expanded_tmp);
+        if (n > 0 && (size_t) n < sizeof(joined))
+            memcpy(expanded_tmp, joined, (size_t) n + 1);
     }
+    path_normalize(expanded_prefix, expanded_tmp, sizeof(expanded_prefix));
 
     uint64_t now = (uint64_t) time(NULL);
     scored_result sr =
-        daemon_get_scored_completions(srv->daemon, req->prefix, req->limit, now, req->cwd, 0);
+        daemon_get_scored_completions(srv->daemon, expanded_prefix, req->limit, now, req->cwd, 0);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -170,10 +202,10 @@ static void tcp_handle_complete(tcp_server* srv, int fd, uint32_t req_id,
     if (sc) {
         uint32_t n = sc->count < 50 ? sc->count : 50;
         uint32_t out_idx = 0;
-        size_t prefix_len = strlen(req->prefix);
+        size_t prefix_len = strlen(expanded_prefix);
         /* Normalize: strip trailing '/' for filter logic */
         int prefix_had_slash = 0;
-        if (prefix_len > 1 && req->prefix[prefix_len - 1] == '/') {
+        if (prefix_len > 1 && expanded_prefix[prefix_len - 1] == '/') {
             prefix_len--;
             prefix_had_slash = 1;
         }
@@ -191,7 +223,7 @@ static void tcp_handle_complete(tcp_server* srv, int fd, uint32_t req_id,
             if (prefix_len > 0) {
                 if (effective_path_len <= prefix_len)
                     continue;
-                if (strncmp(p, req->prefix, prefix_len) != 0 || p[prefix_len] != '/')
+                if (strncmp(p, expanded_prefix, prefix_len) != 0 || p[prefix_len] != '/')
                     continue;
                 if (memchr(p + prefix_len + 1, '/', effective_path_len - prefix_len - 1) != NULL)
                     continue;
@@ -245,13 +277,14 @@ static void tcp_handle_suggest(tcp_server* srv, int fd, uint32_t req_id,
         tcp_send_error(fd, req_id, -6, "invalid cwd: not null-terminated");
         return;
     }
-    if (strstr(req->prefix, "..") != NULL || strstr(req->cwd, "..") != NULL) {
-        tcp_send_error(fd, req_id, -8, "path traversal not allowed");
-        return;
-    }
+    char expanded_tmp[4096];
+    char expanded_prefix[4096];
+    path_expand_abbrev(expanded_tmp, req->prefix, sizeof(expanded_tmp));
+    path_normalize(expanded_prefix, expanded_tmp, sizeof(expanded_prefix));
 
     uint64_t now = (uint64_t) time(NULL);
-    scored_result sr = daemon_get_scored_completions(srv->daemon, req->prefix, 1, now, req->cwd, 0);
+    scored_result sr =
+        daemon_get_scored_completions(srv->daemon, expanded_prefix, 1, now, req->cwd, 0);
     const scored_completions* sc = sr.data;
 
     ipc_header hdr;
@@ -374,7 +407,7 @@ static void tcp_handle_fuzzy_complete(tcp_server* srv, int fd, uint32_t req_id,
         tcp_send_error(fd, req_id, -6, "invalid prefix: not null-terminated");
         return;
     }
-    if (strstr(req->prefix, "..") != NULL) {
+    if (path_has_dotdot_component(req->prefix)) {
         tcp_send_error(fd, req_id, -8, "path traversal not allowed");
         return;
     }
@@ -514,6 +547,15 @@ static void tcp_dispatch_message(tcp_server* srv, int fd, ipc_header* hdr) {
             break;
         }
         tcp_handle_recent(srv, fd, hdr->request_id, &req);
+        break;
+    }
+    case IPC_MSG_CLEAR_CACHE: {
+        if (hdr->payload_len != 0) {
+            tcp_send_error(fd, hdr->request_id, -3, "invalid clear-cache payload");
+            break;
+        }
+        cache_clear(srv->daemon->cache);
+        tcp_send_ok(fd, hdr->request_id);
         break;
     }
     default:

@@ -291,6 +291,7 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->storage.cache_ttl_seconds = 30;
     cfg->storage.recent_files_capacity = 50;
     cfg->storage.case_insensitive = false;
+    cfg->storage.colored_output = true;
     cfg->storage.max_total_nodes = 0;
     cfg->storage.max_memory_mb = 512;
 
@@ -303,6 +304,8 @@ void config_init_defaults(archaic_config* cfg) {
     cfg->scoring.hidden_file_penalty = 0.50;
 
     cfg->fish.command_count = 0;
+    cfg->bash.command_count = 0;
+    cfg->zsh.command_count = 0;
 
     cfg->scanner.ignore_dir_count = 0;
     cfg->scanner.ignore_file_count = 0;
@@ -504,6 +507,54 @@ static int parse_int(const char* s, int* out) {
     return 0;
 }
 
+/* Parse one "..." element at *pp (which must point at the opening quote).
+ * Unescapes \\, \n, \t, \" into out (truncated to out_cap-1). Advances *pp
+ * past the closing quote. Returns 0 on success, -1 if unterminated. */
+static int parse_quoted_element(char** pp, char* out, size_t out_cap) {
+    char* p = *pp;
+    if (!p || *p != '"')
+        return -1;
+    p++; /* skip opening quote */
+    size_t n = 0;
+    while (*p && *p != '"') {
+        char c;
+        if (*p == '\\' && p[1]) {
+            p++;
+            switch (*p) {
+            case 'n':
+                c = '\n';
+                break;
+            case 't':
+                c = '\t';
+                break;
+            case '\\':
+                c = '\\';
+                break;
+            case '"':
+                c = '"';
+                break;
+            default:
+                /* Keep unknown escapes literally: backslash + char. */
+                if (n + 1 < out_cap)
+                    out[n++] = '\\';
+                c = *p;
+                break;
+            }
+            p++;
+        } else {
+            c = *p++;
+        }
+        if (n + 1 < out_cap)
+            out[n++] = c;
+    }
+    if (*p != '"')
+        return -1; /* unterminated */
+    p++; /* skip closing quote */
+    out[n < out_cap ? n : out_cap - 1] = '\0';
+    *pp = p;
+    return 0;
+}
+
 /* Parse a double. Returns 0 on success, -1 on error. */
 static int parse_double(const char* s, double* out) {
     char* end;
@@ -513,6 +564,37 @@ static int parse_double(const char* s, double* out) {
         return -1;
     *out = val;
     return 0;
+}
+
+/* Parse a bool. Accepts true/false, 1/0, yes/no, on/off (case-insensitive).
+ * Returns 0 on success, -1 on error. */
+static int parse_bool(const char* s, bool* out) {
+    char buf[16];
+    size_t n = 0;
+    while (*s && isspace((unsigned char) *s))
+        s++;
+    while (*s && n + 1 < sizeof(buf)) {
+        buf[n++] = (char) tolower((unsigned char) *s);
+        s++;
+    }
+    while (*s && !isspace((unsigned char) *s))
+        return -1; /* too long for a bool literal */
+    while (*s && isspace((unsigned char) *s))
+        s++;
+    if (*s != '\0')
+        return -1;
+    buf[n] = '\0';
+    if (strcmp(buf, "true") == 0 || strcmp(buf, "1") == 0 || strcmp(buf, "yes") == 0 ||
+        strcmp(buf, "on") == 0) {
+        *out = true;
+        return 0;
+    }
+    if (strcmp(buf, "false") == 0 || strcmp(buf, "0") == 0 || strcmp(buf, "no") == 0 ||
+        strcmp(buf, "off") == 0) {
+        *out = false;
+        return 0;
+    }
+    return -1;
 }
 
 /* ── Section / key dispatch ──────────────────────────────────────────────── */
@@ -563,9 +645,8 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
             return parse_double(trim(value), dest);
         }
         case TYPE_BOOL: {
-            /* bools not used in current schema but parsed for completeness */
-            (void) trim(value);
-            return 0;
+            bool* dest = (bool*) (base + (size_t) map[i].offset);
+            return parse_bool(trim(value), dest);
         }
         case TYPE_STRING_ARRAY: {
             config_fish* fish = (config_fish*) (base + (size_t) map[i].offset);
@@ -586,16 +667,14 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
                     continue;
                 }
                 if (*p == '"') {
-                    char* item = parse_string(p);
-                    if (!item)
+                    char item[CONFIG_MAX_COMMAND_LEN];
+                    if (parse_quoted_element(&p, item, sizeof(item)) != 0)
                         return -1;
                     strncpy(fish->commands[fish->command_count], item, CONFIG_MAX_COMMAND_LEN - 1);
                     fish->commands[fish->command_count][CONFIG_MAX_COMMAND_LEN - 1] = '\0';
                     fish->command_count++;
-                    /* advance past the parsed string */
-                    p = strchr(p, '"');
-                    if (p)
-                        p++;
+                } else if (*p == '\0') {
+                    break;
                 } else {
                     /* skip non-quoted token */
                     while (*p && *p != ',')
@@ -623,8 +702,8 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
                     continue;
                 }
                 if (*p == '"') {
-                    char* item = parse_string(p);
-                    if (!item)
+                    char item[CONFIG_MAX_IGNORE_LEN];
+                    if (parse_quoted_element(&p, item, sizeof(item)) != 0)
                         return -1;
                     if (map[i].key[7] == 'd') {
                         strncpy(sc->ignore_dirs[sc->ignore_dir_count], item,
@@ -637,9 +716,8 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
                         sc->ignore_files[sc->ignore_file_count][CONFIG_MAX_IGNORE_LEN - 1] = '\0';
                         sc->ignore_file_count++;
                     }
-                    p = strchr(p, '"');
-                    if (p)
-                        p++;
+                } else if (*p == '\0') {
+                    break;
                 } else {
                     while (*p && *p != ',')
                         p++;
@@ -666,15 +744,14 @@ static int set_field(archaic_config* cfg, const field_map* map, int map_len, con
                     continue;
                 }
                 if (*p == '"') {
-                    char* item = parse_string(p);
-                    if (!item)
+                    char item[CONFIG_MAX_STRING];
+                    if (parse_quoted_element(&p, item, sizeof(item)) != 0)
                         return -1;
                     strncpy(dm->scan_paths[dm->scan_path_count], item, CONFIG_MAX_STRING - 1);
                     dm->scan_paths[dm->scan_path_count][CONFIG_MAX_STRING - 1] = '\0';
                     dm->scan_path_count++;
-                    p = strchr(p, '"');
-                    if (p)
-                        p++;
+                } else if (*p == '\0') {
+                    break;
                 } else {
                     while (*p && *p != ',')
                         p++;
@@ -705,6 +782,7 @@ static const field_map storage_map[] = {
     {"cache_ttl_seconds", TYPE_INT, FOFFSET(storage, cache_ttl_seconds)},
     {"recent_files_capacity", TYPE_INT, FOFFSET(storage, recent_files_capacity)},
     {"case_insensitive", TYPE_BOOL, FOFFSET(storage, case_insensitive)},
+    {"colored_output", TYPE_BOOL, FOFFSET(storage, colored_output)},
     {"max_total_nodes", TYPE_INT, FOFFSET(storage, max_total_nodes)},
     {"max_memory_mb", TYPE_INT, FOFFSET(storage, max_memory_mb)},
 };
@@ -721,6 +799,14 @@ static const field_map scoring_map[] = {
 
 static const field_map fish_map[] = {
     {"commands", TYPE_STRING_ARRAY, FOFFSET(fish, commands)},
+};
+
+static const field_map bash_map[] = {
+    {"commands", TYPE_STRING_ARRAY, FOFFSET(bash, commands)},
+};
+
+static const field_map zsh_map[] = {
+    {"commands", TYPE_STRING_ARRAY, FOFFSET(zsh, commands)},
 };
 
 static const field_map scanner_map[] = {
@@ -743,6 +829,8 @@ static const section_map sections[] = {
     {"storage", storage_map, (int) (sizeof(storage_map) / sizeof(storage_map[0]))},
     {"scoring", scoring_map, (int) (sizeof(scoring_map) / sizeof(scoring_map[0]))},
     {"fish", fish_map, (int) (sizeof(fish_map) / sizeof(fish_map[0]))},
+    {"bash", bash_map, (int) (sizeof(bash_map) / sizeof(bash_map[0]))},
+    {"zsh", zsh_map, (int) (sizeof(zsh_map) / sizeof(zsh_map[0]))},
     {"scanner", scanner_map, (int) (sizeof(scanner_map) / sizeof(scanner_map[0]))},
     {"bookmarks", bookmarks_map, (int) (sizeof(bookmarks_map) / sizeof(bookmarks_map[0]))},
 };

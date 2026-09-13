@@ -43,12 +43,49 @@ void watcher_destroy(fs_watcher* w) {
     free(w);
 }
 
+#ifdef __linux__
+static int watcher_add_tree_linux(fs_watcher* w, const char* root);
+#endif
+#ifdef __APPLE__
+static int watcher_add_tree_kqueue(fs_watcher* w, const char* root);
+#endif
+
 int watcher_add_root(fs_watcher* w, const char* path) {
-    if (!w || !path || w->root_count >= WATCHER_MAX_ROOTS)
+    if (!w || !path || path[0] == '\0')
         return -1;
-    strncpy(w->roots[w->root_count], path, sizeof(w->roots[0]) - 1);
+    char copy[4096];
+    strncpy(copy, path, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+
+    pthread_mutex_lock(&w->watch_lock);
+    for (int i = 0; i < w->root_count; i++) {
+        if (strcmp(w->roots[i], copy) == 0) {
+            pthread_mutex_unlock(&w->watch_lock);
+            return 0;
+        }
+    }
+    if (w->root_count >= WATCHER_MAX_ROOTS) {
+        pthread_mutex_unlock(&w->watch_lock);
+        return -1;
+    }
+    strncpy(w->roots[w->root_count], copy, sizeof(w->roots[0]) - 1);
     w->roots[w->root_count][sizeof(w->roots[0]) - 1] = '\0';
     w->root_count++;
+    int running = atomic_load(&w->running);
+    int fd = w->fd;
+    pthread_mutex_unlock(&w->watch_lock);
+
+    /* If the watcher is already running with a native backend, subscribe
+     * the new tree live. Otherwise the new root would wait for a restart
+     * and rely on periodic rescan until then. */
+    if (running && fd >= 0) {
+#ifdef __linux__
+        watcher_add_tree_linux(w, copy);
+#endif
+#ifdef __APPLE__
+        watcher_add_tree_kqueue(w, copy);
+#endif
+    }
     return 0;
 }
 
@@ -106,10 +143,21 @@ static void* watcher_thread_linux(void* arg) {
     fs_watcher* w = (fs_watcher*) arg;
     char buf[8192] __attribute__((aligned(__alignof__(struct inotify_event))));
 
-    LOG_INFO("watcher", "inotify watcher started, monitoring %d roots", w->root_count);
+    char roots[WATCHER_MAX_ROOTS][4096];
+    int nroots = 0;
+    pthread_mutex_lock(&w->watch_lock);
+    nroots = w->root_count;
+    if (nroots > WATCHER_MAX_ROOTS)
+        nroots = WATCHER_MAX_ROOTS;
+    for (int i = 0; i < nroots; i++) {
+        strncpy(roots[i], w->roots[i], sizeof(roots[i]) - 1);
+        roots[i][sizeof(roots[i]) - 1] = '\0';
+    }
+    pthread_mutex_unlock(&w->watch_lock);
+    LOG_INFO("watcher", "inotify watcher started, monitoring %d roots", nroots);
 
-    for (int i = 0; i < w->root_count; i++) {
-        watcher_add_tree_linux(w, w->roots[i]);
+    for (int i = 0; i < nroots; i++) {
+        watcher_add_tree_linux(w, roots[i]);
     }
 
     atomic_store(&w->initialized, true);
@@ -275,10 +323,21 @@ static void* watcher_thread_kqueue(void* arg) {
     timeout.tv_sec = 1;
     timeout.tv_nsec = 0;
 
-    LOG_INFO("watcher", "kqueue watcher started, monitoring %d roots", w->root_count);
+    char roots[WATCHER_MAX_ROOTS][4096];
+    int nroots = 0;
+    pthread_mutex_lock(&w->watch_lock);
+    nroots = w->root_count;
+    if (nroots > WATCHER_MAX_ROOTS)
+        nroots = WATCHER_MAX_ROOTS;
+    for (int i = 0; i < nroots; i++) {
+        strncpy(roots[i], w->roots[i], sizeof(roots[i]) - 1);
+        roots[i][sizeof(roots[i]) - 1] = '\0';
+    }
+    pthread_mutex_unlock(&w->watch_lock);
+    LOG_INFO("watcher", "kqueue watcher started, monitoring %d roots", nroots);
 
-    for (int i = 0; i < w->root_count; i++) {
-        watcher_add_tree_kqueue(w, w->roots[i]);
+    for (int i = 0; i < nroots; i++) {
+        watcher_add_tree_kqueue(w, roots[i]);
     }
 
     atomic_store(&w->initialized, true);
@@ -455,6 +514,18 @@ void watcher_notify_scan_complete(fs_watcher* w) {
     if (!w)
         return;
 
+    char roots[WATCHER_MAX_ROOTS][4096];
+    int nroots = 0;
+    pthread_mutex_lock(&w->watch_lock);
+    nroots = w->root_count;
+    if (nroots > WATCHER_MAX_ROOTS)
+        nroots = WATCHER_MAX_ROOTS;
+    for (int i = 0; i < nroots; i++) {
+        strncpy(roots[i], w->roots[i], sizeof(roots[i]) - 1);
+        roots[i][sizeof(roots[i]) - 1] = '\0';
+    }
+    pthread_mutex_unlock(&w->watch_lock);
+
 #ifdef __linux__
     if (w->fd >= 0 && atomic_load(&w->running)) {
         pthread_mutex_lock(&w->watch_lock);
@@ -464,16 +535,16 @@ void watcher_notify_scan_complete(fs_watcher* w) {
         w->watch_count = 0;
         pthread_mutex_unlock(&w->watch_lock);
 
-        for (int i = 0; i < w->root_count; i++) {
-            watcher_add_tree_linux(w, w->roots[i]);
+        for (int i = 0; i < nroots; i++) {
+            watcher_add_tree_linux(w, roots[i]);
         }
     }
 #endif
 
 #ifdef __APPLE__
     if (w->fd >= 0 && atomic_load(&w->running)) {
-        for (int i = 0; i < w->root_count; i++) {
-            watcher_add_tree_kqueue(w, w->roots[i]);
+        for (int i = 0; i < nroots; i++) {
+            watcher_add_tree_kqueue(w, roots[i]);
         }
     }
 #endif

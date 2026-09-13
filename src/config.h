@@ -49,6 +49,9 @@ typedef struct {
     int command_count;
 } config_fish;
 
+typedef config_fish config_bash;
+typedef config_fish config_zsh;
+
 typedef struct {
     char ignore_dirs[CONFIG_MAX_IGNORE][CONFIG_MAX_IGNORE_LEN];
     int ignore_dir_count;
@@ -68,6 +71,8 @@ typedef struct {
     config_storage storage;
     config_scoring scoring;
     config_fish fish;
+    config_bash bash;
+    config_zsh zsh;
     config_scanner scanner;
     config_bookmarks bookmarks;
 } archaic_config;

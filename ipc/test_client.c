@@ -50,6 +50,41 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "  unwatch <path>\n");
         fprintf(stderr, "  roots\n");
         fprintf(stderr, "  recent [n]\n");
+        fprintf(stderr, "  print-socket\n");
+        fprintf(stderr, "  print-commands [fish|bash|zsh]\n");
+        return 1;
+    }
+
+    /* ── Local config helpers (no daemon needed): single source of truth
+     * for shell plugins so fish/bash/zsh don't each grep TOML. ─────── */
+    if (strcmp(argv[1], "print-socket") == 0) {
+        archaic_config cfg;
+        config_init_defaults(&cfg);
+        config_load_default(&cfg);
+        printf("%s\n", cfg.daemon.socket_path);
+        return 0;
+    }
+    if (strcmp(argv[1], "print-commands") == 0) {
+        const char* shell = argc > 2 ? argv[2] : "fish";
+        archaic_config cfg;
+        config_init_defaults(&cfg);
+        int have_file = (config_load_default(&cfg) == 0);
+        const config_fish* list = NULL;
+        if (strcmp(shell, "bash") == 0)
+            list = (const config_fish*) &cfg.bash;
+        else if (strcmp(shell, "zsh") == 0)
+            list = (const config_fish*) &cfg.zsh;
+        else
+            list = &cfg.fish;
+        if (have_file && list && list->command_count > 0) {
+            for (int i = 0; i < list->command_count; i++) {
+                if (i)
+                    printf(" ");
+                printf("%s", list->commands[i]);
+            }
+            printf("\n");
+            return 0;
+        }
         return 1;
     }
 
@@ -358,7 +393,11 @@ int main(int argc, char* argv[]) {
                    (unsigned long) health.buckets_indexed, (unsigned long) health.files_scanned,
                    (unsigned long) health.dirs_scanned);
             printf("  rss:        %lu bytes\n", (unsigned long) health.estimated_memory_bytes);
-            printf("  protocol:   %d\n", health.protocol_version);
+            printf("  protocol:   daemon=%d cli=%d\n", health.protocol_version,
+                   IPC_PROTOCOL_VERSION);
+            if (health.protocol_version != IPC_PROTOCOL_VERSION)
+                printf("  warn:       protocol mismatch; restart the daemon and "
+                       "rebuild archaic-cli from the same commit\n");
             printf("  daemon_sock:%s\n", health.socket_path);
             if (health.scan_root_count > 0) {
                 printf("  roots:      %d\n", health.scan_root_count);
@@ -567,22 +606,31 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "Stats failed\n");
         }
     } else if (strcmp(argv[1], "clear-cache") == 0) {
-        ipc_scan_req req;
-        memset(&req, 0, sizeof(req));
-        strncpy(req.path, "__clear_cache__", sizeof(req.path) - 1);
-        if (ipc_client_scan(client, req.path) == 0) {
+        if (ipc_client_clear_cache(client) == 0) {
             printf("Cache cleared.\n");
         } else {
             fprintf(stderr, "Failed to clear cache (daemon may not support this)\n");
             rc = 1;
         }
     } else if (strcmp(argv[1], "reindex") == 0) {
-        const char* reindex_path = (argc > 2) ? argv[2] : "/";
-        rc = ipc_client_scan(client, reindex_path);
-        if (rc == 0) {
-            printf("Reindex started for: %s\n", reindex_path);
+        if (argc > 2) {
+            rc = ipc_client_scan(client, argv[2]);
+            if (rc == 0) {
+                printf("Reindex started for: %s\n", argv[2]);
+            } else {
+                fprintf(stderr, "Reindex failed\n");
+            }
         } else {
-            fprintf(stderr, "Reindex failed\n");
+            /* No path = rescan all configured roots. Never default to "/":
+             * indexing all of / is almost never what the user wants and can
+             * OOM the daemon. Empty path tells the daemon to reuse its
+             * known roots. */
+            rc = ipc_client_scan(client, "");
+            if (rc == 0) {
+                printf("Reindex started for all configured roots.\n");
+            } else {
+                fprintf(stderr, "Reindex failed (no scan roots?)\n");
+            }
         }
     } else if (strcmp(argv[1], "bookmarks") == 0) {
         uint32_t limit = (argc > 2) ? (uint32_t) atoi(argv[2]) : 50;

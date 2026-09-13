@@ -3,7 +3,12 @@
 archaic \- blazing-fast autocomplete daemon
 .SH SYNOPSIS
 .B archaic
-.RI [ options ]
+.B --daemon
+.RI [ scan_path ]
+.RI [ socket_path ]
+.br
+.B archaic
+.B --version
 .SH DESCRIPTION
 .B archaic
 is a high-performance autocomplete daemon that indexes filesystems
@@ -11,19 +16,12 @@ and provides sub-millisecond path completions. It learns from usage
 patterns to rank suggestions intelligently.
 .SH OPTIONS
 .TP
-.B \-c \fIpath\fR, \-\-config \fIpath\fR
-Use the specified configuration file.
+.B --daemon \fI[scan_path] [socket_path]\fR
+Run the daemon. With one arg, the arg is a scan directory if it exists,
+otherwise a socket path. With two args, scan path then socket path.
+Without args, scan roots come from config plus ~/.config/archaic/roots.
 .TP
-.B \-d, \-\-daemon
-Run as a daemon (background process).
-.TP
-.B \-s \fIpath\fR, \-\-socket \fIpath\fR
-Use the specified socket path.
-.TP
-.B \-h, \-\-help
-Display help message and exit.
-.TP
-.B \-v, \-\-version
+.B --version, -v
 Display version information and exit.
 .SH FEATURES
 .IP \(bu 2
@@ -61,23 +59,26 @@ Archaic uses a multi-component architecture:
 .SH SIGNALS
 .TP
 .B SIGTERM, SIGINT
-Graceful shutdown.
+Save state, then graceful shutdown.
 .TP
 .B SIGHUP
-Reload configuration.
+Reload configuration (rescan interval, log level) without restart.
 .TP
 .B SIGUSR1
-Trigger manual rescan.
+Save state and keep running.
+.TP
+.B SIGUSR2
+Save state (dump) and keep running.
 .SH FILES
 .TP
 .I ~/.config/archaic/config.toml
 User configuration file.
 .TP
-.I /tmp/archaic-daemon.sock
-Default Unix domain socket.
+.I $XDG_RUNTIME_DIR/archaic.sock
+Default Unix domain socket (else /tmp/archaic-$UID.sock).
 .TP
-.I /tmp/archaic-state.bin
-Default state file location.
+.I ~/.cache/archaic/state.bin
+Default state file location ($XDG_CACHE_HOME/archaic/state.bin when set).
 .SH SEE ALSO
 .BR archaic-cli (1),
 .BR archaic-helper (1),

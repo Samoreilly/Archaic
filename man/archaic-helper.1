@@ -11,12 +11,13 @@ It reads commands from stdin and writes responses to stdout, eliminating
 the overhead of socket setup for each query. This is what the Fish shell
 plugin uses internally for fast completions.
 .SH USAGE
-Start the helper, optionally specifying the daemon socket path:
+Start the helper, optionally specifying the daemon socket path
+(default: $XDG_RUNTIME_DIR/archaic.sock, else /tmp/archaic-$UID.sock):
 .PP
 .RS
 .nf
 $ archaic-helper
-$ archaic-helper /tmp/archaic-daemon.sock
+$ archaic-helper $XDG_RUNTIME_DIR/archaic.sock
 .fi
 .RE
 .PP
@@ -61,9 +62,6 @@ Display version information and exit.
 .TP
 .B ARCHAIC_CONFIG
 Path to configuration file (default: ~/.config/archaic/config.toml).
-.TP
-.B ARCHAIC_SOCKET
-Path to daemon socket (default: /tmp/archaic-daemon.sock).
 .SH FILES
 .TP
 .I ~/.config/archaic/config.toml
@@ -72,8 +70,8 @@ User configuration file.
 .I /etc/archaic/config.toml
 System-wide configuration file.
 .TP
-.I /tmp/archaic-daemon.sock
-Default daemon socket path.
+.I $XDG_RUNTIME_DIR/archaic.sock
+Default daemon socket path (else /tmp/archaic-$UID.sock).
 .SH EXAMPLES
 .PP
 Get completions for a path prefix:

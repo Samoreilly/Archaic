@@ -386,16 +386,14 @@ int load_trie(daemon_state* state, const char* path) {
             RadixNode* nd = calloc(1, sizeof(RadixNode));
             if (!nd)
                 goto bucket_err;
+            nodes[i] = nd;
 
             if (kl > 0) {
                 nd->key = malloc(kl + 1);
                 if (!nd->key) {
-                    free(nd);
                     goto bucket_err;
                 }
                 if (fread(nd->key, 1, kl, f) != kl) {
-                    free(nd->key);
-                    free(nd);
                     goto bucket_err;
                 }
                 nd->key[kl] = '\0';
@@ -447,15 +445,17 @@ int load_trie(daemon_state* state, const char* path) {
                 nd->children = nd->inline_storage;
                 nd->child_capacity = RADIX_INLINE_CHILDREN;
             }
-
-            nodes[i] = nd;
         }
 
         for (uint32_t i = 0; i < node_count; i++) {
             for (uint16_t c = 0; c < crefs[i].count; c++) {
                 uint32_t ci = crefs[i].refs[c].child_index;
-                if (ci < node_count)
-                    nodes[i]->children[c].node = nodes[ci];
+                if (ci >= node_count) {
+                    /* Corrupt state file: reject instead of leaving NULL
+                     * child that crashes traversal. */
+                    goto bucket_err;
+                }
+                nodes[i]->children[c].node = nodes[ci];
             }
         }
 
@@ -712,13 +712,17 @@ path_validation process_input(t_bucket_store* store, const char* cwd, const char
     t_bucket* bucket = find_bucket(store, validation.full_path, validation.full_path, 3, false);
     if (bucket) {
         if (bucket->dir_count >= store->max_nodes_per_bucket) {
-            trie_unlock(bucket);
             store_unlock(store);
             return validation;
         }
         trie_lock(bucket);
         if (validation.is_dir) {
             size_t len = strlen(validation.full_path);
+            if (len + 2 > 4096) {
+                trie_unlock(bucket);
+                store_unlock(store);
+                return validation;
+            }
             char dir_path[4096];
             memcpy(dir_path, validation.full_path, len);
             dir_path[len] = '/';
@@ -774,6 +778,7 @@ daemon_state* daemon_init(void) {
                           cfg.daemon.scan_threads);
     atomic_store(&state->scanner_healthy, true);
     atomic_store(&state->scanning, false);
+    pthread_mutex_init(&state->scan_start_lock, NULL);
     atomic_store(&state->scan_bucket_count, 0);
 
     const char* ignore_dirs[64];
@@ -794,6 +799,7 @@ daemon_state* daemon_init(void) {
     incremental_init(&state->incremental);
 
     state->case_insensitive = cfg.storage.case_insensitive;
+    state->hidden_file_penalty = cfg.scoring.hidden_file_penalty;
 
     state->bookmark_count =
         cfg.bookmarks.count < CONFIG_MAX_BOOKMARKS ? cfg.bookmarks.count : CONFIG_MAX_BOOKMARKS;
@@ -841,9 +847,11 @@ void daemon_shutdown(daemon_state* state) {
         state->ipc = NULL;
     }
 
-    /* Wait for background scan to finish */
-    if (atomic_load(&state->scanning)) {
-        pthread_join(state->scan_thread, NULL);
+    /* Wait for background scan to finish (scan threads are detached;
+     * poll the flag instead of joining). */
+    for (int i = 0; i < 300 && atomic_load(&state->scanning); i++) {
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
     }
 
     parallel_scanner_stop(&state->scanner);
@@ -877,6 +885,7 @@ void daemon_shutdown(daemon_state* state) {
         free(state->parent);
     }
 
+    pthread_mutex_destroy(&state->scan_start_lock);
     free(state);
 }
 
@@ -956,6 +965,11 @@ static void* scan_thread_func(void* arg) {
     update_memory_estimate(state->store);
     if (state->cache)
         cache_invalidate(state->cache);
+    /* Refresh inotify watches so directories created during the scan are
+     * watched going forward (previously watcher_notify_scan_complete was
+     * never called, so new trees relied on CREATE events only). */
+    if (state->watcher)
+        watcher_notify_scan_complete(state->watcher);
     /* Scans churn millions of transient allocs across malloc arenas; hand
      * fully-free trailing pages back so steady-state RSS tracks the index. */
     malloc_trim(0);
@@ -971,8 +985,16 @@ void daemon_run_scan(daemon_state* state, const char* path) {
     if (!state || !path)
         return;
 
-    if (atomic_load(&state->scanning))
+    /* Never index IPC magic sentinels (e.g. legacy "__clear_cache__").
+     * Defense-in-depth: server.c already routes them to cache_clear. */
+    if (path[0] == '\0' || (path[0] == '_' && path[1] == '_'))
         return;
+
+    pthread_mutex_lock(&state->scan_start_lock);
+    if (atomic_load(&state->scanning)) {
+        pthread_mutex_unlock(&state->scan_start_lock);
+        return;
+    }
 
     int known = 0;
     for (int i = 0; i < state->last_scan_path_count; i++) {
@@ -987,22 +1009,30 @@ void daemon_run_scan(daemon_state* state, const char* path) {
         state->last_scan_paths[state->last_scan_path_count][sizeof(state->last_scan_paths[0]) - 1] =
             '\0';
         state->last_scan_path_count++;
+        /* Subscribe the watcher live so `watch` takes effect without a
+         * daemon restart. watcher_add_root dedups if already present. */
+        if (state->watcher)
+            watcher_add_root(state->watcher, path);
     }
 
     scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
-    if (!ctx)
+    if (!ctx) {
+        pthread_mutex_unlock(&state->scan_start_lock);
         return;
+    }
     ctx->state = state;
     ctx->path_count = 1;
     ctx->paths = malloc(sizeof(char*));
     if (!ctx->paths) {
         free(ctx);
+        pthread_mutex_unlock(&state->scan_start_lock);
         return;
     }
     ctx->paths[0] = strdup(path);
     if (!ctx->paths[0]) {
         free(ctx->paths);
         free(ctx);
+        pthread_mutex_unlock(&state->scan_start_lock);
         return;
     }
 
@@ -1010,15 +1040,22 @@ void daemon_run_scan(daemon_state* state, const char* path) {
         free(ctx->paths[0]);
         free(ctx->paths);
         free(ctx);
+        pthread_mutex_unlock(&state->scan_start_lock);
+        return;
     }
+    pthread_detach(state->scan_thread);
+    pthread_mutex_unlock(&state->scan_start_lock);
 }
 
 void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_count) {
     if (!state || !paths || path_count <= 0)
         return;
 
-    if (atomic_load(&state->scanning))
+    pthread_mutex_lock(&state->scan_start_lock);
+    if (atomic_load(&state->scanning)) {
+        pthread_mutex_unlock(&state->scan_start_lock);
         return;
+    }
 
     int count = path_count < CONFIG_MAX_ROOTS ? path_count : CONFIG_MAX_ROOTS;
 
@@ -1026,16 +1063,21 @@ void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_cou
     for (int i = 0; i < count; i++) {
         strncpy(state->last_scan_paths[i], paths[i], sizeof(state->last_scan_paths[i]) - 1);
         state->last_scan_paths[i][sizeof(state->last_scan_paths[i]) - 1] = '\0';
+        if (state->watcher)
+            watcher_add_root(state->watcher, paths[i]);
     }
 
     scan_thread_ctx* ctx = malloc(sizeof(scan_thread_ctx));
-    if (!ctx)
+    if (!ctx) {
+        pthread_mutex_unlock(&state->scan_start_lock);
         return;
+    }
     ctx->state = state;
     ctx->path_count = count;
-    ctx->paths = malloc(count * sizeof(char*));
+    ctx->paths = malloc((size_t) count * sizeof(char*));
     if (!ctx->paths) {
         free(ctx);
+        pthread_mutex_unlock(&state->scan_start_lock);
         return;
     }
     for (int i = 0; i < count; i++) {
@@ -1045,6 +1087,7 @@ void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_cou
                 free(ctx->paths[j]);
             free(ctx->paths);
             free(ctx);
+            pthread_mutex_unlock(&state->scan_start_lock);
             return;
         }
     }
@@ -1054,7 +1097,11 @@ void daemon_run_scan_multi(daemon_state* state, const char** paths, int path_cou
             free(ctx->paths[i]);
         free(ctx->paths);
         free(ctx);
+        pthread_mutex_unlock(&state->scan_start_lock);
+        return;
     }
+    pthread_detach(state->scan_thread);
+    pthread_mutex_unlock(&state->scan_start_lock);
 }
 
 void daemon_start_rescan_timer(daemon_state* state) {
@@ -1251,7 +1298,12 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
              prefix);
     const scored_completions* cached = cache_get(state->cache, cache_key);
     if (cached) {
+        /* Exact hit: still counts as a query + served completion so
+         * queries_total >= completions_total and hit-rate math is sane.
+         * Latency is ~0 (no trie walk). */
         metrics_record_cache_hit(&state->metrics);
+        metrics_record_query(&state->metrics, 0);
+        metrics_record_completion(&state->metrics);
         scored_result result;
         result.data = cached;
         result.from_cache = true;
@@ -1273,6 +1325,7 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
         try_parent_cache_reuse(state->cache, prefix, limit, cap, cwd, dirs_only);
     if (reused) {
         metrics_record_cache_hit(&state->metrics);
+        metrics_record_query(&state->metrics, 0);
         char reuse_key[CACHE_MAX_KEY_LEN];
         snprintf(reuse_key, sizeof(reuse_key), "%d|%zu|%s|%s", dirs_only, limit, cwd ? cwd : "",
                  prefix);
@@ -1293,13 +1346,7 @@ scored_result daemon_get_scored_completions(daemon_state* state, const char* pre
     if (!out)
         return empty;
 
-    static double hidden_file_penalty = -1.0;
-    if (hidden_file_penalty < 0.0) {
-        hidden_file_penalty = 0.50;
-        archaic_config cfg;
-        if (config_load_default(&cfg) == 0)
-            hidden_file_penalty = cfg.scoring.hidden_file_penalty;
-    }
+    double hidden_file_penalty = state->hidden_file_penalty;
 
     store_lock(state->store);
     size_t count = state->store->right_index;
@@ -1369,6 +1416,9 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
     if (!state || !state->store || !query || query[0] == '\0') {
         return NULL;
     }
+
+    struct timespec ts_start, ts_end;
+    clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
     completions* out = completions_create(limit > 0 ? limit : 50);
     if (!out)
@@ -1484,6 +1534,12 @@ completions* daemon_get_fuzzy_completions(daemon_state* state, const char* query
     free(bucket_is_dirs);
     free(bucket_paths);
     free(snapshot);
+    clock_gettime(CLOCK_MONOTONIC, &ts_end);
+    metrics_record_query(
+        &state->metrics, (uint64_t) (ts_end.tv_sec - ts_start.tv_sec) * 1000000000ULL +
+                             (uint64_t) (ts_end.tv_nsec - ts_start.tv_nsec));
+    metrics_record_completion(&state->metrics);
+    metrics_record_cache_miss(&state->metrics);
     return out;
 }
 
@@ -1589,12 +1645,29 @@ void daemon_prefetch_common_prefixes(daemon_state* state) {
         NULL
     };
 
+    /* Warm the cache without polluting user-facing metrics: prefetch is
+     * daemon startup cost, not user queries. Snapshot counters and restore
+     * after so `stats` starts clean but cache stays warm. */
+    uint64_t q = atomic_load(&state->metrics.queries_total);
+    uint64_t c = atomic_load(&state->metrics.completions_total);
+    uint64_t h = atomic_load(&state->metrics.cache_hits);
+    uint64_t m = atomic_load(&state->metrics.cache_misses);
+    uint64_t lat_sum = atomic_load(&state->metrics.query_latency_ns_sum);
+    uint64_t lat_cnt = atomic_load(&state->metrics.query_latency_ns_count);
+
     uint64_t now = (uint64_t) time(NULL);
     for (int i = 0; prefixes[i]; i++) {
         scored_result sr = daemon_get_scored_completions(state, prefixes[i], 10, now, "/", 0);
         if (sr.data)
             daemon_release_scored(state, sr);
     }
+
+    atomic_store(&state->metrics.queries_total, q);
+    atomic_store(&state->metrics.completions_total, c);
+    atomic_store(&state->metrics.cache_hits, h);
+    atomic_store(&state->metrics.cache_misses, m);
+    atomic_store(&state->metrics.query_latency_ns_sum, lat_sum);
+    atomic_store(&state->metrics.query_latency_ns_count, lat_cnt);
 }
 
 void daemon_log_query(daemon_state* state, const char* prefix, const char* cwd, size_t result_count) {

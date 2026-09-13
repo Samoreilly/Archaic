@@ -151,6 +151,20 @@ _archaic_resolve_paths() {
         _archaic_sock="/tmp/archaic-$(id -u).sock"
     fi
 
+    # Single source of truth: ask archaic-cli (C TOML parser) first.
+    if [[ -n "${_archaic_cli:-}" ]]; then
+        local cli_sock=""
+        if command -v timeout &>/dev/null; then
+            cli_sock="$(timeout 0.3 "$_archaic_cli" print-socket 2>/dev/null)"
+        else
+            cli_sock="$("$_archaic_cli" print-socket 2>/dev/null)"
+        fi
+        if [[ -n "$cli_sock" ]]; then
+            _archaic_sock="$cli_sock"
+            return
+        fi
+    fi
+
     local config_file=""
     local p
     for p in "${ARCHAIC_CONFIG:-}" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml"; do
@@ -229,7 +243,7 @@ _archaic_check_daemon() {
 }
 
 # ── Active command detection (multi-command lines) ─────────────────────────
-_arhcaic_is_sep() {
+_archaic_is_sep() {
     case "$1" in
         ';'|'&'|'|'|'&&'|'||'|'('|'{') return 0 ;;
     esac
@@ -237,22 +251,24 @@ _arhcaic_is_sep() {
 }
 
 # Echoes active command from words[1..upto] (zsh 1-indexed, upto exclusive).
-_arhcaic_is_assign() {
+_archaic_is_assign() {
     case "$1" in
         -*|*=*) [[ "$1" == -* ]] && return 1; return 0 ;;
     esac
     return 1
 }
-
+# Backward-compat aliases for the pre-fix typo (_arhcaic_*).
+_arhcaic_is_sep() { _archaic_is_sep "$@"; }
+_arhcaic_is_assign() { _archaic_is_assign "$@"; }
 _archaic_active_cmd_words() {
     local upto="${1:-$CURRENT}"
     local active=""
     local i
     for (( i=1; i<upto; i++ )); do
-        if _arhcaic_is_sep "${words[i]:-}"; then
+        if _archaic_is_sep "${words[i]:-}"; then
             continue
         fi
-        if _arhcaic_is_assign "${words[i]:-}"; then
+        if _archaic_is_assign "${words[i]:-}"; then
             continue
         fi
         active="${words[i]}"
@@ -260,11 +276,11 @@ _archaic_active_cmd_words() {
     done
     [[ -z "$active" ]] && active="${words[1]:-}"
     for (( i=1; i<upto; i++ )); do
-        if _arhcaic_is_sep "${words[i]:-}"; then
+        if _archaic_is_sep "${words[i]:-}"; then
             local j=$((i+1))
             while (( j < upto )); do
-                if _arhcaic_is_sep "${words[j]:-}"; then j=$((j+1)); continue; fi
-                if _arhcaic_is_assign "${words[j]:-}"; then j=$((j+1)); continue; fi
+                if _archaic_is_sep "${words[j]:-}"; then j=$((j+1)); continue; fi
+                if _archaic_is_assign "${words[j]:-}"; then j=$((j+1)); continue; fi
                 case "${words[j]:-}" in
                     '') j=$((j+1)); continue ;;
                     *) active="${words[j]}"; break ;;
@@ -279,7 +295,7 @@ _archaic_active_cmd_words() {
                     local j=$((i+1))
                     while (( j < upto )); do
                         if [[ "${words[j]:-}" == -* ]]; then j=$((j+1)); continue; fi
-                        if _arhcaic_is_assign "${words[j]:-}"; then j=$((j+1)); continue; fi
+                        if _archaic_is_assign "${words[j]:-}"; then j=$((j+1)); continue; fi
                         active="${words[j]}"
                         break
                     done
@@ -509,6 +525,18 @@ _archaic_do_complete() {
 _archaic_commands=(cd ls ll la cat vim nvim hx nano emacs less more bat rm mv cp mkdir rmdir pushd popd touch head tail chmod chown ln tar unzip zip gzip diff open xdg-open code cursor rg fd eza exa lsd tree grep find file stat wc python python3 pytest node bun cargo go gcc g++ clang make cmake ninja scp rsync jq sudo docker kubectl npm pnpm yarn pip source .)
 
 _archaic_load_commands() {
+    if [[ -n "${_archaic_cli:-}" ]]; then
+        local cli_cmds=""
+        if command -v timeout &>/dev/null; then
+            cli_cmds="$(timeout 0.3 "$_archaic_cli" print-commands zsh 2>/dev/null)"
+        else
+            cli_cmds="$("$_archaic_cli" print-commands zsh 2>/dev/null)"
+        fi
+        if [[ -n "$cli_cmds" ]]; then
+            _archaic_commands=(${=cli_cmds})
+            return
+        fi
+    fi
     local config_file=""
     local p
     for p in "${ARCHAIC_CONFIG:-}" "$HOME/.config/archaic/config.toml" "/etc/archaic/config.toml"; do
@@ -661,24 +689,42 @@ bindkey '^[^[[C' _archaic_accept_suggestion 2>/dev/null
 bindkey '^[[1;3B' _archaic_cycle_next 2>/dev/null
 bindkey '^[[1;3A' _archaic_cycle_prev 2>/dev/null
 
-# Hook into precmd to update suggestion before each prompt
-_archaic_orig_precmd_functions=(${precmd_functions[@]})
+# Hook into precmd to update suggestion before each prompt.
+# Idempotent on re-source. Opt out with ARCHAIC_SUGGEST_ON_PROMPT=0 (Tab
+# completion keeps working).
 _archaic_precmd_hook() {
     _archaic_get_suggestion
 }
-precmd_functions=(_archaic_precmd_hook ${precmd_functions[@]})
+if [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" != "0" ]]; then
+    if (( ${precmd_functions[(I)_archaic_precmd_hook]} == 0 )); then
+        precmd_functions=(_archaic_precmd_hook ${precmd_functions[@]})
+    fi
+fi
 
-# Append suggestion to RPS1 (right prompt)
-_archaic_orig_rps1="${RPS1:-${RPROMPT:-}}"
-_archaic_rps1() {
-    if [[ -n "$_archaic_suggestion" ]]; then
-        print -n "%F{244}${_archaic_suggestion}%f"
+# Append suggestion to RPS1 (right prompt) without clobbering frameworks
+# (p10k, starship). Save the original once, reinstall idempotently, and
+# skip entirely when ghost hints are disabled.
+if [[ "${ARCHAIC_SUGGEST_ON_PROMPT:-}" != "0" ]]; then
+    if [[ -z "${_archaic_orig_rps1_set:-}" ]]; then
+        _archaic_orig_rps1="${RPS1:-${RPROMPT:-}}"
+        _archaic_orig_rps1_set=1
     fi
-    if [[ -n "$_archaic_orig_rps1" ]]; then
-        print -n "$_archaic_orig_rps1"
-    fi
-}
-RPS1='$(_archaic_rps1)'
+    _archaic_rps1() {
+        if [[ -n "$_archaic_suggestion" ]]; then
+            print -n "%F{244}${_archaic_suggestion}%f"
+        fi
+        if [[ -n "$_archaic_orig_rps1" ]]; then
+            print -n "$_archaic_orig_rps1"
+        fi
+    }
+    # Only take over RPS1 if it isn't already ours (re-source safe, and
+    # won't fight frameworks that set RPS1 after us on next prompt via
+    # their own precmd — our precmd still updates the suggestion).
+    case "${RPS1:-}" in
+        *"_archaic_rps1"*) ;;
+        *) RPS1='$(_archaic_rps1)' ;;
+    esac
+fi
 
 # ── Status function ──────────────────────────────────────────────────────────
 archaic-status() {

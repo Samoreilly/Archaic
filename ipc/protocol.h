@@ -55,6 +55,7 @@ typedef enum {
     IPC_MSG_RESET_STATS = 115,
     IPC_MSG_FUZZY_SUGGEST = 116,
     IPC_MSG_FUZZY_SUGGEST_RESP = 117,
+    IPC_MSG_CLEAR_CACHE = 118,
 } ipc_msg_type;
 
 /*

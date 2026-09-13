@@ -335,6 +335,18 @@ int ipc_client_reset_stats(ipc_client* client) {
     return 0;
 }
 
+int ipc_client_clear_cache(ipc_client* client) {
+    if (send_request(client, IPC_MSG_CLEAR_CACHE, NULL, 0) < 0)
+        return -1;
+    ipc_header hdr;
+    ipc_ok_resp resp;
+    if (recv_response(client, &hdr, &resp, sizeof(resp)) < 0)
+        return -1;
+    if (hdr.msg_type != IPC_MSG_OK)
+        return -1;
+    return 0;
+}
+
 int ipc_client_recent(ipc_client* client, uint32_t limit, ipc_recent_resp* out) {
     ipc_recent_req req;
     memset(&req, 0, sizeof(req));

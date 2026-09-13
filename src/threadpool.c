@@ -82,8 +82,12 @@ int threadpool_submit(threadpool* pool, threadpool_task_fn fn, void* arg) {
         return -1;
 
     pthread_mutex_lock(&pool->queue_lock);
-    while (pool->queue_count == THREADPOOL_QUEUE_SIZE) {
+    while (pool->queue_count == THREADPOOL_QUEUE_SIZE && !atomic_load(&pool->shutdown)) {
         pthread_cond_wait(&pool->queue_not_full, &pool->queue_lock);
+    }
+    if (atomic_load(&pool->shutdown)) {
+        pthread_mutex_unlock(&pool->queue_lock);
+        return -1;
     }
 
     pool->queue[pool->queue_tail].fn = fn;
@@ -118,5 +122,9 @@ void threadpool_shutdown(threadpool* pool) {
 }
 
 int threadpool_queue_depth(const threadpool* pool) {
-    return pool->queue_count;
+    threadpool* p = (threadpool*) pool;
+    pthread_mutex_lock(&p->queue_lock);
+    int n = p->queue_count;
+    pthread_mutex_unlock(&p->queue_lock);
+    return n;
 }

@@ -11,22 +11,16 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
         return 0;
     }
 
+    /* Hot path (every Tab): avoid 3 mallocs per call. Paths are capped at
+     * 4096 by the IPC protocol, so fixed stacks are safe. Absurd inputs
+     * fail closed instead of truncating. */
     size_t src_len = strlen(src);
-    char* stack = malloc(src_len + 1);
-    if (!stack) {
+    if (src_len >= 4096) {
         dst[0] = '\0';
         return 0;
     }
-
-    size_t* starts = malloc((src_len + 1) * sizeof(size_t));
-    size_t* lens = malloc((src_len + 1) * sizeof(size_t));
-    if (!starts || !lens) {
-        free(stack);
-        free(starts);
-        free(lens);
-        dst[0] = '\0';
-        return 0;
-    }
+    size_t starts[4096];
+    size_t lens[4096];
 
     int comp_count = 0;
     const char* p = src;
@@ -59,6 +53,8 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
             continue;
         }
 
+        if (comp_count >= 4096)
+            break;
         starts[comp_count] = (size_t) (start - src);
         lens[comp_count] = len;
         comp_count++;
@@ -81,9 +77,6 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
 
     dst[out_pos] = '\0';
 
-    free(stack);
-    free(starts);
-    free(lens);
     return out_pos;
 }
 
@@ -142,8 +135,7 @@ size_t path_expand_dash(char* dst, const char* oldpwd, size_t dst_size) {
     return len;
 }
 
-size_t path_expand_abbrev(char* dst, const char* src, size_t dst_size) {
-    if (!src || !dst || dst_size == 0) {
+size_t path_expand_abbrev(char* dst, const char* src, size_t dst_size) {    if (!src || !dst || dst_size == 0) {
         if (dst && dst_size > 0)
             dst[0] = '\0';
         return 0;
@@ -179,4 +171,20 @@ size_t path_expand_abbrev(char* dst, const char* src, size_t dst_size) {
     memcpy(dst, src, len);
     dst[len] = '\0';
     return len;
+}
+
+int path_has_dotdot_component(const char* path) {
+    if (!path || path[0] == '\0')
+        return 0;
+    const char* p = path;
+    /* Leading ".." component. */
+    if ((p[0] == '.' && p[1] == '.' && (p[2] == '/' || p[2] == '\0')))
+        return 1;
+    while (*p) {
+        if (p[0] == '/' && p[1] == '.' && p[2] == '.' &&
+            (p[3] == '/' || p[3] == '\0'))
+            return 1;
+        p++;
+    }
+    return 0;
 }

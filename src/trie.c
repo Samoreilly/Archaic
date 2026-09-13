@@ -268,6 +268,7 @@ bool is_executable_script(const char* path) {
 typedef struct {
     char path[4096];
     uint64_t select_count;
+    uint64_t last_select;
 } session_entry;
 
 static session_entry g_session_entries[SESSION_MAX_ENTRIES];
@@ -289,16 +290,26 @@ void session_record_selection(const char* path) {
     pthread_mutex_lock(&g_session_lock);
 
     int idx = session_find_entry(path);
+    session_entry e;
+    memset(&e, 0, sizeof(e));
     if (idx >= 0) {
-        g_session_entries[idx].select_count++;
-    } else if (g_session_count < SESSION_MAX_ENTRIES) {
-        strncpy(g_session_entries[g_session_count].path, path,
-                sizeof(g_session_entries[g_session_count].path) - 1);
-        g_session_entries[g_session_count]
-            .path[sizeof(g_session_entries[g_session_count].path) - 1] = '\0';
-        g_session_entries[g_session_count].select_count = 1;
-        g_session_count++;
+        e = g_session_entries[idx];
+        e.select_count++;
+        memmove(&g_session_entries[1], &g_session_entries[0],
+                (size_t) idx * sizeof(session_entry));
+    } else {
+        if (g_session_count < SESSION_MAX_ENTRIES)
+            g_session_count++;
+        else
+            g_session_count = SESSION_MAX_ENTRIES;
+        memmove(&g_session_entries[1], &g_session_entries[0],
+                (size_t) (g_session_count - 1) * sizeof(session_entry));
+        strncpy(e.path, path, sizeof(e.path) - 1);
+        e.path[sizeof(e.path) - 1] = '\0';
+        e.select_count = 1;
     }
+    e.last_select = (uint64_t) time(NULL);
+    g_session_entries[0] = e;
 
     pthread_mutex_unlock(&g_session_lock);
 }
@@ -316,20 +327,19 @@ double session_get_boost(const char* path) {
         const char* selected = g_session_entries[i].path;
         size_t sel_len = strlen(selected);
 
-        /* If the current path starts with a selected path (sub-path match),
-           apply boost proportional to selection count */
+        double recency = 1.0 / (1.0 + (double) i * 0.15);
         if (path_len > sel_len && strncmp(path, selected, sel_len) == 0 && path[sel_len] == '/') {
-            boost += 0.05 * (double) g_session_entries[i].select_count;
+            boost += 0.12 * recency;
         }
-        /* Exact match gets a larger boost */
         if (strcmp(path, selected) == 0) {
-            boost += 0.10 * (double) g_session_entries[i].select_count;
+            boost += 0.55 * recency;
+            if (g_session_entries[i].select_count > 1)
+                boost += 0.08;
         }
     }
 
-    /* Cap the boost at 0.5 to prevent runaway scores */
-    if (boost > 0.5)
-        boost = 0.5;
+    if (boost > 0.85)
+        boost = 0.85;
 
     pthread_mutex_unlock(&g_session_lock);
     return boost;

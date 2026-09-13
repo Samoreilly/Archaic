@@ -14,9 +14,9 @@ Status: in progress. Check boxes only after tests pass and the change is pushed.
 - [x] Tests + push
 
 ## 3. Recent-first ranking + accept learning
-- [ ] Last-used / cwd-proximate paths beat alphabetical siblings
-- [ ] Accept (Tab/ghost/cd) records selection and affects next Tab
-- [ ] Tests + push
+- [x] Last-used / cwd-proximate paths beat alphabetical siblings
+- [x] Accept (Tab/ghost/cd) records selection and affects next Tab
+- [x] Tests + push
 
 ## 4. Copy-install + generated config + honest README
 - [ ] `install.sh` copies plugins (no clone symlink requirement)

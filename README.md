@@ -85,42 +85,76 @@ incremental updates don't exist; `unwatch` drops whole roots only).
 
 ## Performance
 
-Measured with `./build/archaic-bench-e2e`: a real daemon (fork/exec'd) serving
-real IPC completions over a Unix socket against real directory trees on disk.
-Cold numbers are the first Tab press after startup; warm numbers are
-subsequent presses served from the in-memory cache.
+**Tab feels instant.** On any project under 50k files, the cached lookup (every
+Tab after the first) takes **~0.03 ms** — thousands of times below the 100 ms
+human perception threshold. The first Tab after login walks the index in
+**2–23 ms**, also imperceptible.
 
-| tree  | files  | first scan | save  | cold 1st Tab | warm Tab (p50) | warm Tab (p95) |
-|-------|--------|------------|-------|-------------|----------------|----------------|
-| small |  5 000 |     50 ms  |  2 ms |     1.8 ms  |        0.05 ms |        0.07 ms |
-| med   | 20 000 |   1 100 ms |  8 ms |     8.2 ms  |        0.03 ms |        0.13 ms |
-| large | 50 000 |   7 500 ms | 24 ms |    24.2 ms  |        0.04 ms |        0.15 ms |
+### What you actually care about
 
-**What's happening at each stage:**
+| | small project | medium project | large project |
+|---|---|---|---|
+| files indexed | 5 000 | 20 000 | 50 000 |
+| time to first Tab | **1.8 ms** | **7.8 ms** | **23 ms** |
+| cached Tab (median) | **0.04 ms** | **0.04 ms** | **0.03 ms** |
+| idle memory (RSS) | **10 MB** | **17 MB** | **33 MB** |
+| results per query | 9 | 11 | 14 |
+| first scan (one-time) | 50 ms | 1.0 s | 8.8 s |
 
-| Stage | Hot / Cold | What it does |
+Cached Tab latency is constant regardless of project size — the index is in
+memory and lookups are a hash probe. First-scan time and memory scale linearly
+with file count.
+
+### Scaling
+
+The daemon uses ~0.7 KB of RSS per indexed file. Extrapolate for your project:
+
+| your project | estimated memory | estimated first Tab |
 |---|---|---|
-| Warm Tab | hot | `cache_get` → 16-shard hash lookup + LRU move → response in **~30 µs** |
-| Cold 1st Tab | cold | `find_prefix_node` → radix DFS → `scored_completions` sort → `cache_put` → response in **2–24 ms** |
-| First scan | cold | `scanner_worker` threads × `opendir/readdir` + bucket insert + trie insert → **50–7 500 ms** |
-| Save | cold | Snapshot bucket refs → DFS serialize → `rename()` → **2–24 ms** for 0.9–9 MB |
+| 5k files (small lib) | 10 MB | < 2 ms |
+| 20k files (typical app) | 17 MB | < 8 ms |
+| 50k files (large monorepo) | 33 MB | < 25 ms |
+| 200k files (huge repo) | ~140 MB | ~100 ms |
 
-**Hot path (cached completion) — what happens on every Tab press:**
+First Tab times are linear — double the files, double the latency. Cached Tab
+stays at ~0.04 ms no matter what.
 
-1. Client sends `IPC_MSG_COMPLETE` (8 KB packed payload) over the Unix socket
-2. Server `accept()` → `SO_PEERCRED` uid check → thread pool dispatch
-3. `cache_get()`: djb2 hash → shard lock (16 shards) → linear probe → LRU move-to-front → return borrowed pointer
-4. Response packed into a 256 KB thread-local buffer (zero-alloc), sent back over the socket
+### How many results does Tab show?
 
-**Cold path (cache miss / startup):**
+Each Tab press returns up to **50 completions**, ranked by a weighted score
+(frequency 40%, recency 30%, depth 15%, type 10%, cwd proximity 5%). The
+shell plugin picks the best match and shows alternatives you can cycle through
+with `Alt+Down` / `Alt+Up`.
 
-1. `find_prefix_node`: radix descent, memcmp on edge keys, binary search for nodes with >8 children
-2. `scored_completions_collect`: DFS, `compute_score` per node (weighted: freq 40%, recency 30%, depth 15%, type 10%, cwd 5%)
+### Benchmark details
+
+All numbers from `test/bench-e2e.c`: a real daemon (fork/exec'd) serving
+completions over a Unix socket against real directory trees on disk.
+Times are `CLOCK_MONOTONIC` wall-clock. Memory is the daemon's RSS reported
+by its own health endpoint after the scan completes.
+
+<details>
+<summary>Implementation details (for the curious)</summary>
+
+**Warm path** (cached completion — every Tab after the first):
+1. Client packs `IPC_MSG_COMPLETE` (8 KB) → Unix socket
+2. Server `accept()` → `SO_PEERCRED` uid check → thread pool
+3. `cache_get()`: djb2 hash → 16-shard lock → linear probe → LRU move → return pointer
+4. Response packed in 256 KB thread-local buffer (zero-alloc) → socket → done
+
+**Cold path** (cache miss — first Tab after login):
+1. `find_prefix_node`: radix tree descent, memcmp on edge keys, binary search for wide nodes
+2. `scored_completions_collect`: DFS, `compute_score` per node
 3. `qsort` by score → top 50 returned → `cache_put` (deep-copy outside shard lock)
-4. Subsequent queries for the same prefix skip all of the above
+4. Subsequent queries for the same prefix skip this entirely
 
-Full benchmark source: [`test/bench-e2e.c`](test/bench-e2e.c).
-Run with: `cmake --build build -j$(nproc) --target archaic-bench-e2e && ./build/archaic-bench-e2e`
+Run the benchmark yourself:
+```
+cmake --build build -j$(nproc) --target archaic-bench-e2e
+./build/archaic-bench-e2e
+```
+Source: [`test/bench-e2e.c`](test/bench-e2e.c)
+</details>
 
 ## Keybindings
 

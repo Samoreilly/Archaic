@@ -51,12 +51,14 @@ typedef struct {
     long        files;        /* files actually created on disk */
     double      scan_ms;      /* fork/exec → scan done */
     double      save_ms;      /* save round-trip + bytes written */
+    long        mem_kb;       /* daemon RSS after scan (from health) */
+    int         completions;  /* items returned per Tab press */
     samples     cold;         /* cache-miss ms */
     samples     warm;         /* cache-hit  ms */
     double      cold_first;   /* the first (cache miss) query in ms */
     int         cold_ok;      /* queries returning >=1 completion */
     int         cold_empty;   /* queries returning 0 completions */
-    uint64_t    cold_cache_hits;   /* daemon metric delta over cold window */
+    uint64_t    cold_cache_hits;
     uint64_t    cold_cache_misses;
     uint64_t    warm_cache_hits;
     uint64_t    warm_cache_misses;
@@ -294,17 +296,25 @@ static void run_one(const char* scenario, long target_files, result_row* out) {
         return;
     }
 
-    /* wait for background scan to finish (health exposes files_scanned) */
+    /* wait for background scan to finish (health exposes files_scanned + memory) */
+    ipc_health_resp final_health = {0};
     for (int i = 0; i < 600; i++) {
         ipc_health_resp h;
         if (ipc_client_health(client, &h) == 0 &&
-            !h.scanning && (long)h.files_scanned > 0)
+            !h.scanning && (long)h.files_scanned > 0) {
+            final_health = h;
             break;
-        usleep(50000);
+        }
+        if (ipc_client_health(client, &final_health) == 0)
+            usleep(50000);
+        else
+            usleep(50000);
     }
     double scan_ms = now_ms() - t0;
     out->scan_ms = scan_ms;
-    fprintf(stderr, "  [%s] cold start + scan: %.0f ms\n", scenario, scan_ms);
+    out->mem_kb = (long)(final_health.estimated_memory_bytes / 1024);
+    fprintf(stderr, "  [%s] cold start + scan: %.0f ms  mem=%ld KB\n",
+            scenario, scan_ms, out->mem_kb);
 
     /* ── COLD window: cache is empty, every query walks the trie ───────── */
     ipc_client_reset_stats(client);
@@ -315,6 +325,7 @@ static void run_one(const char* scenario, long target_files, result_row* out) {
     out->cold_ok = 0;
     out->cold_empty = 0;
     out->cold_first = 0;
+    out->completions = 0;
     {
         ipc_completion_list list;
         double ts0 = now_ms();
@@ -322,6 +333,7 @@ static void run_one(const char* scenario, long target_files, result_row* out) {
         double el = now_ms() - ts0;
         out->cold_first = el;                         /* ← real cache-miss walk */
         out->cold.v[0] = el;
+        out->completions = (rc == 0) ? (int)list.count : 0;
         if (rc == 0 && list.count >= 1)
             out->cold_ok++;
         else if (rc == 0 && list.count == 0)
@@ -393,30 +405,14 @@ static void print_row(result_row* r) {
     qsort(r->cold.v, (size_t)r->cold.n, sizeof(double), cmp_d);
     qsort(r->warm.v, (size_t)r->warm.n, sizeof(double), cmp_d);
 
-    double c_p50 = pctile(r->cold.v, r->cold.n, 50);
-    double c_p95 = pctile(r->cold.v, r->cold.n, 95);
-    double w_avg = mean(r->warm.v, r->warm.n);
     double w_p50 = pctile(r->warm.v, r->warm.n, 50);
     double w_p95 = pctile(r->warm.v, r->warm.n, 95);
 
-    double cold_rate = (r->cold_cache_hits + r->cold_cache_misses)
-        ? 100.0 * r->cold_cache_hits / (r->cold_cache_hits + r->cold_cache_misses) : 100.0;
-    double warm_rate = (r->warm_cache_hits + r->warm_cache_misses)
-        ? 100.0 * r->warm_cache_hits / (r->warm_cache_hits + r->warm_cache_misses) : 100.0;
+    printf("| %-7s | %6ld | %8.0f ms | %8.3f ms | %7.3f ms | %5ld KB | %6d  |\n",
+           r->tag, r->files, r->scan_ms, r->cold_first, w_p50, r->mem_kb, r->completions);
 
-    printf("| %-7s | %6ld | %8.0f | %8.0f | %8.3f | %7.3f | %7.3f |"
-           " %7.3f | %7.3f | %7.3f | %5.1f | %5.1f |\n",
-           r->tag, r->files, r->scan_ms, r->save_ms,
-           r->cold_first, c_p50, c_p95, w_avg, w_p50, w_p95,
-           cold_rate, warm_rate);
-
-    fprintf(stderr, "    cold hits=%llu misses=%llu (ok=%d empty=%d)\n"
-                    "    warm hits=%llu misses=%llu\n",
-            (unsigned long long)r->cold_cache_hits,
-            (unsigned long long)r->cold_cache_misses,
-            r->cold_ok, r->cold_empty,
-            (unsigned long long)r->warm_cache_hits,
-            (unsigned long long)r->warm_cache_misses);
+    fprintf(stderr, "    warm: avg=%.3f p50=%.3f p95=%.3f\n",
+            mean(r->warm.v, r->warm.n), w_p50, w_p95);
 
     free_samples(&r->cold);
     free_samples(&r->warm);
@@ -425,10 +421,10 @@ static void print_row(result_row* r) {
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;
 
-    fprintf(stderr, "archaic end-to-end benchmark\n"
-                    "  cold: %d iters (cache clear), warm: %d iters (cached)\n"
-                    "  all times are real wall-clock ms over a live Unix socket\n\n",
-            COLD_ITERS, WARM_ITERS);
+    fprintf(stderr, "archaic end-to-end benchmark\n");
+    fprintf(stderr, "  cold = first Tab after daemon start (cache miss, trie walk)\n");
+    fprintf(stderr, "  warm = subsequent Tabs (cache hit, shard lookup)\n");
+    fprintf(stderr, "  all times are real wall-clock ms over a live Unix socket\n\n");
 
     result_row rows[3];
     memset(rows, 0, sizeof(rows));
@@ -437,10 +433,8 @@ int main(int argc, char* argv[]) {
     run_one("medium", 20000, &rows[1]);
     run_one("large",  50000, &rows[2]);
 
-    printf("\n| tree   | files  |    scan_ms |   save_ms | cold_1st | cold_p50 | cold_p95 |"
-           " warm_avg | warm_p50 | warm_p95 | cold%% | warm%% |\n");
-    printf("|--------|--------|------------|-----------|----------|----------|----------|"
-           "----------|----------|----------|-------|-------|\n");
+    printf("\n| project | files  | first scan | Tab (cold) | Tab (warm) | idle mem | results |\n");
+    printf("|---------|--------|------------|------------|------------|----------|---------|\n");
     for (int i = 0; i < 3; i++)
         print_row(&rows[i]);
 

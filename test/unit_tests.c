@@ -1455,6 +1455,8 @@ static void test_executable_script_detection(void) {
     ASSERT_TRUE(!is_executable_script("readme.md"), ".md not executable");
     ASSERT_TRUE(!is_executable_script("image.png"), ".png not executable");
     ASSERT_TRUE(!is_executable_script("Makefile"), "Makefile not in ext list");
+    ASSERT_TRUE(!is_executable_script(".racecar"), ".racecar is not an rc file");
+    ASSERT_TRUE(!is_executable_script(".accurate"), ".accurate is not an rc file");
     PASS();
 }
 

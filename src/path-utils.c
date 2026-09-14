@@ -11,16 +11,21 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
         return 0;
     }
 
-    /* Hot path (every Tab): avoid 3 mallocs per call. Paths are capped at
-     * 4096 by the IPC protocol, so fixed stacks are safe. Absurd inputs
-     * fail closed instead of truncating. */
+    /* Hot path (every Tab): paths are capped at 4096 by the IPC protocol, so
+     * a small inline buffer handles 99.9% of calls without malloc. Absurd
+     * inputs fail closed instead of truncating. */
+    enum { INLINE_CAP = 64 };
+    size_t starts_buf[INLINE_CAP];
+    size_t lens_buf[INLINE_CAP];
+    size_t* starts = starts_buf;
+    size_t* lens = lens_buf;
+    bool starts_heap = false;
+
     size_t src_len = strlen(src);
     if (src_len >= 4096) {
         dst[0] = '\0';
         return 0;
     }
-    size_t starts[4096];
-    size_t lens[4096];
 
     int comp_count = 0;
     const char* p = src;
@@ -53,6 +58,21 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
             continue;
         }
 
+        if (comp_count >= INLINE_CAP && !starts_heap) {
+            size_t* ns = malloc(4096 * sizeof(size_t));
+            size_t* nl = malloc(4096 * sizeof(size_t));
+            if (!ns || !nl) {
+                free(ns);
+                free(nl);
+                dst[0] = '\0';
+                return 0;
+            }
+            memcpy(ns, starts_buf, INLINE_CAP * sizeof(size_t));
+            memcpy(nl, lens_buf, INLINE_CAP * sizeof(size_t));
+            starts = ns;
+            lens = nl;
+            starts_heap = true;
+        }
         if (comp_count >= 4096)
             break;
         starts[comp_count] = (size_t) (start - src);
@@ -76,6 +96,11 @@ size_t path_normalize(char* dst, const char* src, size_t dst_size) {
     }
 
     dst[out_pos] = '\0';
+
+    if (starts_heap) {
+        free(starts);
+        free(lens);
+    }
 
     return out_pos;
 }

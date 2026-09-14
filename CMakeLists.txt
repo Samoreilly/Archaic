@@ -88,10 +88,22 @@ target_link_libraries(archaic-bench PRIVATE m pthread)
 target_compile_options(archaic-bench PRIVATE -Wall -Wpedantic -Wextra
     $<$<CONFIG:Release>:-O3 -fno-math-errno>)
 
+add_executable(
+    archaic-bench-e2e
+    test/bench-e2e.c
+    ipc/client.c
+    src/config.c
+)
+
+target_include_directories(archaic-bench-e2e PRIVATE ipc ${CMAKE_SOURCE_DIR})
+target_link_libraries(archaic-bench-e2e PRIVATE m pthread)
+target_compile_options(archaic-bench-e2e PRIVATE -Wall -Wpedantic -Wextra
+    $<$<CONFIG:Release>:-O3 -fno-math-errno>)
+
 # ── Install rules ─────────────────────────────────────────────────────────────
 
 # Install binaries
-install(TARGETS archaic archaic-cli archaic-helper archaic-bench
+install(TARGETS archaic archaic-cli archaic-helper archaic-bench archaic-bench-e2e
     RUNTIME DESTINATION bin
 )
 

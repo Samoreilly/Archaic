@@ -83,6 +83,45 @@ incremental updates don't exist; `unwatch` drops whole roots only).
 - Hidden files only if you typed `.`
 - `sudo` / `make` / `python` complete paths only when the token looks like one
 
+## Performance
+
+Measured with `./build/archaic-bench-e2e`: a real daemon (fork/exec'd) serving
+real IPC completions over a Unix socket against real directory trees on disk.
+Cold numbers are the first Tab press after startup; warm numbers are
+subsequent presses served from the in-memory cache.
+
+| tree  | files  | first scan | save  | cold 1st Tab | warm Tab (p50) | warm Tab (p95) |
+|-------|--------|------------|-------|-------------|----------------|----------------|
+| small |  5 000 |     50 ms  |  2 ms |     1.8 ms  |        0.05 ms |        0.07 ms |
+| med   | 20 000 |   1 100 ms |  8 ms |     8.2 ms  |        0.03 ms |        0.13 ms |
+| large | 50 000 |   7 500 ms | 24 ms |    24.2 ms  |        0.04 ms |        0.15 ms |
+
+**What's happening at each stage:**
+
+| Stage | Hot / Cold | What it does |
+|---|---|---|
+| Warm Tab | hot | `cache_get` → 16-shard hash lookup + LRU move → response in **~30 µs** |
+| Cold 1st Tab | cold | `find_prefix_node` → radix DFS → `scored_completions` sort → `cache_put` → response in **2–24 ms** |
+| First scan | cold | `scanner_worker` threads × `opendir/readdir` + bucket insert + trie insert → **50–7 500 ms** |
+| Save | cold | Snapshot bucket refs → DFS serialize → `rename()` → **2–24 ms** for 0.9–9 MB |
+
+**Hot path (cached completion) — what happens on every Tab press:**
+
+1. Client sends `IPC_MSG_COMPLETE` (8 KB packed payload) over the Unix socket
+2. Server `accept()` → `SO_PEERCRED` uid check → thread pool dispatch
+3. `cache_get()`: djb2 hash → shard lock (16 shards) → linear probe → LRU move-to-front → return borrowed pointer
+4. Response packed into a 256 KB thread-local buffer (zero-alloc), sent back over the socket
+
+**Cold path (cache miss / startup):**
+
+1. `find_prefix_node`: radix descent, memcmp on edge keys, binary search for nodes with >8 children
+2. `scored_completions_collect`: DFS, `compute_score` per node (weighted: freq 40%, recency 30%, depth 15%, type 10%, cwd 5%)
+3. `qsort` by score → top 50 returned → `cache_put` (deep-copy outside shard lock)
+4. Subsequent queries for the same prefix skip all of the above
+
+Full benchmark source: [`test/bench-e2e.c`](test/bench-e2e.c).
+Run with: `cmake --build build -j$(nproc) --target archaic-bench-e2e && ./build/archaic-bench-e2e`
+
 ## Keybindings
 
 When a dimmed ghost hint appears after your path, accept it without retyping:
